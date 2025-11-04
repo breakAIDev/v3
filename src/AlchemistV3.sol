@@ -331,7 +331,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3State
     function getTotalDeposited() external view returns (uint256) {
-        return IERC20(myt).balanceOf(address(this));
+        return _mytSharesDeposited;
     }
 
     /// @inheritdoc IAlchemistV3State
