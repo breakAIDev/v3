@@ -3935,4 +3935,50 @@ contract AlchemistV3Test is Test {
         SafeERC20.safeTransfer(address(vault), address(alchemist), 1e18);
         assertEq(alchemist.getTotalDeposited(), amount);
     }
+
+    function test_QueryGraphBug_ConsecutiveBlocksUnderearmarksCausesRedemptionLoss() external {
+        uint256 depositAmount = 10_000_000e18;
+        uint256 borrowAmount = 5_256_000e18;
+
+        // whale borrows 5_256_000e18
+        vm.startPrank(someWhale);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount);
+        alchemist.deposit(depositAmount, someWhale, 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(someWhale, address(alchemistNFT));
+        alchemist.mint(tokenId, borrowAmount, someWhale);
+        vm.stopPrank();
+
+        uint256 totalDebt = alchemist.totalDebt();
+        assertEq(totalDebt, borrowAmount, "Total debt should be 5_256_000e18");
+
+        // Create transmuter redemption for full debt amount
+        vm.startPrank(someWhale);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowAmount);
+        transmuterLogic.createRedemption(borrowAmount);
+        vm.stopPrank();
+
+        uint256 startEarmarkBlock = block.number + 1;
+        vm.roll(startEarmarkBlock + 9);
+        alchemist.poke(tokenId);
+        uint256 earmarkedStep1 = alchemist.cumulativeEarmarked();
+        // Each block 1e18 debt is earmarked
+        // From startEarmarkBlock to startEarmarkBlock + 9, there are 10 blocks
+        // Therefore, the total earmarked should be 10e18
+        assertEq(earmarkedStep1, 10e18, "Earmarked should be 10e18");
+
+        vm.roll(startEarmarkBlock + 10);
+        alchemist.poke(tokenId);
+        uint256 earmarkedStep2 = alchemist.cumulativeEarmarked();
+        assertEq(earmarkedStep2, 11e18, "Earmarked should not be the same");
+
+        // Full redemption
+        vm.roll(startEarmarkBlock + 5_256_000 + 10);
+        uint256 mytTokenBefore = IERC20(alchemist.myt()).balanceOf(address(alchemist));
+        vm.prank(someWhale);
+        transmuterLogic.claimRedemption(tokenId);
+        uint256 mytTokenAfter = IERC20(alchemist.myt()).balanceOf(address(alchemist));
+
+        uint256 mytTokenRedeemed = mytTokenBefore - mytTokenAfter;
+        assertEq(mytTokenRedeemed, borrowAmount, "Myt token should be redeemed");
+    }
 }

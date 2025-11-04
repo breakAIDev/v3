@@ -267,7 +267,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
     /// @inheritdoc ITransmuter
     function queryGraph(uint256 startBlock, uint256 endBlock) external view returns (uint256) {
-        if (endBlock <= startBlock) return 0;
+        if (endBlock < startBlock) return 0;
 
         int256 queried = _stakingGraph.queryStake(startBlock, endBlock);
         if (queried == 0) return 0;
