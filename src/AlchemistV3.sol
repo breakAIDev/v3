@@ -1195,6 +1195,18 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             }
         }
 
+        // Calculate collateral to remove from fees and redemptions
+        uint256 collateralBalanceCopy = account.collateralBalance;
+        uint256 requiredLockPre = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
+        if (_collateralWeight - account.lastCollateralWeight != 0) {
+            uint256 base = requiredLockPre <= collateralBalanceCopy ? requiredLockPre : collateralBalanceCopy;
+            if (base != 0) {
+                uint256 removal = PositionDecay.ScaleByWeightDelta(base, _collateralWeight - account.lastCollateralWeight);
+                if (removal > collateralBalanceCopy) removal = collateralBalanceCopy;
+                collateralBalanceCopy -= removal;
+            }
+        }
+
         // Redemption survival now and at last sync
         // Survival is the amount of earmark that is left after a redemption
         uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
@@ -1233,11 +1245,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 newDebt = account.debt >= redeemedTotal ? account.debt - redeemedTotal : 0;
         uint256 newEarmarked = exposureSurvival + earmarkedUnredeemed;
 
-        // Collateral from fees and redemptions
-        uint256 collateralToRemove = PositionDecay.ScaleByWeightDelta(account.rawLocked, _collateralWeight - account.lastCollateralWeight);
-        uint256 newCollateral = account.collateralBalance - collateralToRemove;
-
-        return (newDebt, newEarmarked, newCollateral);
+        return (newDebt, newEarmarked, collateralBalanceCopy);
     }
 
     /// @dev Checks that the account owned by `tokenId` is properly collateralized.
