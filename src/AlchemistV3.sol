@@ -1049,10 +1049,22 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _sync(uint256 tokenId) internal {
         Account storage account = _accounts[tokenId];
 
-        // Collateral to remove from redemptions and fees
-        uint256 collateralToRemove = PositionDecay.ScaleByWeightDelta(account.rawLocked, _collateralWeight - account.lastCollateralWeight);
-        account.collateralBalance -= collateralToRemove;
+        // Calculate the locked before performing majority of sync so that we can properly decrement account collateral
+        uint256 requiredLockPre = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
 
+        if (_collateralWeight - account.lastCollateralWeight != 0) {
+            uint256 base = requiredLockPre <= account.collateralBalance ? requiredLockPre : account.collateralBalance;
+
+            if (base != 0) {
+                uint256 collateralRemoval = PositionDecay.ScaleByWeightDelta(base, _collateralWeight - account.lastCollateralWeight);
+
+                if (collateralRemoval > account.collateralBalance) {
+                    collateralRemoval = account.collateralBalance;
+                }
+                account.collateralBalance -= collateralRemoval;
+            }
+        }
+ 
         // Redemption survival now and at last sync
         // Survival is the amount of earmark that is left after a redemption
         uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
@@ -1089,7 +1101,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         account.earmarked = exposureSurvival + earmarkedUnredeemed;
         account.debt = account.debt >= redeemedTotal ? account.debt - redeemedTotal : 0;
 
-        // Update locked collateral
+        // Update locked collateral to the true new locked amount
         account.rawLocked = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
 
         // Advance account checkpoint

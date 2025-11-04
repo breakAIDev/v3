@@ -4034,4 +4034,61 @@ contract AlchemistV3Test is Test {
         uint256 alAssetBurnedInYield = alchemist.convertDebtTokensToYield(borrowedAmount - alAssetReturned);
         assertApproxEqAbs(mytOut, alAssetBurnedInYield, 1e18);
     }
+
+    function test_underflowOnSync() external {
+        uint256 amount = 100e18;
+        uint256 mintAmount = 89e18;
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        // a single position nft would have been minted to 0xbeef
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+
+        // mint for 0xdad so we only use the minted amount of alAsset
+        alchemist.mint(tokenIdFor0xBeef, (mintAmount), address(0xdad));
+        vm.stopPrank();
+
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
+        // create two redemption position
+        transmuterLogic.createRedemption(mintAmount/2);
+        transmuterLogic.createRedemption(mintAmount/2);
+        vm.stopPrank();
+
+        // maturing the redemption and maxing the earmarked
+        vm.roll(block.number + 5_256_000);
+
+        (,, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        assertApproxEqAbs(earmarked, mintAmount, 1);
+
+        // yield price drop
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+        deal(address(IMockYieldToken(mockStrategyYieldToken).underlyingToken()), address(mockStrategyYieldToken), amount / 2);
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(amount);
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+
+        // claim the first redemption position
+        vm.prank(address(0xdad));
+        transmuterLogic.claimRedemption(1);
+
+        // poke to update the account.rawLocked, this should be bigger than before
+        // before it is 9.88e19 but because of yield price drop, by poke() the account.rawLocked recalculated = 1.422e20
+        alchemist.poke(tokenIdFor0xBeef);
+
+        // claim second redemption position, this would increase the collateral weight
+        vm.prank(address(0xdad));
+        transmuterLogic.claimRedemption(2);
+
+        // yield price back to normal x 2
+        // console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+        // deal(address(IMockYieldToken(mockStrategyYieldToken).underlyingToken()), address(mockStrategyYieldToken), amount * 2);
+        // IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(amount);
+        // console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+
+        // when user wants to invoke anything that include _sync it would underflow
+        // because account.collateralBalance < collateralToRemove
+        vm.prank(address(0xbeef));
+        alchemist.repay(100e18, tokenIdFor0xBeef);
+    }
 }
