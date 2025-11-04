@@ -3981,4 +3981,57 @@ contract AlchemistV3Test is Test {
         uint256 mytTokenRedeemed = mytTokenBefore - mytTokenAfter;
         assertEq(mytTokenRedeemed, borrowAmount, "Myt token should be redeemed");
     }
+
+    function test_excessAlAssetFromCappedRedeemDoesNotReturnedToUser() public {
+        // 1. create position
+        uint256 amount = 100e18;
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 borrowedAmount = alchemist.getMaxBorrowable(tokenId);
+        alchemist.mint(tokenId, borrowedAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // 2. redemption using the same amount
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowedAmount);
+        transmuterLogic.createRedemption(borrowedAmount);
+        vm.stopPrank();
+
+        // 3. maturing 2/3 transmute amount
+        vm.roll(block.number + 5_256_000 * 2 / 3);
+
+        // 4. 0xbeef repay debt the position
+        vm.prank(address(0xbeef));
+        alchemist.repay(borrowedAmount, tokenId);
+
+        // 5. simulate price drop
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+        deal(address(IMockYieldToken(mockStrategyYieldToken).underlyingToken()), address(mockStrategyYieldToken), amount / 2);
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(amount);
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+
+        // 6. Redeem.
+        uint256 dadAlAssetBalBefore = alToken.balanceOf(address(0xdad));
+        uint256 dadMYTBalBefore = vault.balanceOf(address(0xdad));
+        uint256 feeReceiverAlAssetBalBefore = alToken.balanceOf(protocolFeeReceiver);
+        uint256 feeReceiverMYTBalBefore = vault.balanceOf(protocolFeeReceiver);
+        vm.prank(address(0xdad));
+        transmuterLogic.claimRedemption(1);
+
+        // 7. get how many alAsset and MYT 0xdad receive back, and the one get sent to protocolFeeReceiver
+        uint256 dadAlAssetBalAfter = alToken.balanceOf(address(0xdad));
+        uint256 dadMYTBalAfter = vault.balanceOf(address(0xdad));
+        uint256 feeReceiverAlAssetBalAfter = alToken.balanceOf(protocolFeeReceiver);
+        uint256 feeReceiverMYTBalAfter = vault.balanceOf(protocolFeeReceiver);
+        uint256 alAssetReturned = (dadAlAssetBalAfter - dadAlAssetBalBefore) + (feeReceiverAlAssetBalAfter - feeReceiverAlAssetBalBefore);
+        uint256 mytOut = (dadMYTBalAfter - dadMYTBalBefore) + (feeReceiverMYTBalAfter - feeReceiverMYTBalBefore);
+
+        // 8. compare mytOut with actual alAsset that get burned, by converting it to current conversion to yield
+        // we can get this by removing alAssetReturned from total amount that is used when creating position, which is borrowedAmount
+        uint256 alAssetBurnedInYield = alchemist.convertDebtTokensToYield(borrowedAmount - alAssetReturned);
+        assertApproxEqAbs(mytOut, alAssetBurnedInYield, 1e18);
+    }
 }
