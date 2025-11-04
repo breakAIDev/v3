@@ -894,6 +894,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             }
         }
 
+        _mytSharesDeposited -= amountLiquidated;
+
         emit Liquidated(accountId, msg.sender, amountLiquidated + repaidAmountInYield, feeInYield, feeInUnderlying);
         return (amountLiquidated + repaidAmountInYield, feeInYield, feeInUnderlying);
     }
