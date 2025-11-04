@@ -761,6 +761,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 earmarkToRemove = credit > account.earmarked ? account.earmarked : credit;
         account.earmarked -= earmarkToRemove;
 
+        uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
+        cumulativeEarmarked -= earmarkPaidGlobal;
+
         creditToYield = creditToYield > account.collateralBalance ? account.collateralBalance : creditToYield;
         account.collateralBalance -= creditToYield;
 
@@ -772,11 +775,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             account.collateralBalance -= protocolFeeTotal;
             // Transfer the protocol fee to the protocol fee receiver
             TokenUtils.safeTransfer(myt, protocolFeeReceiver, protocolFeeTotal);
+            _mytSharesDeposited -= protocolFeeTotal;
         }
 
         if (creditToYield > 0) {
             // Transfer the repaid tokens from the account to the transmuter.
             TokenUtils.safeTransfer(myt, address(transmuter), creditToYield);
+            _mytSharesDeposited -= creditToYield;
         }
         return creditToYield;
     }
