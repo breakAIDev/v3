@@ -592,36 +592,20 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 liveEarmarked = cumulativeEarmarked;
         if (amount > liveEarmarked) amount = liveEarmarked;
 
-        // observed transmuter pre-balance -> potential cover
-        uint256 transmuterBal = TokenUtils.safeBalanceOf(myt, address(transmuter));
-        uint256 deltaYield    = transmuterBal > lastTransmuterTokenBalance ? transmuterBal - lastTransmuterTokenBalance : 0;
-        uint256 coverDebt = convertYieldTokensToDebt(deltaYield);
-
-        // cap cover so we never consume beyond remaining earmarked
-        uint256 coverToApplyDebt = amount + coverDebt > liveEarmarked ? (liveEarmarked - amount) : coverDebt;
-
-        uint256 redeemedDebtTotal = amount + coverToApplyDebt;
-
        // Apply redemption weights/decay to the full amount that left the earmarked bucket
-        if (liveEarmarked != 0 && redeemedDebtTotal != 0) {
-            uint256 survival = ((liveEarmarked - redeemedDebtTotal) << 128) / liveEarmarked;
+        if (liveEarmarked != 0 && amount != 0) {
+            uint256 survival = ((liveEarmarked - amount) << 128) / liveEarmarked;
             _survivalAccumulator = _mulQ128(_survivalAccumulator, survival);
-            _redemptionWeight += PositionDecay.WeightIncrement(redeemedDebtTotal, cumulativeEarmarked);
+            _redemptionWeight += PositionDecay.WeightIncrement(amount, cumulativeEarmarked);
         }
 
         // earmarks are reduced by the full redeemed amount (net + cover)
-        cumulativeEarmarked -= redeemedDebtTotal;
+        cumulativeEarmarked -= amount;
 
         // global borrower debt falls by the full redeemed amount
-        totalDebt -= redeemedDebtTotal;
+        totalDebt -= amount;
 
         lastRedemptionBlock = block.number;
-
-        // consume the observed cover so it can't be reused
-        if (deltaYield != 0) {
-            uint256 usedYield = convertDebtTokensToYield(coverToApplyDebt);
-            lastTransmuterTokenBalance = transmuterBal > usedYield ? transmuterBal - usedYield : transmuterBal;
-        }
 
         // move only the net collateral + fee
         uint256 collRedeemed  = convertDebtTokensToYield(amount);
@@ -637,7 +621,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeCollateral);
         _mytSharesDeposited -= collRedeemed + feeCollateral;
 
-        emit Redemption(redeemedDebtTotal);
+        emit Redemption(amount);
     }
 
     ///@inheritdoc IAlchemistV3Actions
