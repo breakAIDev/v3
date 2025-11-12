@@ -897,10 +897,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             // Handle outsourced fee from vault
             feeInUnderlying = _payWithFeeVault(normalizeDebtTokensToUnderlying(outsourcedFee));
         }
-
-
-        _mytSharesDeposited -= amountLiquidated;
-
         emit Liquidated(accountId, msg.sender, amountLiquidated + repaidAmountInYield, feeInYield, feeInUnderlying);
         return (amountLiquidated + repaidAmountInYield, feeInYield, feeInUnderlying);
     }
