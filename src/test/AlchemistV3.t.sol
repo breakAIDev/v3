@@ -72,6 +72,7 @@ contract AlchemistV3Test is Test {
     uint256 public protocolFee = 100;
 
     uint256 public liquidatorFeeBPS = 300; // in BPS, 3%
+    uint256 public repaymentFeeBPS = 100;
 
     uint256 public minimumCollateralization = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 9e17;
 
@@ -225,7 +226,7 @@ contract AlchemistV3Test is Test {
             protocolFee: 0,
             protocolFeeReceiver: protocolFeeReceiver,
             liquidatorFee: liquidatorFeeBPS,
-            repaymentFee: 100,
+            repaymentFee: repaymentFeeBPS,
             myt: address(vault)
         });
 
@@ -283,6 +284,221 @@ contract AlchemistV3Test is Test {
         SafeERC20.safeApprove(address(vault.asset()), address(mockStrategyYieldToken), whaleSupply);
         vm.stopPrank();
     }
+
+    function test_Liquidate_and_ForceRepay_Global_MYTSharesDeposited_Updated() external {
+        uint256 amount = 200_000e18; // 200,000 yvdai
+        // uint256 protocolFee = 100; // 10%
+        vm.prank(alOwner);
+        alchemist.setProtocolFee(protocolFee);
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // just ensureing global alchemist collateralization stays above the minimum required for regular liquidations
+        // no need to mint anything
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount * 2);
+        alchemist.deposit(amount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        // a single position nft would have been minted to 0xbeef
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Need to start a transmutator deposit, to start earmarking debt
+        vm.startPrank(anotherExternalUser);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
+        transmuterLogic.createRedemption(mintAmount);
+        vm.stopPrank();
+
+        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+        // skip to a future block. Lets say 60% of the way through the transmutation period (5_256_000 blocks)
+        vm.roll(block.number + (5_256_000 * 60 / 100));
+
+        // Earmarked debt should be 60% of the total debt
+        (uint256 prevCollateral, uint256 prevDebt, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(earmarked == prevDebt * 60 / 100, "Earmarked debt should be 60% of the total debt");
+
+        // modify yield token price via modifying underlying token supply
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // increasing yeild token suppy by 59 bps or 5.9%  while keeping the unederlying supply unchanged
+        uint256 modifiedVaultSupply = (initialVaultSupply * 590 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // ensure initial debt is correct
+        vm.assertApproxEqAbs(prevDebt, 180_000_000_000_000_000_018_000, minimumDepositOrWithdrawalLoss);
+
+        // let another user liquidate the previous user position
+        vm.startPrank(externalUser);
+
+        uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
+        uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
+        uint256 protocolFeeInYield = (creditToYield * protocolFee / BPS);
+
+        uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
+        uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 mytBefore = IERC20(address(vault)).balanceOf(address(alchemist)); 
+        (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+
+        (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        uint256 collateralAfterRepayment = prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield;
+        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
+        uint256 repaymentFee = surplusAfterRepayment * 100 / BPS;
+
+        vm.stopPrank();
+
+        // ensure debt is reduced only by the repayment of max earmarked amount
+        vm.assertApproxEqAbs(debt, prevDebt - earmarked, minimumDepositOrWithdrawalLoss);
+
+        // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
+        vm.assertApproxEqAbs(
+            depositedCollateral,
+            prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield - repaymentFee,
+            minimumDepositOrWithdrawalLoss
+        );
+
+        // ensure assets is equal to repayment of max earmarked amount
+        // vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
+
+        // ensure liquidator fee is correct (i.e.0, since only a repayment is done)
+        vm.assertApproxEqAbs(feeInYield, repaymentFee, 1e18);
+        vm.assertEq(feeInUnderlying, 0);
+
+        // liquidator gets correct amount of fee, i.e. 0
+        _validateLiquidiatorState(
+            externalUser,
+            liquidatorPrevTokenBalance,
+            liquidatorPrevUnderlyingBalance,
+            feeInYield,
+            feeInUnderlying,
+            assets,
+            alchemist.convertDebtTokensToYield(earmarked)
+        );
+        vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether);
+
+        // transmuter recieves the liquidation amount in yield token minus the fee
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(address(transmuterLogic)), transmuterPreviousBalance + alchemist.convertDebtTokensToYield(earmarked), 1e18
+        );
+
+        // check protocolfeereciever received the protocl fee transfer from _forceRepay
+        vm.assertApproxEqAbs(IERC20(address(vault)).balanceOf(address(protocolFeeReceiver)), protocolFeeInYield, 1e18);
+
+
+        uint256 mytAfter = IERC20(address(vault)).balanceOf(address(alchemist));
+        assertLt(mytAfter, mytBefore, "MYT should decrease after liquidation");
+
+        uint256 reportedTVL = alchemist.getTotalUnderlyingValue(); 
+        uint256 reportedGlobalCR = alchemist.normalizeUnderlyingTokensToDebt(reportedTVL) * FIXED_POINT_SCALAR / alchemist.totalDebt(); 
+
+        uint256 expectedTVL = vault.convertToAssets(mytAfter); // 4626 assets for actual shares in contract  
+        uint256 expectedGlobalCR  = alchemist.normalizeUnderlyingTokensToDebt(expectedTVL) * FIXED_POINT_SCALAR / alchemist.totalDebt(); 
+        assertEq(reportedGlobalCR, expectedGlobalCR, "reported global CR should be the same  if _mytSharesDeposited is updated correctly"); 
+    }
+
+    function test_1Liquidate_Global_MYTSharesDeposited_Updated() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // just ensuring global alchemist collateralization stays above the minimum required for regular liquidations
+        // no need to mint anything
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        // Open debt position for yetAnotherExternalUser to ensure totalDebt after full liquidation > 0
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(yetAnotherExternalUser, address(alchemistNFT));
+        alchemist.mint(tokenId, alchemist.totalValue(tokenId)/10 * FIXED_POINT_SCALAR / minimumCollateralization, yetAnotherExternalUser);    // Don't want user to be fully liquidatable
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        // a single position nft would have been minted to 0xbeef
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+        // modify yield token price via modifying underlying token supply
+        (, uint256 prevDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        // ensure initial debt is correct
+        vm.assertApproxEqAbs(prevDebt, 180_000_000_000_000_000_018_000, minimumDepositOrWithdrawalLoss);
+
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // increasing yeild token suppy by 1200 bps or 12%  while keeping the unederlying supply unchanged
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1200 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // let another user liquidate the previous user position
+        vm.startPrank(externalUser);
+        uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
+        uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+
+        uint256 alchemistCurrentCollateralization =
+            alchemist.normalizeUnderlyingTokensToDebt(alchemist.getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / alchemist.totalDebt();
+        (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
+            alchemist.totalValue(tokenIdFor0xBeef),
+            prevDebt,
+            alchemist.minimumCollateralization(),
+            alchemistCurrentCollateralization,
+            alchemist.globalMinimumCollateralization(),
+            liquidatorFeeBPS
+        );
+        uint256 expectedLiquidationAmountInYield = alchemist.convertDebtTokensToYield(liquidationAmount);
+        uint256 expectedBaseFeeInYield = alchemist.convertDebtTokensToYield(expectedBaseFee);
+        uint256 expectedFeeInUnderlying = expectedDebtToBurn * liquidatorFeeBPS / 10_000;
+
+        uint256 mytBefore = IERC20(address(vault)).balanceOf(address(alchemist)); 
+        (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // ensure debt is reduced by the result of (collateral - y)/(debt - y) = minimum collateral ratio
+        vm.assertApproxEqAbs(debt, 0, minimumDepositOrWithdrawalLoss);
+
+        // ensure depositedCollateral is reduced by the result of (collateral - y)/(debt - y) = minimum collateral ratio
+        vm.assertApproxEqAbs(depositedCollateral, 0, minimumDepositOrWithdrawalLoss);
+
+        // ensure liquidator fee is correct (3% of 0 if collateral fully liquidated as a result of bad debt)
+        vm.assertApproxEqAbs(feeInYield, 0, 1e18);
+        vm.assertEq(feeInUnderlying, expectedFeeInUnderlying);
+
+        // liquidator gets correct amount of fee
+        _validateLiquidiatorState(
+            externalUser, liquidatorPrevTokenBalance, liquidatorPrevUnderlyingBalance, feeInYield, feeInUnderlying, assets, expectedLiquidationAmountInYield
+        );
+
+        vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether - feeInUnderlying);
+
+        // transmuter recieves the liquidation amount in yield token minus the fee
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(address(transmuterLogic)),
+            transmuterPreviousBalance + expectedLiquidationAmountInYield - expectedBaseFeeInYield,
+            1e18
+        );
+
+        uint256 mytAfter = IERC20(address(vault)).balanceOf(address(alchemist));
+        assertLt(mytAfter, mytBefore, "MYT should decrease after liquidation");
+
+        uint256 reportedTVL = alchemist.getTotalUnderlyingValue(); 
+        uint256 reportedGlobalCR = alchemist.normalizeUnderlyingTokensToDebt(reportedTVL) * FIXED_POINT_SCALAR / alchemist.totalDebt(); 
+
+        uint256 expectedTVL = vault.convertToAssets(mytAfter); // 4626 assets for actual shares in contract  
+        uint256 expectedGlobalCR  = alchemist.normalizeUnderlyingTokensToDebt(expectedTVL) * FIXED_POINT_SCALAR / alchemist.totalDebt(); 
+        assertEq(reportedGlobalCR, expectedGlobalCR, "reported global CR should be the same  if _mytSharesDeposited is updated correctly"); 
+    }
+
 
     function testSetV3PositionNFTAlreadySetRevert() public {
         vm.startPrank(alOwner);
@@ -2225,6 +2441,8 @@ contract AlchemistV3Test is Test {
     }
 
     function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment() external {
+        vm.prank(alOwner);
+        alchemist.setProtocolFee(protocolFee);        
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
         vm.stopPrank();
@@ -2275,18 +2493,25 @@ contract AlchemistV3Test is Test {
         vm.startPrank(externalUser);
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
+        uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
+        uint256 protocolFeeInYield = (creditToYield * protocolFee / BPS);
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
 
         vm.stopPrank();
+        uint256 collateralAfterRepayment = prevCollateral - creditToYield - protocolFeeInYield;
+        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
 
-        uint256 repaymentFee = alchemist.convertDebtTokensToYield(earmarked) * 100 / BPS;
-
+         // calculate repayment fee and deduct from account
+        uint256 targetFee = surplusAfterRepayment * 100 / BPS;
+        // fee from collateral balance is zero if the account collateral surplus
+        uint256 repaymentFee = targetFee > collateralAfterRepayment ? collateralAfterRepayment : targetFee;
         // ensure debt is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(debt, prevDebt - earmarked, minimumDepositOrWithdrawalLoss);
 
         // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
-        vm.assertApproxEqAbs(depositedCollateral, prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - repaymentFee, minimumDepositOrWithdrawalLoss);
+        vm.assertApproxEqAbs(depositedCollateral, prevCollateral - creditToYield - repaymentFee - protocolFeeInYield, minimumDepositOrWithdrawalLoss);
 
         // ensure assets is equal to repayment of max earmarked amount
         vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
@@ -2540,7 +2765,7 @@ contract AlchemistV3Test is Test {
         assert(systemCollateralReduction >= shortfall);
     }
 
-    function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment_With_Protocol_Fee() external {
+    function test_Liquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment_With_Protocol_Fee() external {
         uint256 amount = 200_000e18; // 200,000 yvdai
         // uint256 protocolFee = 100; // 10%
         vm.prank(alOwner);
@@ -2603,9 +2828,9 @@ contract AlchemistV3Test is Test {
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
 
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
-
-        uint256 repaymentFee = alchemist.convertDebtTokensToYield(earmarked) * 100 / BPS;
-
+        uint256 collateralAfterRepayment = prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield;
+        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
+        uint256 repaymentFee = surplusAfterRepayment * 100 / BPS;
         vm.stopPrank();
 
         // ensure debt is reduced only by the repayment of max earmarked amount
@@ -2644,6 +2869,125 @@ contract AlchemistV3Test is Test {
 
         // check protocolfeereciever received the protocl fee transfer from _forceRepay
         vm.assertApproxEqAbs(IERC20(address(vault)).balanceOf(address(protocolFeeReceiver)), protocolFeeInYield, 1e18);
+    }
+
+ function test_Liquidate_Repayment_Clears_Collateral_Balance() external {
+        uint256 amount = 200_000e18; // 200,000 yvdai
+        vm.prank(alOwner);
+        alchemist.setProtocolFee(protocolFee);
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // just ensureing global alchemist collateralization stays above the minimum required for regular liquidations
+        // no need to mint anything
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount * 2);
+        alchemist.deposit(amount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        // a single position nft would have been minted to 0xbeef
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Need to start a transmutator deposit, to start earmarking debt
+        vm.startPrank(anotherExternalUser);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
+        transmuterLogic.createRedemption(mintAmount);
+        vm.stopPrank();
+
+        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+        // skip to a future block. Lets say 100% of the way through the transmutation period (5_256_000 blocks)
+        vm.roll(block.number + 5_256_000);
+
+        // Earmarked debt should be 100% of the total debt
+        (uint256 prevCollateral, uint256 prevDebt, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(earmarked == prevDebt, "Earmarked debt should be 100% of the total debt");
+
+        // modify yield token price via modifying underlying token supply
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // increasing yeild token suppy by 1000 bps or 10%  while keeping the unederlying supply unchanged
+        // to create the scenario where collateral balance == debt
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1111111111111111111)/1e18;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // ensure initial debt is correct
+        vm.assertApproxEqAbs(prevDebt, 180_000_000_000_000_000_018_000, minimumDepositOrWithdrawalLoss);
+        vm.assertApproxEqAbs(alchemist.convertYieldTokensToDebt(prevCollateral), prevDebt, minimumDepositOrWithdrawalLoss);
+
+        // let another user liquidate the previous user position
+        vm.startPrank(externalUser);
+
+        uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
+        uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
+        creditToYield = creditToYield > prevCollateral ? prevCollateral : creditToYield;
+
+        uint256 targetProtocolFee = (creditToYield * protocolFee / BPS);
+        uint256 collAfterRepayment = prevCollateral - creditToYield;
+        uint256 protocolFeeInYield = targetProtocolFee > collAfterRepayment ? collAfterRepayment : targetProtocolFee;
+        uint256 prevVaultBalance = alchemistFeeVault.totalDeposits();
+
+        uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
+        uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        (uint256 depositedCollateral, uint256 debt, uint256 updatedEarmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(depositedCollateral == 0, "collateral should be 0");
+        require(debt == 0, "Debt should be 0");
+        require(updatedEarmarked == 0, "Updated earmarked should be 0");
+
+        uint256 targetFee = creditToYield * repaymentFeeBPS / BPS;
+        uint256 targetFeeInUnderlying = alchemist.convertYieldTokensToUnderlying(targetFee);
+        uint256 vaultBalance = alchemistFeeVault.totalDeposits();
+        uint256 expectedFeeInUnderlying = vaultBalance > targetFeeInUnderlying ? targetFeeInUnderlying : vaultBalance;
+    
+        vm.stopPrank();
+
+        // ensure depositedCollateral is reduced by the repayment of max earmarked amount and a protocol fee() 
+        // which should be zero)
+        vm.assertApproxEqAbs(
+            depositedCollateral,
+            prevCollateral - creditToYield - protocolFeeInYield,
+            minimumDepositOrWithdrawalLoss
+        );
+
+        // ensure assets is equal to repayment of max earmarked amount
+        vm.assertApproxEqAbs(assets, creditToYield, 1e18);
+
+        // ensure liquidator fee is 0 since collateral balance had been fully cleared in repayment
+        vm.assertEq(feeInYield, 0);
+        // underlying fee should come from external fee vault 
+        vm.assertApproxEqAbs(feeInUnderlying, expectedFeeInUnderlying, 1e18);
+
+        // liquidator gets correct amount of fee, i.e. only the repayment fee in underlying
+        _validateLiquidiatorState(
+            externalUser,
+            liquidatorPrevTokenBalance,
+            liquidatorPrevUnderlyingBalance,
+            feeInYield,
+            feeInUnderlying,
+            assets,
+            creditToYield
+        );
+
+        // ensure fee vault balance is reduced by the expected fee in underlying
+        vm.assertEq(alchemistFeeVault.totalDeposits(), prevVaultBalance - expectedFeeInUnderlying);
+
+        // transmuter recieves the repayment amount in yield token
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(address(transmuterLogic)), transmuterPreviousBalance + creditToYield, 1e18
+        );
+
+        // check protocolfeereciever received the protocol fee transfer from _forceRepay.
+        // In this case, protocol fee is zero
+        vm.assertEq(IERC20(address(vault)).balanceOf(address(protocolFeeReceiver)), protocolFeeInYield);
     }
 
     function testLiquidate_with_force_repay_and_insolvent_position() external {
@@ -2692,6 +3036,8 @@ contract AlchemistV3Test is Test {
     }
 
     function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment_Clears_Total_Debt() external {
+        vm.prank(alOwner);
+        alchemist.setProtocolFee(protocolFee);
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
         vm.stopPrank();
@@ -2742,18 +3088,25 @@ contract AlchemistV3Test is Test {
         vm.startPrank(externalUser);
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+
+        uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
+        uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
+        uint256 protocolFeeInYield = (creditToYield * protocolFee / BPS);
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
 
-        uint256 repaymentFee = alchemist.convertDebtTokensToYield(earmarked) * 100 / BPS;
 
+
+        uint256 collateralAfterRepayment = prevCollateral - creditToYield - protocolFeeInYield;
+        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
+        uint256 repaymentFee = surplusAfterRepayment * 100 / BPS;
         vm.stopPrank();
 
         // ensure debt is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(debt, prevDebt - earmarked, minimumDepositOrWithdrawalLoss);
 
         // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
-        vm.assertApproxEqAbs(depositedCollateral, prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - repaymentFee, minimumDepositOrWithdrawalLoss);
+        vm.assertApproxEqAbs(depositedCollateral, prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - repaymentFee - protocolFeeInYield, minimumDepositOrWithdrawalLoss);
 
         // ensure assets is equal to repayment of max earmarked amount
         // vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
