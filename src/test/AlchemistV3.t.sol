@@ -4168,4 +4168,280 @@ contract AlchemistV3Test is Test {
         assertApproxEqAbs(debt, 10_000e18 - 2000e18, 1);
         assertApproxEqAbs(earmarked, 500e18, 1);
     }
+
+    function testPOC_MYTSharesDeposited_Accounting_Vulnerability() external {
+        // ============================================
+        // SETUP: Create whale supply for price manipulation
+        // ============================================
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // ============================================
+        // STEP 1: Create a healthy account to keep global collateralization healthy
+        // ============================================
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        // ============================================
+        // STEP 2: Create victim position with maximum debt
+        // ============================================
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+
+        uint256 tokenIdVictim = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+
+        // Mint maximum debt at minimum collateralization ratio
+        uint256 maxDebt = alchemist.totalValue(tokenIdVictim) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdVictim, maxDebt, address(0xbeef));
+
+
+        vm.stopPrank();
+
+        // ============================================
+        // STEP 3: Manipulate yield token price to make position undercollateralized
+        // ============================================
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // Increase yield token supply by 6% (price drop)
+        uint256 modifiedVaultSupply = (initialVaultSupply * 600 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        uint256 collateralizationRatio = alchemist.totalValue(tokenIdVictim) * FIXED_POINT_SCALAR / maxDebt;
+
+        // ============================================
+        // STEP 4: Record state BEFORE liquidation
+        // ============================================
+        uint256 mytSharesDepositedBefore = alchemist.getTotalDeposited();
+        uint256 totalUnderlyingValueBefore = alchemist.getTotalUnderlyingValue();
+        uint256 contractMYTBalanceBefore = IERC20(address(vault)).balanceOf(address(alchemist));
+        uint256 transmuterMYTBalanceBefore = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+
+        // ============================================
+        // STEP 5: Execute liquidation
+        // ============================================
+        vm.startPrank(externalUser);
+        alchemist.liquidate(tokenIdVictim);
+        vm.stopPrank();
+
+        // ============================================
+        // STEP 6: Record state AFTER liquidation
+        // ============================================
+        uint256 mytSharesDepositedAfter = alchemist.getTotalDeposited();
+        uint256 totalUnderlyingValueAfter = alchemist.getTotalUnderlyingValue();
+        uint256 contractMYTBalanceAfter = IERC20(address(vault)).balanceOf(address(alchemist));
+        uint256 transmuterMYTBalanceAfter = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+
+        // ============================================
+        // STEP 7: Calculate the discrepancy
+        // ============================================
+        uint256 mytSentToTransmuter = transmuterMYTBalanceAfter - transmuterMYTBalanceBefore;
+        uint256 actualMYTDecrease = contractMYTBalanceBefore - contractMYTBalanceAfter;
+
+        // ============================================
+        // ASSERTIONS: Prove the vulnerability
+        // ============================================
+
+        // 1. MYT tokens were sent to the transmuter
+        vm.assertGt(mytSentToTransmuter, 0);
+
+        // 2. The contract's actual MYT balance decreased
+        vm.assertLt(contractMYTBalanceAfter, contractMYTBalanceBefore);
+
+        // 3. BUT _mytSharesDeposited did NOT decrease (or decreased by less than it should)
+        // This is the smoking gun - the accounting variable doesn't reflect reality
+        vm.assertLt(mytSharesDepositedAfter, mytSharesDepositedBefore);
+
+        // 4. The total underlying value is now overstated
+        // It's calculated from _mytSharesDeposited which hasn't been updated
+        // So it still counts tokens that have left the contract
+        uint256 expectedUnderlyingValue = alchemist.convertYieldTokensToUnderlying(contractMYTBalanceAfter);
+        uint256 reportedUnderlyingValue = totalUnderlyingValueAfter;
+
+
+        // 5. The reported value is higher than the actual value
+        vm.assertEq(reportedUnderlyingValue, expectedUnderlyingValue);
+
+        // 6. This overstatement equals the MYT sent to transmuter (converted to underlying)
+        uint256 expectedOverstatement = alchemist.convertYieldTokensToUnderlying(mytSentToTransmuter);
+        uint256 actualOverstatement = reportedUnderlyingValue - expectedUnderlyingValue;
+
+
+
+        // Allow for small rounding differences (due to price conversions and fees)
+        vm.assertEq(actualOverstatement, 0);
+    }
+
+    function test_getTotalDeposited_FailsToDeliver() public {
+        uint256 amount = 100e18;
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        console.log("alchemist.getTotalDeposited()", alchemist.getTotalDeposited());
+        // transfer some tokens to break the correct getTotalDeposited
+        deal(address(vault), address(0xbeef), 1e18);
+        SafeERC20.safeTransfer(address(vault), address(alchemist), 1e18);
+        assertEq(alchemist.getTotalDeposited(), amount);
+    }
+
+    function test_QueryGraphBug_ConsecutiveBlocksUnderearmarksCausesRedemptionLoss() external {
+        uint256 depositAmount = 10_000_000e18;
+        uint256 borrowAmount = 5_256_000e18;
+
+        // whale borrows 5_256_000e18
+        vm.startPrank(someWhale);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount);
+        alchemist.deposit(depositAmount, someWhale, 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(someWhale, address(alchemistNFT));
+        alchemist.mint(tokenId, borrowAmount, someWhale);
+        vm.stopPrank();
+
+        uint256 totalDebt = alchemist.totalDebt();
+        assertEq(totalDebt, borrowAmount, "Total debt should be 5_256_000e18");
+
+        // Create transmuter redemption for full debt amount
+        vm.startPrank(someWhale);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowAmount);
+        transmuterLogic.createRedemption(borrowAmount);
+        vm.stopPrank();
+
+        uint256 startEarmarkBlock = block.number + 1;
+        vm.roll(startEarmarkBlock + 9);
+        alchemist.poke(tokenId);
+        uint256 earmarkedStep1 = alchemist.cumulativeEarmarked();
+        // Each block 1e18 debt is earmarked
+        // From startEarmarkBlock to startEarmarkBlock + 9, there are 10 blocks
+        // Therefore, the total earmarked should be 10e18
+        assertEq(earmarkedStep1, 10e18, "Earmarked should be 10e18");
+
+        vm.roll(startEarmarkBlock + 10);
+        alchemist.poke(tokenId);
+        uint256 earmarkedStep2 = alchemist.cumulativeEarmarked();
+        assertEq(earmarkedStep2, 11e18, "Earmarked should not be the same");
+
+        // Full redemption
+        vm.roll(startEarmarkBlock + 5_256_000 + 10);
+        uint256 mytTokenBefore = IERC20(alchemist.myt()).balanceOf(address(alchemist));
+        vm.prank(someWhale);
+        transmuterLogic.claimRedemption(tokenId);
+        uint256 mytTokenAfter = IERC20(alchemist.myt()).balanceOf(address(alchemist));
+
+        uint256 mytTokenRedeemed = mytTokenBefore - mytTokenAfter;
+        assertEq(mytTokenRedeemed, borrowAmount, "Myt token should be redeemed");
+    }
+
+    function test_excessAlAssetFromCappedRedeemDoesNotReturnedToUser() public {
+        // 1. create position
+        uint256 amount = 100e18;
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 borrowedAmount = alchemist.getMaxBorrowable(tokenId);
+        alchemist.mint(tokenId, borrowedAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // 2. redemption using the same amount
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowedAmount);
+        transmuterLogic.createRedemption(borrowedAmount);
+        vm.stopPrank();
+
+        // 3. maturing 2/3 transmute amount
+        vm.roll(block.number + 5_256_000 * 2 / 3);
+
+        // 4. 0xbeef repay debt the position
+        vm.prank(address(0xbeef));
+        alchemist.repay(borrowedAmount, tokenId);
+
+        // 5. simulate price drop
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+        deal(address(IMockYieldToken(mockStrategyYieldToken).underlyingToken()), address(mockStrategyYieldToken), amount / 2);
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(amount);
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+
+        // 6. Redeem.
+        uint256 dadAlAssetBalBefore = alToken.balanceOf(address(0xdad));
+        uint256 dadMYTBalBefore = vault.balanceOf(address(0xdad));
+        uint256 feeReceiverAlAssetBalBefore = alToken.balanceOf(protocolFeeReceiver);
+        uint256 feeReceiverMYTBalBefore = vault.balanceOf(protocolFeeReceiver);
+        vm.prank(address(0xdad));
+        transmuterLogic.claimRedemption(1);
+
+        // 7. get how many alAsset and MYT 0xdad receive back, and the one get sent to protocolFeeReceiver
+        uint256 dadAlAssetBalAfter = alToken.balanceOf(address(0xdad));
+        uint256 dadMYTBalAfter = vault.balanceOf(address(0xdad));
+        uint256 feeReceiverAlAssetBalAfter = alToken.balanceOf(protocolFeeReceiver);
+        uint256 feeReceiverMYTBalAfter = vault.balanceOf(protocolFeeReceiver);
+        uint256 alAssetReturned = (dadAlAssetBalAfter - dadAlAssetBalBefore) + (feeReceiverAlAssetBalAfter - feeReceiverAlAssetBalBefore);
+        uint256 mytOut = (dadMYTBalAfter - dadMYTBalBefore) + (feeReceiverMYTBalAfter - feeReceiverMYTBalBefore);
+
+        // 8. compare mytOut with actual alAsset that get burned, by converting it to current conversion to yield
+        // we can get this by removing alAssetReturned from total amount that is used when creating position, which is borrowedAmount
+        uint256 alAssetBurnedInYield = alchemist.convertDebtTokensToYield(borrowedAmount - alAssetReturned);
+        assertApproxEqAbs(mytOut, alAssetBurnedInYield, 1e18);
+    }
+
+    function test_underflowOnSync() external {
+        uint256 amount = 100e18;
+        uint256 mintAmount = 89e18;
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        // a single position nft would have been minted to 0xbeef
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+
+        // mint for 0xdad so we only use the minted amount of alAsset
+        alchemist.mint(tokenIdFor0xBeef, (mintAmount), address(0xdad));
+        vm.stopPrank();
+
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
+        // create two redemption position
+        transmuterLogic.createRedemption(mintAmount/2);
+        transmuterLogic.createRedemption(mintAmount/2);
+        vm.stopPrank();
+
+        // maturing the redemption and maxing the earmarked
+        vm.roll(block.number + 5_256_000);
+
+        (,, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        assertApproxEqAbs(earmarked, mintAmount, 1);
+
+        // yield price drop
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+        deal(address(IMockYieldToken(mockStrategyYieldToken).underlyingToken()), address(mockStrategyYieldToken), amount / 2);
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(amount);
+        console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+
+        // claim the first redemption position
+        vm.prank(address(0xdad));
+        transmuterLogic.claimRedemption(1);
+
+        // poke to update the account.rawLocked, this should be bigger than before
+        // before it is 9.88e19 but because of yield price drop, by poke() the account.rawLocked recalculated = 1.422e20
+        alchemist.poke(tokenIdFor0xBeef);
+
+        // claim second redemption position, this would increase the collateral weight
+        vm.prank(address(0xdad));
+        transmuterLogic.claimRedemption(2);
+
+        // yield price back to normal x 2
+        // console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+        // deal(address(IMockYieldToken(mockStrategyYieldToken).underlyingToken()), address(mockStrategyYieldToken), amount * 2);
+        // IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(amount);
+        // console.log("price", IMockYieldToken(mockStrategyYieldToken).price());
+
+        // when user wants to invoke anything that include _sync it would underflow
+        // because account.collateralBalance < collateralToRemove
+        vm.prank(address(0xbeef));
+        alchemist.repay(100e18, tokenIdFor0xBeef);
+    }
 }

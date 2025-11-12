@@ -241,8 +241,22 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         uint256 feeYield = distributable * transmutationFee / BPS;
         uint256 claimYield = distributable - feeYield;
 
+        uint256 debtPaid = alchemist.convertYieldTokensToDebt(distributable);
+        if (debtPaid > scaledTransmuted) {
+            debtPaid = scaledTransmuted;
+        }
+
+        // Shortfall debt to offset if some amount of MYT cannot be paid to the user
+        // We will return some synthetics instead of burnign them all if this is the case
+        uint256 shortfallDebt = scaledTransmuted > debtPaid ? scaledTransmuted - debtPaid : 0;
+        uint256 haircutDebt = amountTransmuted > scaledTransmuted ? amountTransmuted - scaledTransmuted : 0;
+        uint256 burnAmountDebt = debtPaid + haircutDebt;
+        if (burnAmountDebt > position.amount) {
+            burnAmountDebt = position.amount;
+        }
+
         uint256 syntheticFee = amountNottransmuted * exitFee / BPS;
-        uint256 syntheticReturned = amountNottransmuted - syntheticFee;
+        uint256 syntheticReturned = (amountNottransmuted - syntheticFee) + shortfallDebt;
 
         // Remove untransmuted amount from the staking graph
         if (blocksLeft > 0) _updateStakingGraph(-position.amount.toInt256() * BLOCK_SCALING_FACTOR / transmutationTime.toInt256(), blocksLeft);
@@ -253,9 +267,11 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         TokenUtils.safeTransfer(syntheticToken, msg.sender, syntheticReturned);
         TokenUtils.safeTransfer(syntheticToken, protocolFeeReceiver, syntheticFee);
 
-        // Burn remaining synths that were not returned
-        TokenUtils.safeBurn(syntheticToken, amountTransmuted);
-        alchemist.reduceSyntheticsIssued(amountTransmuted);
+        if (burnAmountDebt > 0) {
+            TokenUtils.safeBurn(syntheticToken, burnAmountDebt);
+            alchemist.reduceSyntheticsIssued(burnAmountDebt);
+        }
+
         alchemist.setTransmuterTokenBalance(TokenUtils.safeBalanceOf(alchemist.myt(), address(this)));
 
         totalLocked -= position.amount;
@@ -267,7 +283,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
     /// @inheritdoc ITransmuter
     function queryGraph(uint256 startBlock, uint256 endBlock) external view returns (uint256) {
-        if (endBlock <= startBlock) return 0;
+        if (endBlock < startBlock) return 0;
 
         int256 queried = _stakingGraph.queryStake(startBlock, endBlock);
         if (queried == 0) return 0;
