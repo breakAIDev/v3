@@ -4091,4 +4091,99 @@ contract AlchemistV3Test is Test {
         vm.prank(address(0xbeef));
         alchemist.repay(100e18, tokenIdFor0xBeef);
     }
+
+    function test_PoC_SocializedDecay_UnfairCollateralLoss() public {
+        // --- 0. Define Users from setUp ---
+        address user1 = address(0xbeef);
+        address user2_victim = externalUser;
+        uint256 tokenId_1;
+        uint256 tokenId_2;
+        // Max LTV based on minimumCollateralization = 1.111...
+        uint256 mintAmount = 90e18; // 90% LTV
+
+        // --- 1. User 1 Setup ---
+        vm.startPrank(user1);
+        SafeERC20.safeApprove(address(vault), address(alchemist), 100e18);
+        // Deposit 100e18 myt
+        alchemist.deposit(100e18, user1, 0);
+        tokenId_1 = AlchemistNFTHelper.getFirstTokenId(user1, address(alchemistNFT)); // Get the tokenId
+        // Mint 90e18 debt
+        alchemist.mint(tokenId_1, mintAmount, user1);
+        vm.stopPrank();
+
+        // --- 2. Earmark for User 1 ---
+        vm.roll(block.number + 1); // Advance block so earmark can run.
+
+        // Get the block numbers for the mock call
+        uint256 lastEarmarkBlock = alchemist.lastEarmarkBlock();
+        uint256 currentBlock = block.number; // The block 'poke' will execute in.
+
+        // Mock the transmuter's queryGraph call to return 20e18
+        // We mock the *specific* call _earmark will make
+        vm.mockCall(
+        address(transmuterLogic),
+        abi.encodeWithSelector(ITransmuter.queryGraph.selector, lastEarmarkBlock + 1, currentBlock),
+        abi.encode(20e18)
+        );
+
+        // Poke User 1 to trigger _earmark() and _sync()
+        alchemist.poke(tokenId_1);
+
+        // Clear the mock call so it doesn't affect User 2's mint
+        vm.clearMockedCalls();
+
+        // Check that global state was updated by _earmark
+        assertEq(alchemist.cumulativeEarmarked(), 20e18, "Global cumulativeEarmarked was not updated by _earmark");
+
+        (,, uint256 earmarked1) = alchemist.getCDP(tokenId_1);
+        assertEq(earmarked1, 20e18, "User 1 was not earmarked");
+
+        // --- 3. User 2 (Victim) Setup ---
+        vm.startPrank(user2_victim);
+        SafeERC20.safeApprove(address(vault), address(alchemist), 100e18);
+        // Deposit 100e18 myt
+        alchemist.deposit(100e18, user2_victim, 0);
+        tokenId_2 = AlchemistNFTHelper.getFirstTokenId(user2_victim, address(alchemistNFT)); // Get the tokenId
+        // Mint 90e18 debt
+        alchemist.mint(tokenId_2, mintAmount, user2_victim);
+        vm.stopPrank();
+
+        // --- 4. Get "Before" State for User 2 ---
+        // We sync User 2's position to get a clean "before" state.
+        alchemist.poke(tokenId_2);
+        (uint256 collateralBefore, uint256 debtBefore, ) = alchemist.getCDP(tokenId_2);
+        (uint256 collateralBeforeUser1, uint256 debtBeforeUser1, ) = alchemist.getCDP(tokenId_1);
+
+
+        // Sanity check
+        assertEq(debtBefore, mintAmount, "User 2 initial debt is incorrect");
+
+        // --- 5. Trigger Redemption ---
+        vm.roll(block.number + 1); // Advance block so redemption can run
+
+        // Prank as the transmuter to call redeem
+        vm.prank(address(transmuterLogic));
+        alchemist.redeem(20e18); // Redeem the 20e18 that was earmarked
+
+        // --- 6. Sync User 2 (Victim) ---
+        // This poke will trigger _sync() for User 2, applying the
+        // socialized collateral decay from the redemption.
+        alchemist.poke(tokenId_2);
+
+        // --- 7. Get "After" State & Assert ---
+        (uint256 collateralAfter, uint256 debtAfter, ) = alchemist.getCDP(tokenId_2);
+        (uint256 collateralAfterUser1, uint256 debtAfterUser1, ) = alchemist.getCDP(tokenId_1);
+
+
+        // CRITICAL ASSERTION 1: User 2's debt is unchanged
+        // They did not have any debt earmarked, so they get no benefit.
+        assertEq(debtAfter, mintAmount);
+
+        // CRITICAL ASSERTION 2: User 2's collateral *decreased*
+        // Their collateral was taken to pay for User 1's redemption.
+        assertTrue(
+        collateralAfter == collateralBefore,
+        "Unfair distribution of collateral"
+        );
+    }
 }

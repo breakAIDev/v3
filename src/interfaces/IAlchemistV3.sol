@@ -50,13 +50,16 @@ struct Account {
     uint256 lastCollateralWeight;
     /// @notice Block of the most recent mint
     uint256 lastMintBlock;
-    /// @notice The un-scaled locked collateral.
-    uint256 rawLocked;
+    /// @notice Last stored survival accumulator
+    uint256 lastSurvivalAccumulator;
+    /// @notice Total debt redeemed at last sync
+    uint256 lastTotalRedeemedDebt;
+    /// @notice Total debt paid out from redemptions at last sync
+    uint256 lastTotalRedeemedSharesOut;
     /// @notice allowances for minting alAssets, per version.
     mapping(uint256 => mapping(address => uint256)) mintAllowances;
     /// @notice id used in the mintAllowances map which is incremented on reset.
     uint256 allowancesVersion;
-    uint256 lastSurvivalAccumulator;
 }
 
 /// @notice Information associated with a redemption.
