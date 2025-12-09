@@ -349,9 +349,22 @@ contract AlchemistV3Test is Test {
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
 
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
-        uint256 collateralAfterRepayment = prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield;
-        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
-        uint256 repaymentFee = surplusAfterRepayment * 100 / BPS;
+        uint256 collateralAfterRepayment = prevCollateral - creditToYield - protocolFeeInYield;
+
+        // Debt after earmarked repayment (in debt tokens)
+        uint256 debtAfterRepayment = prevDebt - earmarked;
+
+        // Convert debt to yield units for a consistent surplus calculation
+        uint256 debtAfterRepaymentInYield = alchemist.convertDebtTokensToYield(debtAfterRepayment);
+
+        uint256 surplusAfterRepayment =
+            collateralAfterRepayment > debtAfterRepaymentInYield
+                ? collateralAfterRepayment - debtAfterRepaymentInYield
+                : 0;
+
+        uint256 targetFee = surplusAfterRepayment * repaymentFeeBPS / BPS;
+        uint256 repaymentFee =
+            targetFee > collateralAfterRepayment ? collateralAfterRepayment : targetFee;
 
         vm.stopPrank();
 
@@ -404,7 +417,7 @@ contract AlchemistV3Test is Test {
         assertEq(reportedGlobalCR, expectedGlobalCR, "reported global CR should be the same  if _mytSharesDeposited is updated correctly"); 
     }
 
-    function test_1Liquidate_Global_MYTSharesDeposited_Updated() external {
+    function test_Liquidate_Global_MYTSharesDeposited_Updated() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
         vm.stopPrank();
@@ -2495,18 +2508,28 @@ contract AlchemistV3Test is Test {
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
         uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
         uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
-        uint256 protocolFeeInYield = (creditToYield * protocolFee / BPS);
+        uint256 protocolFeeInYield = (creditToYield * alchemist.protocolFee() / BPS);
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
 
         vm.stopPrank();
         uint256 collateralAfterRepayment = prevCollateral - creditToYield - protocolFeeInYield;
-        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
 
-         // calculate repayment fee and deduct from account
-        uint256 targetFee = surplusAfterRepayment * 100 / BPS;
-        // fee from collateral balance is zero if the account collateral surplus
-        uint256 repaymentFee = targetFee > collateralAfterRepayment ? collateralAfterRepayment : targetFee;
+        // Debt after earmarked repayment (in debt tokens)
+        uint256 debtAfterRepayment = prevDebt - earmarked;
+
+        // Convert debt to yield units for a consistent surplus calculation
+        uint256 debtAfterRepaymentInYield = alchemist.convertDebtTokensToYield(debtAfterRepayment);
+
+        uint256 surplusAfterRepayment =
+            collateralAfterRepayment > debtAfterRepaymentInYield
+                ? collateralAfterRepayment - debtAfterRepaymentInYield
+                : 0;
+
+        // calculate repayment fee in yield tokens and deduct from collateral
+        uint256 targetFee = surplusAfterRepayment * repaymentFeeBPS / BPS;
+        uint256 repaymentFee =
+            targetFee > collateralAfterRepayment ? collateralAfterRepayment : targetFee;
         // ensure debt is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(debt, prevDebt - earmarked, minimumDepositOrWithdrawalLoss);
 
@@ -2579,7 +2602,7 @@ contract AlchemistV3Test is Test {
         alchemist.poke(tokenIdFor0xBeef);
     }
 
-    function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Liquidation_50Percent_Yield_Price_Drop() external {
+    function test1Liquidate_Undercollateralized_Position_With_Earmarked_Debt_Liquidation_50Percent_Yield_Price_Drop() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
         vm.stopPrank();
@@ -2629,12 +2652,39 @@ contract AlchemistV3Test is Test {
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
 
-        uint256 collateralAfterRepayment = alchemist.totalValue(tokenIdFor0xBeef) - earmarked;
-        uint256 debtAfterRepayment = prevDebt - earmarked;
+        // Get initial values - Capture prevDebt here as well
+        (uint256 prevCollateral, uint256 prevDebtAtLiq, uint256 earmarkedBeforeLiquidation) = alchemist.getCDP(tokenIdFor0xBeef);
+        
+        // Calculate what will happen during force repay
+        // Use fresh earmarkedBeforeLiquidation and prevDebtAtLiq
+        uint256 credit = earmarkedBeforeLiquidation > prevDebtAtLiq ? prevDebtAtLiq : earmarkedBeforeLiquidation;
+        uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
+        creditToYield = creditToYield > prevCollateral ? prevCollateral : creditToYield;
+        
+        // Protocol fee calculation (will be 0 in this scenario)
+        uint256 targetProtocolFee = (creditToYield * alchemist.protocolFee() / BPS);
+        uint256 collAfterRepayment = prevCollateral - creditToYield;
+        uint256 protocolFeeInYield = targetProtocolFee > collAfterRepayment ? collAfterRepayment : targetProtocolFee;
+        
+        // Calculate repayment fee (need to convert debt to yield for comparison)
+        // Use fresh earmarkedBeforeLiquidation and prevDebtAtLiq
+        uint256 debtAfterRepayment = prevDebtAtLiq - earmarkedBeforeLiquidation;
+        uint256 collAfterProtocolFee = collAfterRepayment - protocolFeeInYield;
+        uint256 debtInYield = alchemist.convertDebtTokensToYield(debtAfterRepayment);
+        uint256 surplus = collAfterProtocolFee > debtInYield ? collAfterProtocolFee - debtInYield : 0;
+        uint256 repaymentFeeInYield = surplus > 0 ? (surplus * repaymentFeeBPS / BPS) : 0;
+        
+        // Collateral after all fees (this is what _doLiquidation will see)
+        uint256 collAfterAllFees = collAfterProtocolFee - repaymentFeeInYield;
+        
+        // Convert to underlying for liquidation calculation
+        uint256 collateralInUnderlyingForLiquidation = alchemist.convertYieldTokensToUnderlying(collAfterAllFees);
+        
         uint256 alchemistCurrentCollateralization =
             alchemist.normalizeUnderlyingTokensToDebt(alchemist.getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / alchemist.totalDebt();
+        // Calculate liquidation with the correct post-fee collateral
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
-            collateralAfterRepayment,
+            collateralInUnderlyingForLiquidation,
             debtAfterRepayment,
             alchemist.minimumCollateralization(),
             alchemistCurrentCollateralization,
@@ -2642,10 +2692,16 @@ contract AlchemistV3Test is Test {
             liquidatorFeeBPS
         );
 
-        (uint256 depositedColleteralBeforeLiquidation,, uint256 earmarkedBeforeLiquidation) = alchemist.getCDP(tokenIdFor0xBeef);
-        uint256 expectedLiquidationAmountInYield = alchemist.convertDebtTokensToYield(liquidationAmount);
         uint256 expectedBaseFeeInYield = alchemist.convertDebtTokensToYield(expectedBaseFee);
-        uint256 expectedFeeInUnderlying = expectedDebtToBurn * liquidatorFeeBPS / 10_000;
+        uint256 outsourcedFee = expectedDebtToBurn * liquidatorFeeBPS / 10_000;
+        // fee from external vault
+        uint256 targetFeeInUnderlying = alchemist.normalizeDebtTokensToUnderlying(outsourcedFee);
+        uint256 vaultBalance = alchemistFeeVault.totalDeposits();
+        uint256 expectedFeeInUnderlying = vaultBalance > targetFeeInUnderlying ? targetFeeInUnderlying : vaultBalance;
+
+        uint256 expectedLiquidationAmountInYield = alchemist.convertDebtTokensToYield(liquidationAmount);
+        // Cap by actual available collateral
+        expectedLiquidationAmountInYield = expectedLiquidationAmountInYield > collAfterAllFees ? collAfterAllFees : expectedLiquidationAmountInYield;
 
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
 
@@ -2660,7 +2716,7 @@ contract AlchemistV3Test is Test {
         vm.assertApproxEqAbs(depositedCollateral, 0, minimumDepositOrWithdrawalLoss);
 
         // ensure assets is equal to the entire collateral of the account - any protocol fee
-        vm.assertApproxEqAbs(assets, depositedColleteralBeforeLiquidation, minimumDepositOrWithdrawalLoss);
+        vm.assertApproxEqAbs(assets, expectedLiquidationAmountInYield, minimumDepositOrWithdrawalLoss);
 
         // ensure liquidator fee is correct (i.e.0, since only a repayment is done)
         vm.assertApproxEqAbs(feeInYield, expectedBaseFeeInYield, 1e18);
@@ -2674,7 +2730,7 @@ contract AlchemistV3Test is Test {
             feeInYield,
             feeInUnderlying,
             assets,
-            expectedLiquidationAmountInYield + alchemist.convertDebtTokensToYield(earmarkedBeforeLiquidation)
+            expectedLiquidationAmountInYield
         );
 
         vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether - expectedFeeInUnderlying);
@@ -2828,9 +2884,22 @@ contract AlchemistV3Test is Test {
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
 
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
-        uint256 collateralAfterRepayment = prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield;
-        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
-        uint256 repaymentFee = surplusAfterRepayment * 100 / BPS;
+        uint256 collateralAfterRepayment = prevCollateral - creditToYield - protocolFeeInYield;
+
+        // Debt after earmarked repayment (in debt tokens)
+        uint256 debtAfterRepayment = prevDebt - earmarked;
+
+        // Convert debt to yield units for a consistent surplus calculation
+        uint256 debtAfterRepaymentInYield = alchemist.convertDebtTokensToYield(debtAfterRepayment);
+
+        uint256 surplusAfterRepayment =
+            collateralAfterRepayment > debtAfterRepaymentInYield
+                ? collateralAfterRepayment - debtAfterRepaymentInYield
+                : 0;
+
+        uint256 targetFee = surplusAfterRepayment * repaymentFeeBPS / BPS;
+        uint256 repaymentFee =
+            targetFee > collateralAfterRepayment ? collateralAfterRepayment : targetFee;
         vm.stopPrank();
 
         // ensure debt is reduced only by the repayment of max earmarked amount
@@ -2943,10 +3012,11 @@ contract AlchemistV3Test is Test {
         require(debt == 0, "Debt should be 0");
         require(updatedEarmarked == 0, "Updated earmarked should be 0");
 
+        // fee from external vault
         uint256 targetFee = creditToYield * repaymentFeeBPS / BPS;
         uint256 targetFeeInUnderlying = alchemist.convertYieldTokensToUnderlying(targetFee);
         uint256 vaultBalance = alchemistFeeVault.totalDeposits();
-        uint256 expectedFeeInUnderlying = vaultBalance > targetFeeInUnderlying ? targetFeeInUnderlying : vaultBalance;
+        uint256 expectedFeeInUnderlying = prevVaultBalance > targetFeeInUnderlying ? targetFeeInUnderlying : prevVaultBalance;
     
         vm.stopPrank();
 
@@ -4335,5 +4405,99 @@ contract AlchemistV3Test is Test {
         // because account.collateralBalance < collateralToRemove
         vm.prank(address(0xbeef));
         alchemist.repay(100e18, tokenIdFor0xBeef);
+    }
+
+    function testPOC_AccountCanEndUpInUnliquidatableState() external {
+        console.log("\n=== POC: UnLiqudatable Account Test ===\n");
+        vm.prank(alOwner);
+        alchemist.setProtocolFee(protocolFee);
+
+        uint256 depositAmount = 1000e18; //981920193698630136722
+
+        // Step 1: deposits and borrows maximum debt
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount);
+        //vault.transfer(address(alchemist), 600);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdAttacker = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+
+        // Borrow maximum (collateral / minimumCollateralization)
+        uint256 maxBorrowable = alchemist.getMaxBorrowable(tokenIdAttacker);
+        alchemist.mint(tokenIdAttacker, maxBorrowable, address(0xbeef));
+
+        console.log("Step 1: Initial Position");
+        console.log(" Collateral:", depositAmount);
+        console.log(" Debt borrowed:", maxBorrowable);
+        console.log(" Initial collateralization:", depositAmount * FIXED_POINT_SCALAR / maxBorrowable / 1e16, "%");
+        console.log(" Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
+        vm.stopPrank();
+
+        vm.startPrank(anotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount);
+        alchemist.deposit(depositAmount, anotherExternalUser, 0);
+        vm.stopPrank();
+
+        // Step 2: Attacker creates redemption with ALL borrowed debt
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), maxBorrowable);
+        transmuterLogic.createRedemption(maxBorrowable);
+        console.log("\nStep 2: creates redemption");
+        vm.stopPrank();
+
+        vm.roll(block.number + 1);
+        alchemist.poke(tokenIdAttacker);
+
+        // Step 3: Advance time to mature redemption (100% maturity)
+        vm.roll(block.number + 5_256_000);
+        console.log("\nStep 3: Fast forward to full maturity (2 years)");
+
+        // Step 4: Simulate 10% price crash
+        console.log("\nStep 4: PRICE CRASH - MYT drops 10%");
+        // Increase mocked supply 10x = price drops to 10% of original
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // increasing yeild token suppy by 1000 bps or 10% while keeping the unederlying supply unchanged
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1000 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        (uint256 collateralBefore, uint256 debtBefore, uint256 earmarkedBefore) = alchemist.getCDP(tokenIdAttacker);
+        console.log("\nPosition after price crash:");
+        console.log(" Collateral (shares):", collateralBefore);
+        console.log(" Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
+        console.log(" Debt:", debtBefore);
+        console.log(" Earmarked:", earmarkedBefore);
+        uint256 collateralizationAfterCrash = alchemist.totalValue(tokenIdAttacker) * FIXED_POINT_SCALAR / debtBefore;
+        console.log(" Collateralization ratio:", collateralizationAfterCrash / 1e16, "%");
+
+        alchemist.liquidate(tokenIdAttacker);
+
+        (collateralBefore, debtBefore, earmarkedBefore) = alchemist.getCDP(tokenIdAttacker);
+        console.log("\nPosition after liquidation crash:");
+        console.log(" Collateral (shares):", collateralBefore);
+        console.log(" Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
+        console.log(" Debt:", debtBefore);
+        console.log(" Earmarked:", earmarkedBefore);
+
+        // Step 5: try to liquadate the account second time as it has zero colatteral to backd debt.
+        console.log("\nStep 5: liquidatiing the second time");
+        vm.expectRevert();
+        alchemist.liquidate(tokenIdAttacker);
+
+        vm.startPrank(address(0xbeef));
+
+        console.log("Try repay by burning also revert");
+        deal(address(alToken), address(0xbeef), debtBefore);
+        SafeERC20.safeApprove(address(alToken), address(alchemist), debtBefore);
+        vm.expectRevert();
+        alchemist.burn(debtBefore, tokenIdAttacker);
+
+        vm.stopPrank();
+
+        (collateralBefore, debtBefore, earmarkedBefore) = alchemist.getCDP(tokenIdAttacker);
+        console.log("\nPosition after Second liquidation crash:");
+        console.log(" Collateral (shares):", collateralBefore);
+        console.log(" Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
+        console.log(" Debt:", debtBefore);
+        console.log(" Earmarked:", earmarkedBefore);
     }
 }
