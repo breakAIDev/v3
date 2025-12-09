@@ -622,4 +622,111 @@ contract IntegrationTest is Test {
         vm.prank(address(0xbeef));
         alchemist.poke(tokenId);
     }
+
+    function ClaimResdemptionTransmuter(address user) internal {
+        vm.startPrank(user);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(transmuterLogic));
+        transmuterLogic.claimRedemption(tokenId);
+        vm.stopPrank();
+
+    }
+
+    function depositToAlchemix(uint256 shares, address user) internal {
+        vm.startPrank(user);
+        IERC20(address(vault)).approve(address(alchemist),shares);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(alchemistNFT));
+        alchemist.deposit(shares,user, tokenId);
+
+        vm.stopPrank();
+    }
+
+    function MintOnAlchemix(uint256 toMint, address user) internal {
+        vm.startPrank(user);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(alchemistNFT));
+        assertGt(tokenId,0,"cannot mint to user with no positions");
+        alchemist.mint(tokenId, toMint, user);
+        vm.stopPrank();
+    }
+
+    function RedeemOnTransmuter(address user, uint256 debtAmount) internal {
+        vm.startPrank(user);
+
+        IERC20(alUSD).approve(address(transmuterLogic), debtAmount);
+        transmuterLogic.createRedemption(debtAmount);
+
+        vm.stopPrank();
+
+    }
+
+    function moveTime(uint256 blocks) internal {
+        vm.warp(block.timestamp+blocks*12);
+        vm.roll(block.number+blocks);
+    }
+
+    function printState(address user, string memory message) internal {
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(alchemistNFT));
+        //poke to refresh _earmark and sync
+        alchemist.poke(tokenId);
+        uint256 totalDebt = alchemist.totalDebt();
+        uint256 synthIssued = alchemist.totalSyntheticsIssued();
+        uint256 transmuterCollBalance = IERC20(address(alchemist.myt())).balanceOf(address(transmuterLogic));
+        uint256 transmuterDebtCoverage = alchemist.convertYieldTokensToDebt(transmuterCollBalance);
+        uint256 transmuterLocked = transmuterLogic.totalLocked();
+
+        (uint256 collateral, uint256 debt, uint256 earmarked) = alchemist.getCDP(tokenId);
+        uint256 alchemistCollBalance = IERC20(address(alchemist.myt())).balanceOf(address(alchemist));
+        uint256 alchemistCollInDebt = alchemist.convertYieldTokensToDebt(alchemistCollBalance);
+        console.log("%s",message);
+        console.log("Alchemist Total Debt: %s",totalDebt/1e18);
+        console.log("Alchemist cumulative earmarked: %s", alchemist.cumulativeEarmarked() / 1e18);
+        console.log("Alchemist getTotalUnderlyingValue (_mytSharesDeposited value in debt tokens)", alchemist.getTotalUnderlyingValue()/1e6);
+        console.log("Alchemist Actual Collateral balance value in debt tokens", alchemistCollInDebt / 1e18);
+        console.log("Transmuter Debt Coverage (collateral balance value in debt tokens): %s",transmuterDebtCoverage/1e18);
+        console.log("Transmuter Locked Synthetic tokens: %s",transmuterLocked/1e18);
+        console.log("Total Synthetic token Issuance: %s",synthIssued/1e18);
+
+        console.log("CDP info - collateral: %s, debt %s, earmarked %s\n\n", collateral/1e18, debt/1e18, earmarked/1e18);
+
+    }
+
+    function testEarmarkTransmuterIncreasePOC() public {
+        address bob = makeAddr("bob");
+        address redeemer1 = makeAddr("redeemer1");
+
+
+        //deposit 300 underlying to vault
+        uint256 sharesBob = _magicDepositToVault(address(vault), bob, 300e6);
+
+        //deposit 115 vault shares to alchemix
+        uint256 depositedCollateral = 115e18;
+        depositToAlchemix(depositedCollateral, bob);
+
+        //mint a debt of 100
+        uint256 mintAmount = 100e18;
+        MintOnAlchemix(mintAmount,bob);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(bob, address(alchemistNFT));
+
+        //transfer 50 to redeemer
+        vm.startPrank(bob);
+        IERC20(alUSD).transfer(redeemer1, mintAmount /2);
+        vm.stopPrank();
+
+        //donation of 50 coll tokens to Transmuter
+        vm.startPrank(bob);
+        vault.transfer(address(transmuterLogic), 50e18);
+        vm.stopPrank();
+
+        // make sure _earmark can run in a new block
+        vm.roll(block.number + 1);
+
+        // IMPORTANT: force Alchemist to observe the cover *before* the redemption exists
+        alchemist.poke(tokenId);
+
+        //create, vest and redeem
+        RedeemOnTransmuter(redeemer1, mintAmount / 2);
+        moveTime(transmuterLogic.timeToTransmute());
+        ClaimResdemptionTransmuter(redeemer1);
+
+        printState(bob,"System final state");
+    }
 }

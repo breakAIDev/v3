@@ -133,6 +133,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// This is used to differentiate between tokens deposited into a CDP and balance of the contract
     uint256 private _mytSharesDeposited;
 
+    /// @dev MYT shares of transmuter balance increase not yet applied as cover in _earmark()
+    uint256 private _pendingCoverShares;
+
     /// @dev User accounts
     mapping(uint256 => Account) private _accounts;
 
@@ -1085,17 +1088,29 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (totalDebt == 0) return;
         if (block.number <= lastEarmarkBlock) return;
 
-        // Yield the transmuter accumulated since last earmark (cover)
-        uint256 transmuterCurrentBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
-        uint256 transmuterDifference = transmuterCurrentBalance > lastTransmuterTokenBalance ? transmuterCurrentBalance - lastTransmuterTokenBalance : 0;
+        // update pending cover shares based on transmuter balance delta
+        uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
 
+        if (transmuterBalance > lastTransmuterTokenBalance) {
+            _pendingCoverShares += (transmuterBalance - lastTransmuterTokenBalance);
+        }
+
+        lastTransmuterTokenBalance = transmuterBalance;
+
+        // how to earmark this window
         uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
 
-        // Proper saturating subtract in DEBT units
-        uint256 coverInDebt = convertYieldTokensToDebt(transmuterDifference);
-        amount = amount > coverInDebt ? amount - coverInDebt : 0;
+        // apply cover 
+        uint256 coverInDebt = convertYieldTokensToDebt(_pendingCoverShares);
+        if (amount != 0 && coverInDebt != 0) {
+            uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
+            amount -= usedDebt;
 
-        lastTransmuterTokenBalance = transmuterCurrentBalance;
+            // consume the corresponding portion of pending cover shares so we can't reuse it
+            uint256 sharesUsed = FixedPointMath.mulDivUp(_pendingCoverShares, usedDebt, coverInDebt);
+            if (sharesUsed > _pendingCoverShares) sharesUsed = _pendingCoverShares;
+            _pendingCoverShares -= sharesUsed;
+        }
 
         uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
         if (amount > liveUnearmarked) amount = liveUnearmarked;
@@ -1137,14 +1152,28 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Simulate earmark since lastEarmarkBlock
         if (block.number > lastEarmarkBlock) {
-            uint256 transmuterCurrentBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
-            uint256 transmuterDifference = transmuterCurrentBalance > lastTransmuterTokenBalance ? transmuterCurrentBalance - lastTransmuterTokenBalance : 0;
+            // update pending cover shares based on transmuter balance delta
+            uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
+            uint256 pendingCoverSharesCopy = _pendingCoverShares;
 
+            if (transmuterBalance > lastTransmuterTokenBalance) {
+                pendingCoverSharesCopy += (transmuterBalance - lastTransmuterTokenBalance);
+            }
+
+            // how much to earmark this window
             uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
 
-            // cover in DEBT units
-            uint256 coverInDebt = convertYieldTokensToDebt(transmuterDifference);
-            amount = amount > coverInDebt ? amount - coverInDebt : 0;
+            // apply cover 
+            uint256 coverInDebt = convertYieldTokensToDebt(pendingCoverSharesCopy);
+            if (amount != 0 && coverInDebt != 0) {
+                uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
+                amount -= usedDebt;
+
+                // consume the corresponding portion of pending cover shares so we can't reuse it
+                uint256 sharesUsed = FixedPointMath.mulDivUp(pendingCoverSharesCopy, usedDebt, coverInDebt);
+                if (sharesUsed > pendingCoverSharesCopy) sharesUsed = pendingCoverSharesCopy;
+                pendingCoverSharesCopy -= sharesUsed;
+            }
 
             uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
             if (amount > liveUnearmarked) amount = liveUnearmarked;
