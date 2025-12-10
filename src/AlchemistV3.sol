@@ -741,6 +741,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 credit = amount > debt ? debt : amount;
         uint256 creditToYield = convertDebtTokensToYield(credit);
 
+        bool takingAllCollateral = creditToYield >= account.collateralBalance;
+        if (takingAllCollateral) {
+            creditToYield = account.collateralBalance;
+            // When depleting all collateral, clear ALL remaining debt
+            // This prevents unliquidatable dust positions (collateral=0, debt>0)
+            // caused by rounding in debt↔yield conversions after price changes
+            credit = debt;
+        }
+
         _subDebt(accountId, credit);
 
         // Repay debt from earmarked amount of debt first
@@ -753,7 +762,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         creditToYield = creditToYield > account.collateralBalance ? account.collateralBalance : creditToYield;
         account.collateralBalance -= creditToYield;
-
         uint256 targetProtocolFee = creditToYield * protocolFee / BPS;
         // protocol fee <= collateral balance. Collateral balance may be zero 
         uint256 protocolFeeTotal = targetProtocolFee > account.collateralBalance ? account.collateralBalance : targetProtocolFee;
@@ -821,7 +829,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             return (repaidAmountInYield, feeInYield, feeInUnderlying);
         } else {
             // Do actual liquidation
-            return _doLiquidation(accountId, repaidAmountInYield);
+            return _doLiquidation(accountId);
         }
 
     }
@@ -855,11 +863,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @dev Performs the actual liquidation logic when collateralization is below the lower bound
     /// @param accountId The tokenId of the account to to liquidate.
-    /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
     /// @return amountLiquidated The amount of yield tokens liquidated.
     /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
     /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
-    function _doLiquidation(uint256 accountId, uint256 repaidAmountInYield)
+    function _doLiquidation(uint256 accountId)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying)
     {
@@ -892,7 +899,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // send base fee to liquidator if available
         if (feeInYield > 0) {
             TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
-        } else if (outsourcedFee > 0) {
+        } else if (normalizeDebtTokensToUnderlying(outsourcedFee) > 0) {
             // Handle outsourced fee from vault
             feeInUnderlying = _payWithFeeVault(normalizeDebtTokensToUnderlying(outsourcedFee));
         }
@@ -956,7 +963,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (toFree > _totalLocked) {
             toFree = _totalLocked;
         }
-
         account.debt -= amount;
         totalDebt -= amount;
         _totalLocked -= toFree;
@@ -1304,13 +1310,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // collateral remaining for margin‐restore calc
         uint256 adjCollat = collateral - fee;
-
         // compute m*d  (both plain units)
         uint256 md = (targetCollateralization * debt) / FIXED_POINT_SCALAR;
-
         // if md <= adjCollat, nothing to liquidate
         if (md <= adjCollat) {
-            return (0, 0, fee, 0);
+            return (0, 0, 0, 0);
         }
 
         // numerator = md - adjCollat

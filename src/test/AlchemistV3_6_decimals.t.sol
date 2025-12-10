@@ -35,6 +35,7 @@ import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
 import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
 import {MockYieldToken} from "./mocks/MockYieldToken.sol";
+import {console} from "../../lib/forge-std/src/console.sol";
 
 contract AlchemistV3Test is Test {
     // ----- [SETUP] Variables for setting up a minimal CDP -----
@@ -323,6 +324,61 @@ contract AlchemistV3Test is Test {
             transmuterPreviousBalance + expectedLiquidationAmountInYield - expectedBaseFeeInYield,
             1e18
         );
+    }
+
+    function testSmallOutsourcedFeeRoundingWithdrawalSuccess() external {
+        require(TokenUtils.expectDecimals(alchemist.underlyingToken()) == 6);
+        require(TokenUtils.expectDecimals(vault.asset()) == 6);
+
+        address user1 = makeAddr("user1");
+        address user2 = makeAddr("user2");
+
+        deal(address(vault), address(user1), 10e18);
+
+        vm.startPrank(address(user1));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(10e18, address(user1), 0);
+        vm.stopPrank();
+
+
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(user1), address(alchemistNFT));
+
+        vm.prank(user1);
+        alchemist.mint(tokenId, 9e18, user1);
+
+        vm.startPrank(user1);
+
+        IERC20(alToken).approve(address(transmuterLogic), 3000e18);
+        IERC20(address(vault)).approve(address(alchemist), 100_000e18);
+        transmuterLogic.createRedemption(9e18 - 100);
+
+        vm.roll(vm.getBlockNumber() + transmuterLogic.timeToTransmute()); // full dulration of the redemption.
+
+        IERC20(address(vault)).approve(address(alchemist), 100_000e18);
+
+        // modify yield token price via modifying underlying token supply
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // increasing yeild token suppy by 2000 bps or 20% while keeping the unederlying supply unchanged
+        uint256 modifiedVaultSupply = ((initialVaultSupply * 2000) / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        vm.startPrank(user1);
+        // get account cdp
+        (uint256 collateral, uint256 debt,) = alchemist.getCDP(tokenId);
+        uint256 accountCollatRatio = alchemist.totalValue(tokenId) * FIXED_POINT_SCALAR / debt;
+        console.log("test underlying value", alchemist.totalValue(tokenId));
+        console.log("test debt", debt);
+        console.log("test accountCollatRatio", accountCollatRatio);
+        require(accountCollatRatio < alchemist.minimumCollateralization(), "Account should be undercollateralized");
+       // vm.expectRevert("ZeroAmount()");
+        (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenId);
+        (uint256 collateralAfter, uint256 debtAfter,) = alchemist.getCDP(tokenId);
+        console.log("test underlying value after", alchemist.totalValue(tokenId));
+        console.log("test debtAfter", debtAfter);
+        console.log("test amountLiquidated", amountLiquidated);
+        console.log("test feeInYield", feeInYield);
+        console.log("test feeInUnderlying", feeInUnderlying);
     }
 
     function _validateLiquidiatorState(
