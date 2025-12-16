@@ -355,10 +355,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3State
     function totalValue(uint256 tokenId) public view returns (uint256) {
-        uint256 totalUnderlying;
-        (,, uint256 collateral) = _calculateUnrealizedDebt(tokenId);
-        if (collateral > 0) totalUnderlying += convertYieldTokensToUnderlying(collateral);
-        return normalizeUnderlyingTokensToDebt(totalUnderlying);
+        return _totalCollateralValue(tokenId, true);
     }
 
     /// @inheritdoc IAlchemistV3Actions
@@ -770,7 +767,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // update myt shares deposited
         _mytSharesDeposited -= creditToYield;
         _mytSharesDeposited -= protocolFeeTotal;
-   
+
         emit ForceRepay(accountId, amount, creditToYield, protocolFeeTotal);
 
         if (creditToYield > 0) {
@@ -806,7 +803,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             return (0, 0, 0);
         }
        
-        if (_isAccountHealthy(accountId)) {
+        if (_isAccountHealthy(accountId, false)) {
             return (0, 0, 0);
         }
 
@@ -818,7 +815,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
-        if (_isAccountHealthy(accountId)) {
+        if (_isAccountHealthy(accountId, false)) {
 
             if (feeInYield > 0) {
                 TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
@@ -851,12 +848,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @dev An account is healthy if its collateralization ratio is greater than the collateralization lower bound
     /// @dev An account is healthy if it has no debt
     /// @param accountId The tokenId of the account to check.
+    /// @param refresh Whether to refresh the account's collateral value by including unrealized debt.
     /// @return true if the account is healthy, false otherwise.
-    function _isAccountHealthy(uint256 accountId) internal view returns (bool) {
+    function _isAccountHealthy(uint256 accountId, bool refresh) internal view returns (bool) {
         if (_accounts[accountId].debt == 0) {
             return true;
         }
-        uint256 collateralInUnderlying = totalValue(accountId);
+        uint256 collateralInUnderlying = _totalCollateralValue(accountId, refresh);
         uint256 collateralizationRatio = collateralInUnderlying * FIXED_POINT_SCALAR / _accounts[accountId].debt;
         return collateralizationRatio > collateralizationLowerBound;
     }
@@ -1058,6 +1056,21 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param tokenId The id of the account owner.
     function _validate(uint256 tokenId) internal view {
         if (_isUnderCollateralized(tokenId)) revert Undercollateralized();
+    }
+
+
+    /// @dev Calculate the total collateral value of the account in debt tokens.
+    /// @param tokenId The id of the account owner.
+    /// @return The total collateral value of the account in debt tokens.
+    function _totalCollateralValue(uint256 tokenId, bool includeUnrealizedDebt) internal view returns (uint256) {
+        uint256 totalUnderlying;
+        if (includeUnrealizedDebt) {
+            (,, uint256 collateral) = _calculateUnrealizedDebt(tokenId);
+            if (collateral > 0) totalUnderlying += convertYieldTokensToUnderlying(collateral);
+        } else {
+            totalUnderlying = convertYieldTokensToUnderlying(_accounts[tokenId].collateralBalance);
+        }
+        return normalizeUnderlyingTokensToDebt(totalUnderlying);
     }
 
     /// @dev Update the user's earmarked and redeemed debt amounts.
