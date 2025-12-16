@@ -743,7 +743,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             creditToYield = account.collateralBalance;
             // When depleting all collateral, clear ALL remaining debt
             // This prevents unliquidatable dust positions (collateral=0, debt>0)
-            // caused by rounding in debt↔yield conversions after price changes
+            // caused by rounding in debt/yield conversions after price changes
             credit = debt;
         }
 
@@ -768,6 +768,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _mytSharesDeposited -= creditToYield;
         _mytSharesDeposited -= protocolFeeTotal;
 
+        // Final safety check after all deductions
+        if (account.collateralBalance == 0 && account.debt > 0) {
+            _subDebt(accountId, account.debt);
+        }
+   
         emit ForceRepay(accountId, amount, creditToYield, protocolFeeTotal);
 
         if (creditToYield > 0) {
