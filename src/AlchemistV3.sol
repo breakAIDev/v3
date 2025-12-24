@@ -513,21 +513,20 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 yieldToDebt = convertYieldTokensToDebt(amount);
         uint256 credit = yieldToDebt > debt ? debt : yieldToDebt;
-        uint256 creditToYield = convertDebtTokensToYield(credit);
 
         // Repay debt from earmarked amount of debt first
-        uint256 earmarkToRemove = credit > account.earmarked ? account.earmarked : credit;
-        account.earmarked -= earmarkToRemove;
+        _subEarmarkedDebt(credit, recipientTokenId);
 
-        uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
-        cumulativeEarmarked -= earmarkPaidGlobal;
+
+        uint256 creditToYield = convertDebtTokensToYield(credit);
+
 
         // Debt is subject to protocol fee similar to redemptions
         uint256 feeAmount = creditToYield * protocolFee / BPS;
         if (feeAmount > account.collateralBalance) {
             revert("Not enough collateral to pay for debt fee");
         } else {
-            account.collateralBalance -= creditToYield * protocolFee / BPS;
+            _subCollateralBalance(feeAmount, recipientTokenId);
         }
 
         _subDebt(recipientTokenId, credit);
@@ -535,8 +534,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // Transfer the repaid tokens to the transmuter.
         TokenUtils.safeTransferFrom(myt, msg.sender, transmuter, creditToYield);
         TokenUtils.safeTransfer(myt, protocolFeeReceiver, creditToYield * protocolFee / BPS);
-        _mytSharesDeposited -= creditToYield * protocolFee / BPS;
-
         emit Repay(msg.sender, amount, recipientTokenId, creditToYield);
 
         return creditToYield;
@@ -716,7 +713,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
      * @param amount The amount to repay in debt tokens.
      * @return creditToYield The amount of yield tokens repaid.
      */
-    function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
+
+     function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
         if (amount == 0) {
             return 0;
         }
@@ -736,43 +734,18 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // earmarked debt always <= account debt
         uint256 credit = amount > debt ? debt : amount;
-        uint256 creditToYield = convertDebtTokensToYield(credit);
-
-        bool takingAllCollateral = creditToYield >= account.collateralBalance;
-        if (takingAllCollateral) {
-            creditToYield = account.collateralBalance;
-            // When depleting all collateral, clear ALL remaining debt
-            // This prevents unliquidatable dust positions (collateral=0, debt>0)
-            // caused by rounding in debt/yield conversions after price changes
-            credit = debt;
-        }
-
-        _subDebt(accountId, credit);
-
         // Repay debt from earmarked amount of debt first
-        uint256 earmarkToRemove = credit > account.earmarked ? account.earmarked : credit;
-        account.earmarked -= earmarkToRemove;
+        _subEarmarkedDebt(credit, accountId);
+        _subDebt(accountId, credit);
+        
+        // sub the amount in yield tokens from collateral balance
+        uint256 creditToYield = _subCollateralBalance(convertDebtTokensToYield(credit), accountId);
 
-        // repayment amount always<= collateral balance
-        uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
-        cumulativeEarmarked -= earmarkPaidGlobal;
-
-        creditToYield = creditToYield > account.collateralBalance ? account.collateralBalance : creditToYield;
-        account.collateralBalance -= creditToYield;
+        // sub the protocol fee from collateral balance. collateral balance may be zero 
         uint256 targetProtocolFee = creditToYield * protocolFee / BPS;
-        // protocol fee <= collateral balance. Collateral balance may be zero 
-        uint256 protocolFeeTotal = targetProtocolFee > account.collateralBalance ? account.collateralBalance : targetProtocolFee;
-        account.collateralBalance -= protocolFeeTotal;
+        uint256 protocolFeeTotal = _subCollateralBalance(targetProtocolFee, accountId);
 
-        // update myt shares deposited
-        _mytSharesDeposited -= creditToYield;
-        _mytSharesDeposited -= protocolFeeTotal;
 
-        // Final safety check after all deductions
-        if (account.collateralBalance == 0 && account.debt > 0) {
-            _subDebt(accountId, account.debt);
-        }
-   
         emit ForceRepay(accountId, amount, creditToYield, protocolFeeTotal);
 
         if (creditToYield > 0) {
@@ -786,6 +759,38 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         return creditToYield;
+    }
+
+    /// @dev Subtracts the earmarked debt by `amount` for the account owned by `accountId`.
+    /// @param amountInDebtTokens The amount of debt tokens to subtract from the earmarked debt.
+    /// @param accountId The tokenId of the account to subtract the earmarked debt from.
+    /// @return The amount of debt tokens subtracted from the earmarked debt.
+    function _subEarmarkedDebt(uint256 amountInDebtTokens, uint256 accountId) internal returns (uint256) {
+        Account storage account = _accounts[accountId];
+        uint256 earmarkedDebt = account.earmarked;
+        uint256 debt = account.debt;
+
+        uint256 credit = amountInDebtTokens > debt ? debt : amountInDebtTokens;
+        uint256 earmarkToRemove = credit > earmarkedDebt ? earmarkedDebt : credit;
+        account.earmarked -= earmarkToRemove;
+
+        uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
+        cumulativeEarmarked -= earmarkPaidGlobal;     
+        return earmarkToRemove;
+    }
+
+
+    /// @dev Subtracts the collateral balance by `amount` for the account owned by `accountId`.
+    /// @param amountInYieldTokens The amount of yield tokens to subtract from the collateral balance.
+    /// @param accountId The tokenId of the account to subtract the collateral balance from.
+    /// @return The amount of yield tokens subtracted from the collateral balance.
+    function _subCollateralBalance(uint256 amountInYieldTokens, uint256 accountId) internal returns (uint256) {
+        Account storage account = _accounts[accountId];
+        uint256 collateralBalance = account.collateralBalance;
+        uint256 amountToRemove = amountInYieldTokens > collateralBalance ? collateralBalance : amountInYieldTokens;
+        account.collateralBalance -= amountToRemove;
+        _mytSharesDeposited -= amountToRemove;
+        return amountToRemove;
     }
 
     /// @dev Fetches and applies the liquidation amount to account `tokenId` if the account collateral ratio touches `collateralizationLowerBound`.
@@ -816,7 +821,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked);
-            (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);    
+            (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
+            // Final safety check after all deductions
+            if (account.collateralBalance == 0 && account.debt > 0) {
+                _subDebt(accountId, account.debt);
+            }
         }
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
@@ -892,8 +901,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         amountLiquidated = convertDebtTokensToYield(liquidationAmount) > account.collateralBalance ? account.collateralBalance : convertDebtTokensToYield(liquidationAmount);
         feeInYield = convertDebtTokensToYield(baseFee);
         // update user balance and debt
-        account.collateralBalance -= amountLiquidated;
-        _mytSharesDeposited -= amountLiquidated;
+        _subCollateralBalance(amountLiquidated, accountId);
         _subDebt(accountId, debtToBurn);
 
         // send liquidation amount - fee to transmuter
@@ -922,9 +930,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if(surplus > 0){
             // calculate repayment fee and deduct from account
             uint256 targetFee = surplus * repaymentFee / BPS;
-            feeInYield = targetFee > account.collateralBalance ? account.collateralBalance : targetFee;
-            account.collateralBalance -= feeInYield;
-            _mytSharesDeposited -= feeInYield;
+            feeInYield = _subCollateralBalance(targetFee, accountId);
         } else {
             uint256 targetFee = repaidAmountInYield * repaymentFee / BPS;
             feeInUnderlying = convertYieldTokensToUnderlying(targetFee);
