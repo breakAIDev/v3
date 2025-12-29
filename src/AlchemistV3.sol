@@ -494,6 +494,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         totalSyntheticsIssued -= credit;
 
+        // Assure that the collateralization invariant is still held.
+        _validate(recipientId);
+
         emit Burn(msg.sender, credit, recipientId);
 
         return credit;
@@ -723,54 +726,66 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
      * @return creditToYield The amount of yield tokens repaid.
      */
     function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
-        if (amount == 0) {
-            return 0;
-        }
+        if (amount == 0) return 0;
+
         _checkForValidAccountId(accountId);
         Account storage account = _accounts[accountId];
 
-        // Query transmuter and earmark global debt
         _earmark();
-
-        // Sync current user debt before deciding how much is available to be repaid
         _sync(accountId);
 
-        uint256 debt;
+        uint256 debt = account.debt;
+        _checkState(debt > 0);
 
-        // Burning yieldTokens will pay off all types of debt
-        _checkState((debt = account.debt) > 0);
+        // Requested debt repayment 
+        uint256 requestedCredit = amount > debt ? debt : amount;
 
-        uint256 credit = amount > debt ? debt : amount;
-        uint256 creditToYield = convertDebtTokensToYield(credit);
-        _subDebt(accountId, credit);
+        // Shares needed to repay requestedCredit
+        uint256 sharesToRepay = convertDebtTokensToYield(requestedCredit);
 
-        // Repay debt from earmarked amount of debt first
+        // Clamp by available collateral before burning debt
+        if (sharesToRepay > account.collateralBalance) {
+            sharesToRepay = account.collateralBalance;
+        }
+
+        if (sharesToRepay == 0) return 0;
+
+        // Derive the actual debt repaid from the shares we will send
+        // This prevents burning more debt than we actually repay
+        uint256 credit = convertYieldTokensToDebt(sharesToRepay);
+
+        // never burn more than requestedCredit
+        if (credit > requestedCredit) credit = requestedCredit;
+
+        if (credit == 0) return 0;
+
+        // update earmarks before calling _subDebt to avoid double-reductions
+        // caused by _subDebt() clamping cumulativeEarmarked to totalDebt
         uint256 earmarkToRemove = credit > account.earmarked ? account.earmarked : credit;
         account.earmarked -= earmarkToRemove;
 
         uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
         cumulativeEarmarked -= earmarkPaidGlobal;
 
-        creditToYield = creditToYield > account.collateralBalance ? account.collateralBalance : creditToYield;
-        account.collateralBalance -= creditToYield;
+        _subDebt(accountId, credit);
 
-        uint256 protocolFeeTotal = creditToYield * protocolFee / BPS;
+        // Pull principal shares from the account and send to transmuter
+        account.collateralBalance -= sharesToRepay;
 
-        emit ForceRepay(accountId, amount, creditToYield, protocolFeeTotal);
+        uint256 protocolFeeTotal = (sharesToRepay * protocolFee) / BPS;
 
-        if (account.collateralBalance > protocolFeeTotal) {
+        emit ForceRepay(accountId, amount, sharesToRepay, protocolFeeTotal);
+
+        if (account.collateralBalance >= protocolFeeTotal && protocolFeeTotal > 0) {
             account.collateralBalance -= protocolFeeTotal;
-            // Transfer the protocol fee to the protocol fee receiver
             TokenUtils.safeTransfer(myt, protocolFeeReceiver, protocolFeeTotal);
             _mytSharesDeposited -= protocolFeeTotal;
         }
 
-        if (creditToYield > 0) {
-            // Transfer the repaid tokens from the account to the transmuter.
-            TokenUtils.safeTransfer(myt, address(transmuter), creditToYield);
-            _mytSharesDeposited -= creditToYield;
-        }
-        return creditToYield;
+        TokenUtils.safeTransfer(myt, address(transmuter), sharesToRepay);
+        _mytSharesDeposited -= sharesToRepay;
+
+        return sharesToRepay;
     }
 
     /// @dev Fetches and applies the liquidation amount to account `tokenId` if the account collateral ratio touches `collateralizationLowerBound`.

