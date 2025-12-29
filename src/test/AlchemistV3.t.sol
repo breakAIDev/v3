@@ -465,9 +465,10 @@ contract AlchemistV3Test is Test {
     }
 
     function testSetMinCollateralization_Variable_Collateralization(uint256 collateralization) external {
-        vm.assume(collateralization >= FIXED_POINT_SCALAR);
+        vm.assume(collateralization >= alchemist.minimumCollateralization());
         vm.assume(collateralization < 20e18);
         vm.startPrank(address(0xdead));
+        alchemist.setGlobalMinimumCollateralization(collateralization);
         alchemist.setMinimumCollateralization(collateralization);
         vm.assertApproxEqAbs(alchemist.minimumCollateralization(), collateralization, minimumDepositOrWithdrawalLoss);
         vm.stopPrank();
@@ -948,7 +949,9 @@ contract AlchemistV3Test is Test {
     function testMint_Revert_Exceeds_Min_Collateralization(uint256 amount, uint256 collateralization) external {
         amount = bound(amount, FIXED_POINT_SCALAR, accountFunds);
 
-        collateralization = bound(collateralization, FIXED_POINT_SCALAR, 100e18);
+        collateralization = bound(collateralization, alchemist.globalMinimumCollateralization(), 100e18);
+        vm.prank(address(0xdead));
+        alchemist.setGlobalMinimumCollateralization(collateralization);
         vm.prank(address(0xdead));
         alchemist.setMinimumCollateralization(collateralization);
         vm.startPrank(address(0xbeef));
@@ -3367,6 +3370,7 @@ contract AlchemistV3Test is Test {
         vm.roll(block.number + 1);
         //admit increase minimumCollateralization
         vm.startPrank(alOwner);
+        alchemist.setGlobalMinimumCollateralization(uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 88e16);
         alchemist.setMinimumCollateralization(uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 88e16); // 88% collateralization
         uint256 minimumCollateralizationAfter = alchemist.minimumCollateralization();
         assertGt(minimumCollateralizationAfter, minimumCollateralizationBefore, "minimumCollateralization should be increased");
@@ -4445,5 +4449,15 @@ contract AlchemistV3Test is Test {
         assertEq(assetsLiquidated, collateralBefore, "clamped to available shares");
         assertEq( IERC20(address(vault)).balanceOf(address(transmuterLogic)),transmuterBalanceBefore + assetsLiquidated,
         "transmuter got only clamped amount");
+    }
+
+    function test_setminimumCollateralizationGreaterThanGlobalMinimumCollateralization () external {
+        vm.startPrank(alOwner);
+        //  using collateralization parameter = 2e10 > 1_111_111_111_111_111_111 (globalMinimumCollateralization)
+        alchemist.setMinimumCollateralization(2e20);
+        vm.assertEq(alchemist.minimumCollateralization(), alchemist.globalMinimumCollateralization(), "Test failed");
+        console.log("minimumCollateralization:", alchemist.minimumCollateralization());
+        console.log("globalMinimumCollateralization:", alchemist.globalMinimumCollateralization());
+        vm.stopPrank(); 
     }
 }

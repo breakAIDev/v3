@@ -294,7 +294,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3AdminActions
     function setMinimumCollateralization(uint256 value) external onlyAdmin {
         _checkArgument(value >= FIXED_POINT_SCALAR);
-        minimumCollateralization = value;
+
+        // cannot exceed global minimum
+        minimumCollateralization = value > globalMinimumCollateralization ? globalMinimumCollateralization : value;
 
         emit MinimumCollateralizationUpdated(value);
     }
