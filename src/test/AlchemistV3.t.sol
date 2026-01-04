@@ -4455,4 +4455,72 @@ contract AlchemistV3Test is Test {
         console.log("globalMinimumCollateralization:", alchemist.globalMinimumCollateralization());
         vm.stopPrank(); 
     }
+
+    function testSubDebtOverstatesRawLockedAfterClampLeadingToExcessiveCollateralDeduction() external { 
+        // Set fees to 0 for simplicity and isolation 
+        vm.startPrank(alOwner); 
+        alchemist.setProtocolFee(0); 
+        transmuterLogic.setTransmutationFee(0); 
+        vm.stopPrank(); 
+    
+        uint256 depositAmount = 12e18; // Enough for minColl on 10e18 debt 
+        uint256 mintAmount = 10e18; 
+        uint256 burnAmount = 5e18; // Partial burn to leave synthetics for redemption 
+        uint256 redemptionAmount = 5e18; // Remaining synthetics 
+    
+        address userB = address(0xbeef); // User with clamped burn, overstated rawLocked 
+    
+        // User B: deposit and mint 
+        vm.startPrank(userB); 
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount); 
+        alchemist.deposit(depositAmount, userB, 0); 
+        uint256 tokenIdB = AlchemistNFTHelper.getFirstTokenId(userB, address(alchemistNFT)); 
+        alchemist.mint(tokenIdB, mintAmount, userB); 
+        vm.roll(block.number + 1); // Allow burn 
+        vm.stopPrank(); 
+    
+        // Storage slot for _totalLocked (slot 31) 
+        bytes32 totalLockedSlot = bytes32(uint256(31)); 
+        uint256 initialTotalLocked = uint256(vm.load(address(alchemist), totalLockedSlot)); 
+    
+        // Set _totalLocked low to trigger clamp during burn (toFree ~5.55e18 > clamped 2e18) 
+        uint256 clampedTotalLocked = 2e18; 
+        vm.store(address(alchemist), totalLockedSlot, bytes32(clampedTotalLocked)); 
+    
+        // User B partial burn: triggers clamp, overstates rawLocked = pre ~11.11e18 - 2e18 = 9.11e18 > correct post 5.55e18 
+        vm.startPrank(userB); 
+        SafeERC20.safeApprove(address(alToken), address(alchemist), burnAmount); 
+        alchemist.burn(burnAmount, tokenIdB); 
+        vm.stopPrank(); 
+    
+        // Restore _totalLocked 
+        vm.store(address(alchemist), totalLockedSlot, bytes32(initialTotalLocked)); 
+    
+        // Verify partial debt remains 
+        (, uint256 debtB, ) = alchemist.getCDP(tokenIdB); 
+        assertEq(debtB, redemptionAmount); 
+    
+        // Pre-sync collateral (full deposit, no weight delta yet) 
+        (uint256 collateralBeforeB, , ) = alchemist.getCDP(tokenIdB); 
+        assertEq(collateralBeforeB, depositAmount); 
+    
+        // User B creates and claims redemption on remaining synthetics (increases _collateralWeight significantly) 
+        vm.startPrank(userB); 
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), redemptionAmount); 
+        transmuterLogic.createRedemption(redemptionAmount); 
+        vm.roll(block.number + transmuterLogic.timeToTransmute()); 
+        transmuterLogic.claimRedemption(1);  // Calls alchemist.redeem(5e18), large WeightIncrement on _collateralWeight 
+        vm.stopPrank(); 
+    
+        // Now poke: triggers _sync with large delta >0 
+        // Buggy: overstated rawLocked=9.11e18 => large collateralToRemove deduction 
+        alchemist.poke(tokenIdB); 
+    
+        // Post-sync collateral 
+        (uint256 collateralAfterB, , ) = alchemist.getCDP(tokenIdB); 
+    
+        // Prove excessive/unfair deduction from userB's collateralBalance due to overstated rawLocked 
+        // (Correct: rawLocked=5.55e18 post-burn, but bug uses 9.11e18, leading to ~60% larger deduction) 
+        assertLt(collateralAfterB, collateralBeforeB); 
+    }
 }

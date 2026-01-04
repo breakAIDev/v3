@@ -50,6 +50,8 @@ struct Account {
     uint256 lastCollateralWeight;
     /// @notice Block of the most recent mint
     uint256 lastMintBlock;
+    /// @notice Block of the most recent repay
+    uint256 lastRepayBlock;
     /// @notice Last stored survival accumulator
     uint256 lastSurvivalAccumulator;
     /// @notice Total debt redeemed at last sync
@@ -825,6 +827,7 @@ interface IAlchemistV3Errors {
 
     /// @notice An error which is used to indicate that a user is trying to repay on the same block they are minting
     error CannotRepayOnMintBlock();
+    error CannotMintOnRepayBlock();
 
     error VaultTotalsUnavailable();
     error DebtConversionOverflow();

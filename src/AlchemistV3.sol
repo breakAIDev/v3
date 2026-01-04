@@ -496,6 +496,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Update the recipient's debt.
         _subDebt(recipientId, credit);
+        _accounts[recipientId].lastRepayBlock = block.number;
 
         totalSyntheticsIssued -= credit;
 
@@ -547,6 +548,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         _subDebt(recipientTokenId, credit);
+        account.lastRepayBlock = block.number;
 
         // Transfer the repaid tokens to the transmuter.
         TokenUtils.safeTransferFrom(myt, msg.sender, transmuter, creditToYield);
@@ -709,6 +711,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param amount    The amount to mint.
     /// @param recipient The recipient of the minted debt tokens.
     function _mint(uint256 tokenId, uint256 amount, address recipient) internal {
+        if (block.number == _accounts[tokenId].lastRepayBlock) revert CannotMintOnRepayBlock();
         _addDebt(tokenId, amount);
 
         totalSyntheticsIssued += amount;
