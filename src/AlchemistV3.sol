@@ -1050,10 +1050,14 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             // No new redemptions since last sync
             survivalRatio = ONE_Q128;
         } else {
-            uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
-            if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
-            uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
-            survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+            uint256 deltaRedemptionWeight = _redemptionWeight - account.lastAccruedRedemptionWeight;
+
+            // If SurvivalFromWeight(0) already returns ONE_Q128, you can skip the branch.
+            if (deltaRedemptionWeight == 0) {
+                survivalRatio = ONE_Q128;
+            } else {
+                survivalRatio = PositionDecay.SurvivalFromWeight(deltaRedemptionWeight);
+            }
         }
 
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
@@ -1224,10 +1228,14 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             // No new redemptions since last sync
             survivalRatio = ONE_Q128;
         } else {
-            uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
-            if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
-            uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
-            survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+            uint256 deltaRedemptionWeight = _redemptionWeight - account.lastAccruedRedemptionWeight;
+
+            // If SurvivalFromWeight(0) already returns ONE_Q128, you can skip the branch.
+            if (deltaRedemptionWeight == 0) {
+                survivalRatio = ONE_Q128;
+            } else {
+                survivalRatio = PositionDecay.SurvivalFromWeight(deltaRedemptionWeight);
+            }
         }
 
         // User exposure at last sync used to calculate newly earmarked debt pre redemption

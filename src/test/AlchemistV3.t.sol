@@ -4326,16 +4326,10 @@ contract AlchemistV3Test is Test {
         uint256 expectedDebt_Correct = 8_000e18;
         uint256 expectedEarmarked_Correct = 3_000e18;
 
-        // Buggy State (as traced before):
-        // `redeemedTotal` = (5k - 0) + 0 = 5k.
-        // Debt: 10k - 5k = 5k.
-        // Earmarked: 0.
-        uint256 expectedDebt_Buggy = 5_000e18;
-        uint256 expectedEarmarked_Buggy = 0;
 
         // `debt` (5k) != `expectedDebt_Correct` (8k) so it proves the issue
-        assertEq(debt, expectedDebt_Buggy, "");
-        assertEq(earmarked, expectedEarmarked_Buggy, "");
+        assertApproxEqAbs(debt, expectedDebt_Correct, 1);
+        assertApproxEqAbs(earmarked, expectedEarmarked_Correct, 1);
     }
 
     function testRedeemUnderflowOnExcessiveYieldConversion() external { // Setup: Deposit minimal yield shares and mint full debt to create backing for redemption uint256 depositAmount = 1e18; // Minimal deposit uint256 protocolFeeBps = 5000; // 50% protocol fee to amplify totalOut vm.prank(alOwner); alchemist.setProtocolFee(protocolFeeBps); // High fee to ensure totalOut exceeds shares post-conversion
