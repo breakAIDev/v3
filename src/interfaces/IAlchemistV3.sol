@@ -825,6 +825,9 @@ interface IAlchemistV3Errors {
 
     /// @notice An error which is used to indicate that a user is trying to repay on the same block they are minting
     error CannotRepayOnMintBlock();
+
+    error VaultTotalsUnavailable();
+    error DebtConversionOverflow();
 }
 
 /// @title  IAlchemistV3
