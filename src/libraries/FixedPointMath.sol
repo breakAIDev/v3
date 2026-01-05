@@ -249,4 +249,39 @@ library FixedPointMath {
     function truncate(Number memory self) internal pure returns (uint256) {
         return self.n / ONE;
     }
+
+    // Math helpers for Q128.128
+    function mulQ128(uint256 aQ, uint256 bQ) internal pure returns (uint256 z) {
+        if (aQ == 0 || bQ == 0) return 0;
+        uint256 lo;
+        uint256 hi;
+        assembly {
+            // 512-bit product [hi lo] = aQ * bQ
+            let mm := mulmod(aQ, bQ, not(0))
+            lo := mul(aQ, bQ)
+            hi := sub(sub(mm, lo), lt(mm, lo))
+        }
+        // floor((a*b) / 2^128)
+        z = (hi << 128) | (lo >> 128);
+        // if there are non-zero low bits, round up
+        if (lo & ((uint256(1) << 128) - 1) != 0) {
+            unchecked {
+                z += 1;
+            }
+        }
+    }
+
+    function divQ128(uint256 numerQ128, uint256 denomQ128) internal pure returns (uint256) {
+        if (numerQ128 == 0) return 0;
+        unchecked {
+            // Fast path: shifting is safe if numerQ128 < 2^128
+            if (numerQ128 <= type(uint256).max >> 128) {
+                return (numerQ128 << 128) / denomQ128;
+            }
+            // Slow path: numerQ128 can only be 2^128 here.
+            uint256 q = numerQ128 / denomQ128; // 0 or 1 in our domain
+            uint256 r = numerQ128 - q * denomQ128; // remainder
+            return (q << 128) + ((r << 128) / denomQ128);
+        }
+    }
 }

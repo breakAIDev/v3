@@ -11,6 +11,7 @@ import {NFTMetadataGenerator} from "./libraries/NFTMetadataGenerator.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {StakingGraph} from "./libraries/StakingGraph.sol";
 import {TokenUtils} from "./libraries/TokenUtils.sol";
+import {FixedPointMath} from "./libraries/FixedPointMath.sol";
 
 import {Unauthorized, IllegalArgument, IllegalState, InsufficientAllowance} from "./base/Errors.sol";
 import "./base/TransmuterErrors.sol";
@@ -215,9 +216,14 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         // Ratio of total synthetics issued by the alchemist / underlingying value of collateral stored in the alchemist
         // If the system experiences bad debt we use this ratio to scale back the value of yield tokens that are transmuted
         uint256 yieldTokenBalance = TokenUtils.safeBalanceOf(alchemist.myt(), address(this));
+
         // Avoid divide by 0
-        uint256 denominator = alchemist.getTotalUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance) > 0 ? alchemist.getTotalUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance) : 1;
-        uint256 badDebtRatio = alchemist.totalSyntheticsIssued() * 10**TokenUtils.expectDecimals(alchemist.underlyingToken()) / denominator;
+        uint256 backingUnderlying = alchemist.getTotalUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance);
+        uint256 denominator = backingUnderlying > 0 ? backingUnderlying : 1;
+
+        // Round up so badDebtRatio is never understated.
+        // Understating badDebtRatio makes scaledTransmuted slightly too large, which can cause alchemist.redeem(amountToRedeem) to revert due to share rounding.
+        uint256 badDebtRatio = FixedPointMath.mulDivUp(alchemist.totalSyntheticsIssued(), 10 ** TokenUtils.expectDecimals(alchemist.underlyingToken()), denominator);
 
         uint256 scaledTransmuted = amountTransmuted;
 

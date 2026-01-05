@@ -4326,8 +4326,6 @@ contract AlchemistV3Test is Test {
         uint256 expectedDebt_Correct = 8_000e18;
         uint256 expectedEarmarked_Correct = 3_000e18;
 
-
-        // `debt` (5k) != `expectedDebt_Correct` (8k) so it proves the issue
         assertApproxEqAbs(debt, expectedDebt_Correct, 1);
         assertApproxEqAbs(earmarked, expectedEarmarked_Correct, 1);
     }
@@ -4364,17 +4362,25 @@ contract AlchemistV3Test is Test {
         IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialStrategySupply * 120 / 100); // 20% dilution pre-accrual
 
         // Claim redemption: triggers alchemist.redeem(redemptionAmount)
-        // Due to conversion: collRedeemed + feeCollateral > initialSharesDeposited, causing underflow revert
+        // NO revert after fix
         vm.startPrank(address(0xdad));
-        vm.expectRevert(); // Underflow revert in redeem: _mytSharesDeposited -= totalOut where totalOut > _mytSharesDeposited
         transmuterLogic.claimRedemption(1);
         vm.stopPrank();
+        // Claim succeeded, so sync the borrower so CDP reflects the redemption
+        alchemist.poke(tokenId);
 
-        // Post-revert verification: Redemption fails (DoS), funds locked in transmuter, debt remains unreduced
+        // Borrower debt should now be lower (or 0 if fully redeemed)
         (, uint256 postDebt, ) = alchemist.getCDP(tokenId);
-        assertEq(postDebt, initialDebt); // Debt unchanged due to failed redemption
+        assertLt(postDebt, initialDebt);
+
+        // Alchemist should have paid out shares (to transmuter + alchemist protocol fee receiver)
         uint256 postSharesDeposited = alchemist.getTotalDeposited();
-        assertEq(postSharesDeposited, initialSharesDeposited); // Shares unchanged, confirming underflow prevented subtraction
+        assertLt(postSharesDeposited, initialSharesDeposited);
+
+        // Transmuter position should be gone (deleted) and unlocked
+        assertEq(transmuterLogic.totalLocked(), 0);
+        ITransmuter.StakingPosition memory pos = transmuterLogic.getPosition(1);
+        assertEq(pos.maturationBlock, 0); // deleted => maturationBlock == 0
     }
 
     function test_Vulnerability_UnbackedDebtForgiveness() external {
@@ -4522,5 +4528,76 @@ contract AlchemistV3Test is Test {
         // Prove excessive/unfair deduction from userB's collateralBalance due to overstated rawLocked 
         // (Correct: rawLocked=5.55e18 post-burn, but bug uses 9.11e18, leading to ~60% larger deduction) 
         assertLt(collateralAfterB, collateralBeforeB); 
+    }
+
+    function testPOC_BadDebtRation_Precision_loss() external {
+        console.log("\n=== POC: Collateral Weight DOS Attack ===\n");
+
+        
+        uint256 depositAmount = 1000e18; //981920193698630136722
+
+
+        // Step 1:  deposits and borrows maximum debt
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdAttacker = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        
+        // Borrow maximum (collateral / minimumCollateralization)
+        uint256 maxBorrowable = alchemist.getMaxBorrowable(tokenIdAttacker);
+        alchemist.mint(tokenIdAttacker, maxBorrowable, address(0xbeef));
+
+        
+        console.log("Step 1: Initial Position");
+        console.log("  Collateral:", depositAmount);
+        console.log("  Debt borrowed:", maxBorrowable);
+        console.log("  Initial collateralization:", depositAmount * FIXED_POINT_SCALAR / maxBorrowable / 1e16, "%");
+        console.log("  Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
+        vm.stopPrank();
+
+        
+        // Step 2:  creates redemption with ALL borrowed debt
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), maxBorrowable);
+        transmuterLogic.createRedemption(maxBorrowable);
+        console.log("\nStep 2:  creates redemption");
+        vm.stopPrank();
+
+        vm.roll(block.number +1);
+        alchemist.poke(tokenIdAttacker);
+        
+        // Step 3: Advance time to mature redemption (100% maturity) 
+        vm.roll(block.number + 5_256_000);
+        console.log("\nStep 3: Fast forward to full maturity (2 years)");
+        
+        // Step 4: Simulate 12% price crash
+        console.log("\nStep 4: PRICE CRASH - MYT drops 12%");
+        // Increase mocked supply 10x = price drops to 10% of original
+               uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        // increasing yeild token suppy by 1200 bps or 12%  while keeping the unederlying supply unchanged
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1200 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+        
+        (uint256 collateralBefore, uint256 debtBefore, uint256 earmarkedBefore) = alchemist.getCDP(tokenIdAttacker);
+        console.log("\nPosition after price crash:");
+        console.log("  Collateral (shares):", collateralBefore);
+        console.log("  Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
+        console.log("  Debt:", debtBefore);
+        console.log("  Earmarked:", earmarkedBefore);
+        uint256 collateralizationAfterCrash = alchemist.totalValue(tokenIdAttacker) * FIXED_POINT_SCALAR / debtBefore;
+        console.log("  Collateralization ratio:", collateralizationAfterCrash / 1e16, "%");
+        
+ 
+    
+        
+        console.log("\nStep 5:  claims redemption after price crash, bug still valid even when liquidated  ");
+        console.log("  Claiming redemption... This will attempt to claim redemption but fail because is a single user it will overpay when there are multiple users");
+        
+        vm.startPrank(address(0xbeef));
+        transmuterLogic.claimRedemption(1);
+        vm.stopPrank();
+ 
+        // No revert here now that fix is implemented
     }
 }
