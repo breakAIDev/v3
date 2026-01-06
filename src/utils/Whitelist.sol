@@ -44,6 +44,7 @@ contract Whitelist is IWhitelist, Ownable {
 
     /// @inheritdoc IWhitelist
     function disable() external override {
+        require(!disabled);
         _onlyAdmin();
         disabled = true;
         emit WhitelistDisabled();
