@@ -649,6 +649,26 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     ///@inheritdoc IAlchemistV3Actions
     function setTransmuterTokenBalance(uint256 amount) external onlyTransmuter {
+        uint256 last = lastTransmuterTokenBalance;
+
+        // If balance went down, assume cover could have been spent and reduce it conservatively.
+        if (amount < last) {
+            uint256 spent = last - amount;
+            uint256 cover = _pendingCoverShares;
+
+            if (spent >= cover) {
+                _pendingCoverShares = 0;
+            } else {
+                _pendingCoverShares = cover - spent;
+            }
+        }
+
+        // Always keep cover <= actual transmuter balance.
+        if (_pendingCoverShares > amount) {
+            _pendingCoverShares = amount;
+        }
+
+        // Update baseline
         lastTransmuterTokenBalance = amount;
     }
 

