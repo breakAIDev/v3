@@ -218,7 +218,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         uint256 yieldTokenBalance = TokenUtils.safeBalanceOf(alchemist.myt(), address(this));
 
         // Avoid divide by 0
-        uint256 backingUnderlying = alchemist.getTotalUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance);
+        uint256 backingUnderlying = alchemist.getTotalLockedUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance);
         uint256 denominator = backingUnderlying > 0 ? backingUnderlying : 1;
 
         // Round up so badDebtRatio is never understated.
@@ -243,7 +243,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         uint256 balAfterRedeem = TokenUtils.safeBalanceOf(alchemist.myt(), address(this));
         uint256 distributable = totalYield <= balAfterRedeem ? totalYield : balAfterRedeem;
 
-        // Split distributable amount. Round fee down; claimant gets the remainder.
+        // Split distributable amount. Round fee down. claimant gets the remainder.
         uint256 feeYield = distributable * transmutationFee / BPS;
         uint256 claimYield = distributable - feeYield;
 
@@ -253,7 +253,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         }
 
         // Shortfall debt to offset if some amount of MYT cannot be paid to the user
-        // We will return some synthetics instead of burnign them all if this is the case
+        // We will return some synthetics instead of burning them all if this is the case
         uint256 shortfallDebt = scaledTransmuted > debtPaid ? scaledTransmuted - debtPaid : 0;
         uint256 haircutDebt = amountTransmuted > scaledTransmuted ? amountTransmuted - scaledTransmuted : 0;
         uint256 burnAmountDebt = debtPaid + haircutDebt;

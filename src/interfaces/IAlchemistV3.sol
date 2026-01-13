@@ -783,10 +783,15 @@ interface IAlchemistV3State {
     /// @return maxDebt   Maximum debt that can be taken.
     function getMaxBorrowable(uint256 tokenId) external view returns (uint256 maxDebt);
 
+    /// @dev Gets total underlying value deposited in the alchemist.
+    ///
+    /// @return TVL   Total value deposited.
+    function getTotalUnderlyingValue() external view returns (uint256 TVL);
+
     /// @dev Gets total underlying value locked in the alchemist.
     ///
     /// @return TVL   Total value locked.
-    function getTotalUnderlyingValue() external view returns (uint256 TVL);
+    function getTotalLockedUnderlyingValue() external view returns (uint256);
 
     /// @notice Gets the amount of debt tokens `spender` is allowed to mint on behalf of `owner`.
     ///
@@ -829,8 +834,7 @@ interface IAlchemistV3Errors {
     error CannotRepayOnMintBlock();
     error CannotMintOnRepayBlock();
 
-    error VaultTotalsUnavailable();
-    error DebtConversionOverflow();
+    error GlobalCollateralizationTooLow(uint256, uint256);
 }
 
 /// @title  IAlchemistV3

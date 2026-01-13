@@ -358,6 +358,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return _getTotalUnderlyingValue();
     }
 
+    
+    /// @inheritdoc IAlchemistV3State
+    function getTotalLockedUnderlyingValue() external view returns (uint256) {
+        return _getTotalLockedUnderlyingValue();
+    }
+
     /// @inheritdoc IAlchemistV3State
     function totalValue(uint256 tokenId) public view returns (uint256) {
         uint256 totalUnderlying;
@@ -409,11 +415,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         _accounts[tokenId].collateralBalance -= amount;
 
-        uint256 ratioAfter = _badDebtRatioAfterSharesChange(-int256(amount));
-        if (ratioAfter > 1e18) revert();
-
         // Assure that the collateralization invariant is still held.
         _validate(tokenId);
+
+        // Maintain solvency by stopping withdrawals that would put the system into bad debt
+        uint256 required = _requiredLockedShares();
+        uint256 totalAfter = _mytSharesDeposited - amount;
+
+        if (required > totalAfter) {
+            revert GlobalCollateralizationTooLow(required, totalAfter);
+        }
 
         // Transfer the yield tokens to msg.sender
         TokenUtils.safeTransfer(myt, recipient, amount);
@@ -1071,22 +1082,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _sync(uint256 tokenId) internal {
         Account storage account = _accounts[tokenId];
 
-        // Redemption survival now and at last sync
-        // Survival is the amount of earmark that is left after a redemption
-        uint256 survivalRatio;
-        if (_redemptionWeight == account.lastAccruedRedemptionWeight) {
-            // No new redemptions since last sync
-            survivalRatio = ONE_Q128;
-        } else {
-            uint256 deltaRedemptionWeight = _redemptionWeight - account.lastAccruedRedemptionWeight;
-
-            // If SurvivalFromWeight(0) already returns ONE_Q128, you can skip the branch.
-            if (deltaRedemptionWeight == 0) {
-                survivalRatio = ONE_Q128;
-            } else {
-                survivalRatio = PositionDecay.SurvivalFromWeight(deltaRedemptionWeight);
-            }
-        }
+        // Survival during current sync window
+        uint256 survivalRatio = _redemptionSurvivalRatio(account.lastAccruedRedemptionWeight, _redemptionWeight);
 
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
@@ -1249,22 +1246,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             }
         }
 
-        // Redemption survival now and at last sync
-        // Survival is the amount of earmark that is left after a redemption
-        uint256 survivalRatio;
-        if (_redemptionWeight == account.lastAccruedRedemptionWeight) {
-            // No new redemptions since last sync
-            survivalRatio = ONE_Q128;
-        } else {
-            uint256 deltaRedemptionWeight = _redemptionWeight - account.lastAccruedRedemptionWeight;
-
-            // If SurvivalFromWeight(0) already returns ONE_Q128, you can skip the branch.
-            if (deltaRedemptionWeight == 0) {
-                survivalRatio = ONE_Q128;
-            } else {
-                survivalRatio = PositionDecay.SurvivalFromWeight(deltaRedemptionWeight);
-            }
-        }
+        // Survival during current sync window
+        uint256 survivalRatio = _redemptionSurvivalRatio(account.lastAccruedRedemptionWeight, _redemptionWeight);
 
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
@@ -1329,29 +1312,31 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         totalUnderlyingValue = yieldTokenTVLInUnderlying;
     }
 
-    /// @dev Calculate the bad debt ratio with new total shares stored in the alchemist.
-    function _badDebtRatioAfterSharesChange(int256 deltaShares) internal view returns (uint256) {
-        uint256 newShares = deltaShares < 0
-            ? _mytSharesDeposited - uint256(-deltaShares)
-            : _mytSharesDeposited + uint256(deltaShares);
+    /// @dev Calculates the total value locked in the system from collateralization requirements
+    function _getTotalLockedUnderlyingValue() internal view returns (uint256) {
+        uint256 required = _requiredLockedShares();
 
-        uint256 transmuterShares = TokenUtils.safeBalanceOf(myt, transmuter);
+        // Cap by actual shares held in the Alchemist
+        uint256 held = _mytSharesDeposited;
 
-        uint256 denomUnderlying =
-            convertYieldTokensToUnderlying(newShares) +
-            convertYieldTokensToUnderlying(transmuterShares);
+        uint256 lockedShares = required > held ? held : required;
+        return convertYieldTokensToUnderlying(lockedShares);
+    }
 
-        // If there is no backing, only treat this as "bad debt" if synthetics still exist.
-        if (denomUnderlying == 0) {
-            return totalSyntheticsIssued == 0 ? 0 : type(uint256).max;
-        }
+    /// @dev Calculates locked collateral based on share price
+    function _requiredLockedShares() internal view returns (uint256) {
+        if (totalDebt == 0) return 0;
 
-        uint256 denomDebt = normalizeUnderlyingTokensToDebt(denomUnderlying);
-        if (denomDebt == 0) {
-            return totalSyntheticsIssued == 0 ? 0 : type(uint256).max;
-        }
+        uint256 debtShares = convertDebtTokensToYield(totalDebt);
+        return FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
+    }
 
-        return FixedPointMath.mulDivUp(totalSyntheticsIssued, FIXED_POINT_SCALAR, denomDebt);
+    /// @dev Computes redemption survival ratio between two redemption weights.
+    ///      Uses division when survivals are representable, and falls back to delta-weight
+    ///      when SurvivalFromWeight() underflows to 0 for both endpoints.
+    function _redemptionSurvivalRatio(uint256 oldWeight, uint256 newWeight) internal pure returns (uint256) {
+        if (newWeight <= oldWeight) return ONE_Q128;
+        return PositionDecay.SurvivalFromWeight(newWeight - oldWeight);
     }
 
     /// @inheritdoc IAlchemistV3State

@@ -77,7 +77,7 @@ contract MockAlchemist {
         return address(myt);
     }
 
-    function getTotalUnderlyingValue() external view returns (uint256) {
+    function getTotalLockedUnderlyingValue() external view returns (uint256) {
         if (underlyingValue > 0) {
             return underlyingValue;
         } else {
@@ -476,7 +476,7 @@ contract TransmuterTest is Test {
         transmuter.createRedemption(100e18);
         vm.roll(block.number + 5_256_000); // Mature the staking position
         alchemist.setUnderlyingValue(0); // Simulate all users exiting with 0 underlying left
-        emit log_named_uint("total token there", alchemist.getTotalUnderlyingValue());
+        emit log_named_uint("total token there", alchemist.getTotalLockedUnderlyingValue());
         vm.prank(address(0xbeef));
         transmuter.claimRedemption(1);
     }
