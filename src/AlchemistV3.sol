@@ -612,7 +612,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3Actions
-    function redeem(uint256 amount) external onlyTransmuter {
+    function redeem(uint256 amount) external onlyTransmuter returns (uint256 sharesSent) {
         _earmark();
 
         uint256 liveEarmarked = cumulativeEarmarked;
@@ -651,6 +651,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         emit Redemption(amount);
+
+        return collRedeemed;
     }
 
     ///@inheritdoc IAlchemistV3Actions

@@ -49,10 +49,11 @@ contract MockAlchemist {
         return amount * FIXED_POINT_SCALAR / (2 * FIXED_POINT_SCALAR);
     }
 
-    function redeem(uint256 underlying) external {
-        IERC20(myt).transfer(msg.sender, convertUnderlyingTokensToYield(underlying));
+    function redeem(uint256 underlying) external returns (uint256 sharesSent) {
+        sharesSent = convertUnderlyingTokensToYield(underlying);
+        IERC20(myt).transfer(msg.sender, sharesSent);
     }
-
+    
     function totalDebt() external pure returns (uint256) {
         return type(uint256).max;
     }

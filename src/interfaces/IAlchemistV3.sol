@@ -264,7 +264,7 @@ interface IAlchemistV3Actions {
     /// @notice Emits a {Redeem} event.
     ///
     /// @param amount The amount of tokens to redeem.
-    function redeem(uint256 amount) external;
+    function redeem(uint256 amount) external returns (uint256 sharesSent);
 
     /// @notice Reduces syntheticTokensIssued by `amount`.
     ///
