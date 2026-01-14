@@ -18,24 +18,27 @@ library StakingGraph {
     //112/144 bit split for delta and product storage, providing 32 bits for start/expiration
     uint256 private constant DELTA_BITS = 112;
 
-    //Derive related constants from DELTA_BITS
-    uint256 private constant DELTA_MASK = (2**DELTA_BITS)-1;
-    uint256 private constant DELTA_SIGNBIT = 2**(DELTA_BITS-1);
-    uint256 private constant PRODUCT_BITS = 256-DELTA_BITS;
+    // Derive related constants from DELTA_BITS
+    uint256 private constant DELTA_MASK    = (uint256(1) << DELTA_BITS) - 1;
+    uint256 private constant DELTA_SIGNBIT =  uint256(1) << (DELTA_BITS - 1);
 
-    //MIN/MAX constants for DELTA and PRODUCT
-    int256 private constant DELTA_MAX = int256(2**DELTA_BITS - 1)-1;
-    int256 private constant DELTA_MIN = -int256(2**DELTA_BITS - 1);
-    int256 private constant PRODUCT_MAX = int256(2**PRODUCT_BITS - 1)-1;
-    int256 private constant PRODUCT_MIN = -int256(2**PRODUCT_BITS - 1);
-    
-    //Maximum graph size as per bit-split, 32-bit for 112 DELTA_BITS
-    uint256 private constant GRAPH_MAX = 2**(PRODUCT_BITS-DELTA_BITS);
+    uint256 private constant PRODUCT_BITS = 256 - DELTA_BITS;
+    uint256 private constant PRODUCT_SIGNBIT = uint256(1) << (PRODUCT_BITS - 1);
+
+    // Signed ranges that are actually representable in the packed fields
+    int256 private constant DELTA_MAX = int256(DELTA_SIGNBIT - 1);
+    int256 private constant DELTA_MIN = -int256(DELTA_SIGNBIT);
+
+    int256 private constant PRODUCT_MAX = int256(PRODUCT_SIGNBIT - 1);
+    int256 private constant PRODUCT_MIN = -int256(PRODUCT_SIGNBIT);
+
+    // Maximum graph size as per bit-split (32-bit timeline when DELTA_BITS=112)
+    uint256 private constant GRAPH_MAX = uint256(1) << (PRODUCT_BITS - DELTA_BITS);
 
     //Structure containing full graph state
     struct Graph {
-        uint256 size; //current tree size, power-of-two
-        uint256[GRAPH_MAX + 1] g; //Fenwick trees are one-indexed, +1 to avoid array OOB revert
+        uint256 size;
+        mapping(uint256 => uint256) g;
     }
 
     /**
@@ -131,7 +134,7 @@ library StakingGraph {
      *
      * For internal use within the library for index validation
      */
-    function update(uint256[GRAPH_MAX + 1] storage graph, uint256 index, uint256 treeSize, int256 delta, int256 deltaProd) private {
+    function update(mapping(uint256 => uint256) storage graph, uint256 index, uint256 treeSize, int256 delta, int256 deltaProd) private {
         unchecked {
             index += 1;
             while (index <= treeSize) {
@@ -169,7 +172,7 @@ library StakingGraph {
      *
      * For internal use within the library for index validation
      */
-     function query(uint256[GRAPH_MAX + 1] storage graph, uint256 index) private view returns (int256 sum, int256 sumProd) {
+     function query(mapping(uint256 => uint256) storage graph, uint256 index) private view returns (int256 sum, int256 sumProd) {
         unchecked {
             index += 1;
             while (index > 0) {

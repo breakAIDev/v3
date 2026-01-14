@@ -77,6 +77,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
     constructor(ITransmuter.TransmuterInitializationParams memory params) ERC721("Alchemix V3 Transmuter", "TRNSMTR") {
         syntheticToken = params.syntheticToken;
+        require(params.timeToTransmute != 0, "Must set transmutation time");
         timeToTransmute = params.timeToTransmute;
         transmutationFee = params.transmutationFee;
         exitFee = params.exitFee;

@@ -502,4 +502,64 @@ contract TransmuterTest is Test {
         int256 result = graph.queryStake(63, 63);
         assertEq(result, 0);
     }
+
+    function testStakingGraph_Bounds_AcceptsDeltaMax() public {
+        int256 deltaMax = (int256(1) << 111) - 1;
+
+        this._addStakeExternal(deltaMax, 1, 1);
+
+        int256 result = this._queryStakeExternal(1, 2);
+        assertEq(result, deltaMax);
+    }
+
+    function testStakingGraph_Bounds_AcceptsDeltaMin() public {
+        int256 deltaMin = -(int256(1) << 111);
+
+        this._addStakeExternal(deltaMin, 1, 1);
+
+        int256 result = this._queryStakeExternal(1, 2);
+        assertEq(result, deltaMin);
+    }
+
+    function testStakingGraph_Bounds_RevertsAboveDeltaMax() public {
+        // DELTA_BITS = 112 => max signed delta is 2^111 - 1
+        // so 2^111 must revert.
+        int256 aboveMax = (int256(1) << 111);
+
+        vm.expectRevert(); // hits require(amount <= DELTA_MAX && amount >= DELTA_MIN)
+        this._addStakeExternal(aboveMax, 1, 1);
+    }
+
+    function testStakingGraph_Bounds_RevertsBelowDeltaMin() public {
+        // min signed delta is -2^111, so -2^111 - 1 must revert.
+        int256 deltaMin = -(int256(1) << 111);
+        int256 belowMin = deltaMin - 1;
+
+        vm.expectRevert();
+        this._addStakeExternal(belowMin, 1, 1);
+    }
+
+    function testStakingGraph_Bounds_MaxDelta_WithLargeStart_DoesNotRevert() public {
+        int256 deltaMax = (int256(1) << 111) - 1;
+
+        // GRAPH_MAX is intended to be 2^32 for the 112/144 split design.
+        // start must satisfy start < GRAPH_MAX - 1, so pick something comfortably < 2^32 - 1.
+        uint256 start = uint256(type(uint32).max) - 3; // ~ 2^32 - 4
+        uint256 duration = 1;
+
+        // Should NOT revert
+        graph.addStake(deltaMax, start, duration);
+
+        int256 result = graph.queryStake(start, start + duration);
+        assertEq(result, deltaMax, "deltaMax should work at large start without corruption/revert");
+    }
+
+    // External wrappers so vm.expectRevert can catch internal/library reverts.
+    function _addStakeExternal(int256 amount, uint256 start, uint256 duration) external {
+        graph.addStake(amount, start, duration);
+    }
+
+    function _queryStakeExternal(uint256 start, uint256 end) external view returns (int256) {
+        return graph.queryStake(start, end);
+    }
 }
