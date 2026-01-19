@@ -4593,4 +4593,84 @@ contract AlchemistV3Test is Test {
  
         // No revert here now that fix is implemented
     }
+
+    function testRepaymentEarmarkedDebtShouldNotBecomeCover() public {
+        vm.prank(alOwner);
+        alchemist.setProtocolFee(protocolFee);
+
+        // Setup: Create a position with debt
+        uint256 depositAmount = 1000e18;
+        uint256 mintAmount    = 400e18;
+
+        vm.startPrank(externalUser);
+        TokenUtils.safeApprove(address(vault), address(alchemist), depositAmount);
+        alchemist.deposit(depositAmount, externalUser, 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(externalUser, address(alchemistNFT));
+        alchemist.mint(tokenId, mintAmount, externalUser);
+        vm.stopPrank();
+
+        // Create redemption to start the staking graph
+        vm.startPrank(anotherExternalUser);
+        TokenUtils.safeApprove(address(alToken), address(transmuterLogic), 100e18);
+        transmuterLogic.createRedemption(100e18);
+        vm.stopPrank();
+
+        // 40% forward
+        uint256 earmarkPercent = 4000;
+        vm.roll(block.number + (5_256_000 * earmarkPercent / 10_000));
+
+        // First earmark
+        alchemist.poke(tokenId);
+        uint256 earmarked1 = alchemist.cumulativeEarmarked();
+        assertGt(earmarked1, 0, "sanity: first earmark should earmark > 0");
+
+        uint256 transmuterBal1 = TokenUtils.safeBalanceOf(address(vault), address(transmuterLogic));
+
+        // Repay 40 shares worth of MYT
+        uint256 repayAmountMYT = 40e18;
+
+        uint256 totalDebtBefore = alchemist.totalDebt();
+
+        vm.startPrank(externalUser);
+        TokenUtils.safeApprove(address(vault), address(alchemist), repayAmountMYT);
+        uint256 sharesPaid = alchemist.repay(repayAmountMYT, tokenId); // NOTE: repay() returns shares sent to transmuter
+        vm.stopPrank();
+
+        uint256 totalDebtAfter = alchemist.totalDebt();
+        uint256 debtPaid = totalDebtBefore - totalDebtAfter;
+        assertGt(debtPaid, 0, "sanity: repay should reduce totalDebt");
+
+        // Repaying earmarked debt should reduce cumulativeEarmarked by min(debtPaid, earmarked1)
+        uint256 expectedEarmarkPaid = debtPaid > earmarked1 ? earmarked1 : debtPaid;
+        uint256 earmarked2 = alchemist.cumulativeEarmarked();
+        assertEq(earmarked2, earmarked1 - expectedEarmarkPaid, "unexpected cumulativeEarmarked after repay");
+
+        // Sanity: transmuter actually received the shares (this is the later 'cover' source)
+        uint256 transmuterBal2 = TokenUtils.safeBalanceOf(address(vault), address(transmuterLogic));
+        assertEq(transmuterBal2, transmuterBal1 + sharesPaid, "transmuter did not receive expected MYT shares");
+
+        // Move forward another 40%
+        vm.roll(block.number + (5_256_000 * earmarkPercent / 10_000));
+
+        // What should be earmarked in the second window (graph output)
+        uint256 queryGraph = transmuterLogic.queryGraph(alchemist.lastEarmarkBlock() + 1, block.number);
+        assertGt(queryGraph, 0, "sanity: queryGraph should be > 0 for second window");
+
+        // Second earmark
+        uint256 beforeSecond = alchemist.cumulativeEarmarked();
+        uint256 totalDebtBeforeSecond = alchemist.totalDebt();
+
+        alchemist.poke(tokenId);
+
+        uint256 afterSecond = alchemist.cumulativeEarmarked();
+        uint256 delta = afterSecond - beforeSecond;
+
+        // Cap behavior mirrors contract logic: amount cannot exceed liveUnearmarked
+        uint256 liveUnearmarked = totalDebtBeforeSecond - beforeSecond;
+        uint256 expectedDelta = queryGraph > liveUnearmarked ? liveUnearmarked : queryGraph;
+
+        // ✅ EXPECTED CORRECT BEHAVIOR:
+        // repaying earmarked debt already reduced cumulativeEarmarked, so it must NOT reduce future earmarking.
+        assertEq(delta, expectedDelta, "BUG: earmarked repayment was treated as cover");
+    }
 }

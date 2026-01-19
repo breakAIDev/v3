@@ -566,6 +566,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         TokenUtils.safeTransfer(myt, protocolFeeReceiver, creditToYield * protocolFee / BPS);
         _mytSharesDeposited -= creditToYield * protocolFee / BPS;
 
+        // Exclude earmarked-paid portion from being seen as future cover
+        if (earmarkPaidGlobal != 0 && credit != 0) {
+            uint256 nonCoverShares = FixedPointMath.mulDivUp(creditToYield, earmarkPaidGlobal, credit);
+            if (nonCoverShares > creditToYield) nonCoverShares = creditToYield;
+
+            // This makes next _earmark() delta smaller by nonCoverShares.
+            // So only the unearmarked portion can become _pendingCoverShares.
+            lastTransmuterTokenBalance += nonCoverShares;
+        }
+
         emit Repay(msg.sender, amount, recipientTokenId, creditToYield);
 
         return creditToYield;
@@ -830,6 +840,14 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         TokenUtils.safeTransfer(myt, address(transmuter), sharesToRepay);
         _mytSharesDeposited -= sharesToRepay;
+        
+        // Exclude earmarked-paid portion from future cover
+        if (earmarkPaidGlobal != 0 && credit != 0) {
+            uint256 nonCoverShares = FixedPointMath.mulDivUp(sharesToRepay, earmarkPaidGlobal, credit);
+            if (nonCoverShares > sharesToRepay) nonCoverShares = sharesToRepay;
+
+            lastTransmuterTokenBalance += nonCoverShares;
+        }
 
         return sharesToRepay;
     }
