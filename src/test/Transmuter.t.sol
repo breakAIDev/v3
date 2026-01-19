@@ -563,4 +563,47 @@ contract TransmuterTest is Test {
     function _queryStakeExternal(uint256 start, uint256 end) external view returns (int256) {
         return graph.queryStake(start, end);
     }
+
+    function testPokeMatured_FreesDepositCap() public {
+        // cap only allows 100e18 in-flight
+        transmuter.setDepositCap(100e18);
+
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18);
+
+        // should fail before poke (still in-flight, not matured)
+        vm.prank(address(0xbeef));
+        vm.expectRevert(DepositCapReached.selector);
+        transmuter.createRedemption(1e18);
+
+        // mature it
+        vm.roll(block.number + transmuter.timeToTransmute());
+
+        // poke by anyone
+        transmuter.pokeMatured(1);
+
+        // now cap should be freed, deposit succeeds
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(1e18);
+    }
+
+    function testPokeMatured_RevertsIfNotMatured() public {
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18);
+
+        vm.expectRevert(); // PositionNotMatured (custom error)
+        transmuter.pokeMatured(1);
+    }
+
+    function testPokeMatured_RevertsIfAlreadyPoked() public {
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18);
+
+        vm.roll(block.number + transmuter.timeToTransmute());
+
+        transmuter.pokeMatured(1);
+
+        vm.expectRevert(); // PositionAlreadyPoked
+        transmuter.pokeMatured(1);
+    }
 }

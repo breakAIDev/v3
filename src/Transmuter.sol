@@ -47,6 +47,9 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
     uint256 public totalLocked;
 
     /// @inheritdoc ITransmuter
+    uint256 public totalActiveLocked; 
+
+    /// @inheritdoc ITransmuter
     address public admin;
 
     /// @inheritdoc ITransmuter
@@ -63,6 +66,9 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
     /// @dev Map of user positions data.
     mapping(uint256 => StakingPosition) private _positions;
+
+    /// @dev Map of users whos position counts towards deposit cap.
+    mapping(uint256 => bool) private _countsTowardCap;
 
     /// @dev Graph of transmuter positions.
     StakingGraph.Graph private _stakingGraph;
@@ -167,7 +173,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
             revert DepositZeroAmount();
         }
 
-        if (totalLocked + syntheticDepositAmount > depositCap) {
+        if (totalActiveLocked + syntheticDepositAmount > depositCap) {
             revert DepositCapReached();
         }
 
@@ -183,6 +189,9 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         _updateStakingGraph(syntheticDepositAmount.toInt256() * BLOCK_SCALING_FACTOR / timeToTransmute.toInt256(), timeToTransmute);
 
         totalLocked += syntheticDepositAmount;
+
+        totalActiveLocked += syntheticDepositAmount;
+        _countsTowardCap[_nonce] = true;
 
         _mint(msg.sender, _nonce);
 
@@ -279,6 +288,12 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
         alchemist.setTransmuterTokenBalance(TokenUtils.safeBalanceOf(myt, address(this)));
 
+        // If this position still counted toward cap, remove it now.
+        if (_countsTowardCap[id]) {
+            _countsTowardCap[id] = false;
+            totalActiveLocked -= position.amount;
+        }
+
         totalLocked -= position.amount;
 
         emit PositionClaimed(msg.sender, claimYield, syntheticReturned);
@@ -294,6 +309,25 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         if (queried == 0) return 0;
 
         return (queried / BLOCK_SCALING_FACTOR).toUint256() + (queried % BLOCK_SCALING_FACTOR == 0 ? 0 : 1);
+    }
+
+    /// @inheritdoc ITransmuter
+    function pokeMatured(uint256 id) external {
+        StakingPosition storage position = _positions[id];
+
+        if (position.maturationBlock == 0) revert PositionNotFound();
+
+        // must be fully matured
+        if (block.number < position.maturationBlock) {
+            revert PositionNotMatured(id, position.maturationBlock, block.number);
+        }
+
+        if (!_countsTowardCap[id]) revert PositionAlreadyPoked(id);
+
+        _countsTowardCap[id] = false;
+        totalActiveLocked -= position.amount;
+
+        emit PositionPoked(id, position.amount);
     }
 
     /// @dev Updates staking graphs

@@ -783,6 +783,14 @@ interface IAlchemistV3State {
     /// @return maxDebt   Maximum debt that can be taken.
     function getMaxBorrowable(uint256 tokenId) external view returns (uint256 maxDebt);
 
+    
+    /// @notice Returns the maximum MYT shares that could be withdrawn from a position
+    ///
+    /// @param tokenId    tokenId of the account to query.
+    ///
+    /// @return maxWithraw   Maximum yield tokens that can be withdrawn.
+    function getMaxWithdrawable(uint256 tokenId) external view returns (uint256 maxWithraw);
+
     /// @dev Gets total underlying value deposited in the alchemist.
     ///
     /// @return TVL   Total value deposited.

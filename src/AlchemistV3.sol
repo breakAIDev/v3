@@ -348,6 +348,22 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3State
+    function getMaxWithdrawable(uint256 tokenId) external view returns (uint256) {
+        (uint256 debt,, uint256 collateral) = _calculateUnrealizedDebt(tokenId);
+
+        uint256 lockedCollateral = 0;
+        if (debt != 0) {
+            lockedCollateral = (convertDebtTokensToYield(debt) * minimumCollateralization) / FIXED_POINT_SCALAR;
+        }
+
+        uint256 positionFree = collateral > lockedCollateral ? collateral - lockedCollateral : 0;
+        uint256 required = _requiredLockedShares();
+        uint256 globalFree = _mytSharesDeposited > required ? _mytSharesDeposited - required : 0;
+
+        return positionFree < globalFree ? positionFree : globalFree;
+    }
+
+    /// @inheritdoc IAlchemistV3State
     function mintAllowance(uint256 ownerTokenId, address spender) external view returns (uint256) {
         Account storage account = _accounts[ownerTokenId];
         return account.mintAllowances[account.allowancesVersion][spender];

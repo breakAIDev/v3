@@ -57,6 +57,9 @@ interface ITransmuter {
     /// @notice Returns the current time to transmute (in blocks).
     function timeToTransmute() external view returns (uint256 transmutationTime);
 
+    /// @notice Returns the total locked debt tokens in the transmuter adjusted for poked accounts.
+    function totalActiveLocked() external view returns (uint256 totalLocked);
+
     /// @notice Returns the total locked debt tokens in the transmuter.
     function totalLocked() external view returns (uint256 totalLocked);
 
@@ -163,6 +166,11 @@ interface ITransmuter {
     /// @return totalValue  Total value of tokens needed to fulfill redemptions between `startBlock` and `endBlock`.
     function queryGraph(uint256 startBlock, uint256 endBlock) external view returns (uint256 totalValue);
 
+    /// @notice Poke matured account to lower deposit cap
+    ///
+    /// @param id   The position ID.
+    function pokeMatured(uint256 id) external;
+
     /// @notice Emitted when the admin address is updated.
     ///
     /// @param admin The new admin address.
@@ -221,4 +229,6 @@ interface ITransmuter {
     ///
     /// @param recevier  The new receiver.
     event ProtocolFeeReceiverUpdated(address recevier);
+
+    event PositionPoked(uint256 indexed id, uint256 amountRemovedFromCap);
 }
