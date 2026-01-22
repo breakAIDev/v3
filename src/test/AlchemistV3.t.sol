@@ -3204,6 +3204,213 @@ contract AlchemistV3Test is Test {
         );
     }
 
+    function testSelfLiquidate_Healthy_Account_Succeeds() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Setup: deposit and mint at max LTV (account is healthy but at minimum collateralization)
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+
+        (uint256 prevCollateral, uint256 prevDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+        uint256 recipientPreviousBalance = IERC20(address(vault)).balanceOf(address(0xbeef));
+
+        // Account is healthy (at minimum collateralization), selfLiquidate should succeed
+        address recipient = address(0xbeef);
+        uint256 amountLiquidated = alchemist.selfLiquidate(tokenIdFor0xBeef, recipient);
+        vm.stopPrank();
+
+        // Verify account is cleared
+        (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        vm.assertEq(debt, 0, "Debt should be cleared");
+        vm.assertEq(depositedCollateral, 0, "Collateral should be cleared");
+
+        // Verify transmuter received the debt repayment collateral
+        uint256 expectedDebtInYield = alchemist.convertDebtTokensToYield(prevDebt);
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(address(transmuterLogic)),
+            transmuterPreviousBalance + expectedDebtInYield,
+            minimumDepositOrWithdrawalLoss,
+            "Transmuter should receive debt collateral"
+        );
+
+        // Verify recipient received remaining collateral
+        uint256 expectedRemainingCollateral = prevCollateral - expectedDebtInYield;
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(recipient),
+            recipientPreviousBalance + expectedRemainingCollateral,
+            minimumDepositOrWithdrawalLoss,
+            "Recipient should receive remaining collateral"
+        );
+
+        // Verify return value
+        vm.assertApproxEqAbs(amountLiquidated, expectedDebtInYield, minimumDepositOrWithdrawalLoss, "Return value should match debt in yield");
+    }
+
+    function testSelfLiquidate_Revert_If_Unhealthy_Account() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global collateralization stays healthy
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        // Setup: deposit and mint at max LTV
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Manipulate yield token price to make account undercollateralized
+        // Increasing yield token supply by 5.9% while keeping underlying supply unchanged
+        _manipulateYieldTokenPrice(590);
+
+        // Account is now unhealthy, selfLiquidate should revert
+        vm.startPrank(address(0xbeef));
+        vm.expectRevert(IAlchemistV3Errors.AccountNotHealthy.selector);
+        alchemist.selfLiquidate(tokenIdFor0xBeef, address(0xbeef));
+        vm.stopPrank();
+    }
+
+    function testSelfLiquidate_With_Partial_Earmarked_Debt() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Setup: deposit and mint at max LTV
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Setup earmarked debt: create a redemption in transmuter
+        vm.startPrank(anotherExternalUser);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
+        transmuterLogic.createRedemption(mintAmount);
+        vm.stopPrank();
+
+        // Roll forward ~50% of the transmutation period to get partial earmarking
+        vm.roll(block.number + (5_256_000 / 2));
+
+        (uint256 prevCollateral, uint256 prevDebt, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(earmarked > 0 && earmarked < prevDebt, "Should have partial earmarked debt");
+
+        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+        uint256 recipientPreviousBalance = IERC20(address(vault)).balanceOf(address(0xbeef));
+
+        // Self liquidate with partial earmarked debt
+        vm.startPrank(address(0xbeef));
+        uint256 amountLiquidated = alchemist.selfLiquidate(tokenIdFor0xBeef, address(0xbeef));
+        vm.stopPrank();
+
+        // Verify account is fully cleared
+        (uint256 depositedCollateral, uint256 debt, uint256 finalEarmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        vm.assertEq(debt, 0, "Debt should be cleared");
+        vm.assertEq(depositedCollateral, 0, "Collateral should be cleared");
+        vm.assertEq(finalEarmarked, 0, "Earmarked should be cleared");
+
+        // Verify transmuter received all debt repayment collateral (earmarked + remaining)
+        uint256 expectedTotalDebtInYield = alchemist.convertDebtTokensToYield(prevDebt);
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(address(transmuterLogic)),
+            transmuterPreviousBalance + expectedTotalDebtInYield,
+            minimumDepositOrWithdrawalLoss * 2,
+            "Transmuter should receive all debt collateral"
+        );
+
+        // Verify recipient received remaining collateral
+        uint256 expectedRemainingCollateral = prevCollateral - expectedTotalDebtInYield;
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(address(0xbeef)),
+            recipientPreviousBalance + expectedRemainingCollateral,
+            minimumDepositOrWithdrawalLoss * 2,
+            "Recipient should receive remaining collateral"
+        );
+    }
+
+    function testSelfLiquidate_No_Debt() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Setup: deposit only, no minting (no debt)
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+
+        (uint256 prevCollateral, uint256 prevDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(prevDebt == 0, "Debt should be zero");
+        require(prevCollateral > 0, "Collateral should exist");
+
+        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
+        uint256 recipientPreviousBalance = IERC20(address(vault)).balanceOf(address(0xbeef));
+
+        // Self liquidate with no debt - should just return all collateral
+        address recipient = address(0xbeef);
+        uint256 amountLiquidated = alchemist.selfLiquidate(tokenIdFor0xBeef, recipient);
+        vm.stopPrank();
+
+        // Verify account is cleared
+        (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
+        vm.assertEq(debt, 0, "Debt should remain zero");
+        vm.assertEq(depositedCollateral, 0, "Collateral should be cleared");
+
+        // Verify transmuter received nothing (no debt to repay)
+        vm.assertEq(
+            IERC20(address(vault)).balanceOf(address(transmuterLogic)),
+            transmuterPreviousBalance,
+            "Transmuter balance should not change"
+        );
+
+        // Verify recipient received all collateral
+        vm.assertApproxEqAbs(
+            IERC20(address(vault)).balanceOf(recipient),
+            recipientPreviousBalance + prevCollateral,
+            minimumDepositOrWithdrawalLoss,
+            "Recipient should receive all collateral"
+        );
+
+        // Verify return value is 0 (no debt repaid)
+        vm.assertEq(amountLiquidated, 0, "Amount liquidated should be zero when no debt");
+    }
+
+    function testSelfLiquidate_Revert_If_Not_Owner() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Setup: 0xbeef creates an account
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Try to selfLiquidate as a different user (not the owner)
+        vm.startPrank(externalUser);
+        vm.expectRevert(IAlchemistV3Errors.UnauthorizedAccountAccessError.selector);
+        alchemist.selfLiquidate(tokenIdFor0xBeef, externalUser);
+        vm.stopPrank();
+    }
+
     function testBatch_Liquidate_Undercollateralized_Position() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);

@@ -233,6 +233,21 @@ interface IAlchemistV3Actions {
      */
     function liquidate(uint256 accountId) external returns (uint256 yieldAmount, uint256 feeInYield, uint256 feeInUnderlying);
 
+
+    /// @notice Self liquidates the account owned by `accountId`.
+    ///
+    /// @notice `accountId` must be non-zero or this call will revert with an {IllegalArgument} error.
+    /// @notice `recipient` must be non-zero or this call will revert with an {IllegalArgument} error.
+    /// @notice `accountId` must be owned by `msg.sender` or this call will revert with an {Unauthorized} error.
+    /// @notice `accountId` must be healthy (overcollateralized) or this call will revert with an {AccountNotHealthy} error.
+    /// @notice in the event that account is not healthy, the account can only be liquidated using the regular liquidation path. (i.e. liquidate(accountId))
+    ///
+    /// @notice Emits a {SelfLiquidated} event.
+    ///
+    /// @param accountId The tokenId of account to be self liquidated.
+    /// @param recipient The address of the recipient.
+    function selfLiquidate(uint256 accountId, address recipient) external returns (uint256 amountLiquidated);
+
     /// @notice Liquidates `owners` if the debt for account `owner` is greater than the underlying value of their collateral * LTV.
     ///
     /// @notice `owner` must be non-zero or this call will revert with an {IllegalArgument} error.
@@ -571,6 +586,12 @@ interface IAlchemistV3Events {
     /// @param feeInUnderlying            The liquidation fee sent to 'liquidator' in ETH (if needed i.e. if there isn't enough remaining collateral to cover the fee).
     event Liquidated(uint256 indexed accountId, address liquidator, uint256 amount, uint256 feeInYield, uint256 feeInUnderlying);
 
+    /// @notice Emitted when account owned by 'accountId' has been self liquidated.
+    ///
+    /// @param accountId        The token id of the account self liquidated
+    /// @param amountLiquidated The amount liquidated in yield tokens
+    event SelfLiquidated(uint256 indexed accountId, uint256 amountLiquidated);
+
     /// @notice Emitted when account for 'owner' has been liquidated.
     ///
     /// @param accounts       The address of the accounts liquidated
@@ -822,6 +843,9 @@ interface IAlchemistV3Errors {
 
     /// @notice An error which is used to indicate that a user is trying to repay on the same block they are minting
     error CannotRepayOnMintBlock();
+
+    /// @notice An error which is used to indicate that an account is not healthy
+    error AccountNotHealthy();
 }
 
 /// @title  IAlchemistV3

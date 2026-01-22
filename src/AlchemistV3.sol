@@ -631,6 +631,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3Actions
     function poke(uint256 tokenId) external {
         _checkForValidAccountId(tokenId);
+        _poke(tokenId);
+    }
+
+
+    /// @dev Pokes the account owned by `tokenId` to sync the state.
+    /// @param tokenId The tokenId of the account to poke.
+    function _poke(uint256 tokenId) internal {
         _earmark();
         _sync(tokenId);
     }
@@ -714,19 +721,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
      * @return creditToYield The amount of yield tokens repaid.
      */
 
-     function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
+     function _forceRepay(uint256 accountId, uint256 amount, bool skipPoke) internal returns (uint256) {
         if (amount == 0) {
             return 0;
         }
         _checkForValidAccountId(accountId);
+        if (!skipPoke) {
+            _poke(accountId);
+        }
         Account storage account = _accounts[accountId];
-
-        // Query transmuter and earmark global debt
-        _earmark();
-
-        // Sync current user debt before deciding how much is available to be repaid
-        _sync(accountId);
-
         uint256 debt;
 
         // Burning yieldTokens will pay off all types of debt
@@ -759,6 +762,46 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         return creditToYield;
+    }
+
+    /// @inheritdoc IAlchemistV3Actions
+    function selfLiquidate(uint256 accountId, address recipient) public returns (uint256 amountLiquidated) {
+        _checkArgument(recipient != address(0));
+        _checkForValidAccountId(accountId);
+        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(accountId), msg.sender);
+        _poke(accountId);
+        if (!_isAccountHealthy(accountId, false)) {
+            // must use the regular liquidation path i.e. liquidate(accountId)
+           revert AccountNotHealthy();
+        }
+        Account storage account = _accounts[accountId];
+
+        // Repay any earmarked debt 
+        uint256 repaidEarmarkedDebtInYield = _forceRepay(accountId, account.earmarked, true);
+    
+        uint256 debt = account.debt;
+
+        // then clear all remaining debt
+        _subDebt(accountId, debt);
+
+        // sub the collateral used for repaying debt
+        uint256 repaidDebtInYield = _subCollateralBalance(convertDebtTokensToYield(debt), accountId);
+
+        // clear all remaining collateral
+        uint256 remainingCollateral = _subCollateralBalance(account.collateralBalance, accountId);
+
+        if(repaidDebtInYield > 0) {
+            // transfer collateral used for repaying debt to transmuter
+            TokenUtils.safeTransfer(myt, transmuter, repaidDebtInYield);
+        }
+
+        if(remainingCollateral > 0) {
+            // transfer remaining collateral to the caller
+            TokenUtils.safeTransfer(myt, recipient, remainingCollateral);
+        }   
+        // emit event
+        emit SelfLiquidated(accountId, repaidEarmarkedDebtInYield + repaidDebtInYield);
+        return repaidEarmarkedDebtInYield + repaidDebtInYield;
     }
 
     /// @dev Subtracts the earmarked debt by `amount` for the account owned by `accountId`.
@@ -820,7 +863,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // Try to repay earmarked debt if it exists
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
-            repaidAmountInYield = _forceRepay(accountId, account.earmarked);
+            repaidAmountInYield = _forceRepay(accountId, account.earmarked, false);
             (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
             // Final safety check after all deductions
             if (account.collateralBalance == 0 && account.debt > 0) {
