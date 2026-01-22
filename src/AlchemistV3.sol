@@ -396,15 +396,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 lockedCollateral = convertDebtTokensToYield(_accounts[tokenId].debt) * minimumCollateralization / FIXED_POINT_SCALAR;
         _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
-
-        _accounts[tokenId].collateralBalance -= amount;
+        _subCollateralBalance(amount, tokenId);
 
         // Assure that the collateralization invariant is still held.
         _validate(tokenId);
 
         // Transfer the yield tokens to msg.sender
         TokenUtils.safeTransfer(myt, recipient, amount);
-        _mytSharesDeposited -= amount;
 
         emit Withdraw(amount, tokenId, recipient);
 
