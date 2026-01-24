@@ -770,6 +770,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkForValidAccountId(accountId);
         _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(accountId), msg.sender);
         _poke(accountId);
+        _checkState(_accounts[accountId].debt > 0);
         if (!_isAccountHealthy(accountId, false)) {
             // must use the regular liquidation path i.e. liquidate(accountId)
            revert AccountNotHealthy();
@@ -796,7 +797,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         if(remainingCollateral > 0) {
-            // transfer remaining collateral to the caller
+            // transfer remaining collateral to the recipient
             TokenUtils.safeTransfer(myt, recipient, remainingCollateral);
         }   
         // emit event

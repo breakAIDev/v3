@@ -3343,7 +3343,7 @@ contract AlchemistV3Test is Test {
         );
     }
 
-    function testSelfLiquidate_No_Debt() external {
+    function testSelfLiquidate_Revert_If_No_Debt() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
         vm.stopPrank();
@@ -3358,36 +3358,10 @@ contract AlchemistV3Test is Test {
         require(prevDebt == 0, "Debt should be zero");
         require(prevCollateral > 0, "Collateral should exist");
 
-        uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
-        uint256 recipientPreviousBalance = IERC20(address(vault)).balanceOf(address(0xbeef));
-
-        // Self liquidate with no debt - should just return all collateral
-        address recipient = address(0xbeef);
-        uint256 amountLiquidated = alchemist.selfLiquidate(tokenIdFor0xBeef, recipient);
+        // Self liquidate with no debt should revert with IllegalState
+        vm.expectRevert(IllegalState.selector);
+        alchemist.selfLiquidate(tokenIdFor0xBeef, address(0xbeef));
         vm.stopPrank();
-
-        // Verify account is cleared
-        (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
-        vm.assertEq(debt, 0, "Debt should remain zero");
-        vm.assertEq(depositedCollateral, 0, "Collateral should be cleared");
-
-        // Verify transmuter received nothing (no debt to repay)
-        vm.assertEq(
-            IERC20(address(vault)).balanceOf(address(transmuterLogic)),
-            transmuterPreviousBalance,
-            "Transmuter balance should not change"
-        );
-
-        // Verify recipient received all collateral
-        vm.assertApproxEqAbs(
-            IERC20(address(vault)).balanceOf(recipient),
-            recipientPreviousBalance + prevCollateral,
-            minimumDepositOrWithdrawalLoss,
-            "Recipient should receive all collateral"
-        );
-
-        // Verify return value is 0 (no debt repaid)
-        vm.assertEq(amountLiquidated, 0, "Amount liquidated should be zero when no debt");
     }
 
     function testSelfLiquidate_Revert_If_Not_Owner() external {
