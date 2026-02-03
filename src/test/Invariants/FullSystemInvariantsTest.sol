@@ -35,7 +35,7 @@ contract FullSystemInvariantsTest is InvariantBaseTest {
     //         totalDeposited += collateral;
     //     }
 
-    //     assertEq(totalDeposited, alchemist.getTotalDeposited());
+    //     assertApproxEqAbs(totalDeposited, alchemist.getTotalDeposited(), 7);
     // }
 
     // // Underlying value of collateral equals sum of all user accounts
@@ -56,30 +56,29 @@ contract FullSystemInvariantsTest is InvariantBaseTest {
     //         }
     //     }
 
-    //     assertEq(totalDeposited, alchemist.convertYieldTokensToDebt(alchemist.getTotalDeposited()));
+    //     assertApproxEqAbs(totalDeposited, alchemist.convertYieldTokensToDebt(alchemist.getTotalDeposited()), 7);
     // }
 
-    // // Total debt in the system is equal to sum of all user debts
-    // function invariantConsistentDebt() public view {
-    //     address[] memory users = targetSenders();
+    // Total debt in the system is equal to sum of all user debts
+    function invariantConsistentDebt() public {
+        address[] memory users = targetSenders();
 
-    //     uint256 totalDebt;
+        uint256 totalDebt;
 
-    //     for (uint256 i; i < users.length; ++i) {
-    //         // a single position nft would have been minted to address(0xbeef)
-    //         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(users[i], address(alchemistNFT));
-    //         (, uint256 debt,) = alchemist.getCDP(tokenId);
+        for (uint256 i; i < users.length; ++i) {
+            // a single position nft would have been minted to address(0xbeef)
+            uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(users[i], address(alchemistNFT));
+            if (tokenId != 0) {
+                alchemist.poke(tokenId);
 
-    //         totalDebt += debt;
-    //     }
+                (, uint256 debt,) = alchemist.getCDP(tokenId);
 
-    //     assertEq(totalDebt, alchemist.totalDebt());
-    // }
+                totalDebt += debt;
+            }
+        }
 
-    // // Supply of debt tokens must be greater or equal to debt in the system
-    // function invariantDebtTokenSupply() public view {
-    //     assertGe(alToken.totalSupply(), alchemist.totalDebt());
-    // }
+        assertApproxEqAbs(totalDebt, alchemist.totalDebt(), 1e12);
+    }
 
     // // Amount stakes in the transmuter cannot exceed the total debt in the alchemist plus the debt value of yield tokens in the transmuter
     // function invariantTransmuterStakeLessThanTotalDebt() public view {

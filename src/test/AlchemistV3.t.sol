@@ -36,6 +36,7 @@ import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
 import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
 import {MockYieldToken} from "./mocks/MockYieldToken.sol";
+import "../libraries/PositionDecay.sol";
 
 contract AlchemistV3Test is Test {
     // ----- [SETUP] Variables for setting up a minimal CDP -----
@@ -62,6 +63,8 @@ contract AlchemistV3Test is Test {
     string public _symbol;
     uint256 public _flashFee;
     address public alOwner;
+
+    uint256 internal constant ONE_Q128 = uint256(1) << 128;
 
     mapping(address => bool) users;
 
@@ -4669,8 +4672,57 @@ contract AlchemistV3Test is Test {
         uint256 liveUnearmarked = totalDebtBeforeSecond - beforeSecond;
         uint256 expectedDelta = queryGraph > liveUnearmarked ? liveUnearmarked : queryGraph;
 
-        // ✅ EXPECTED CORRECT BEHAVIOR:
         // repaying earmarked debt already reduced cumulativeEarmarked, so it must NOT reduce future earmarking.
         assertEq(delta, expectedDelta, "BUG: earmarked repayment was treated as cover");
+    }
+
+    function test_roundTrip_survival_matches_ratio_rel(uint128 total, uint128 inc) public {
+
+        // Respect the library domain:
+        total = uint128(bound(uint256(total), 1, uint256(type(uint128).max)));
+        inc   = uint128(bound(uint256(inc),   0, uint256(total)));
+
+        // exact ratio in UQ128.128: ((total-inc) << 128) / total
+        uint256 ratio = ((uint256(total) - uint256(inc)) << 128) / uint256(total);
+
+        uint256 w    = PositionDecay.WeightIncrement(uint256(inc), uint256(total)); // UQ136.120
+        uint256 surv = PositionDecay.SurvivalFromWeight(w);                         // UQ128.128
+
+        if (inc == 0) {
+            assertEq(w, 0);
+            assertEq(ratio, ONE_Q128);
+            assertEq(surv, ONE_Q128);
+            return;
+        }
+        if (inc == total) {
+            // ratio = 0; WeightIncrement returns LOG2NEGFRAC_1+1 => SurvivalFromWeight => 0
+            assertEq(ratio, 0);
+            assertEq(surv, 0);
+            return;
+        }
+
+        assertApproxEqRel(surv, ratio, 100);
+    }
+
+    function test_scaleByWeightDelta_matches_direct_ratio_rel(
+        uint128 total,
+        uint128 inc,
+        uint128 value
+    ) public {
+        total = uint128(bound(uint256(total), 1, uint256(type(uint128).max)));
+        inc   = uint128(bound(uint256(inc),   0, uint256(total)));
+        
+        uint256 ratio = ((uint256(total) - uint256(inc)) << 128) / uint256(total); // UQ128.128
+
+        uint256 expected = uint256(value) - ((uint256(value) * ratio) >> 128);
+
+        uint256 w = PositionDecay.WeightIncrement(uint256(inc), uint256(total));
+        uint256 actual = PositionDecay.ScaleByWeightDelta(uint256(value), w);
+
+        if (expected < 1e6) {
+            assertApproxEqAbs(actual, expected, 10); 
+        } else {
+            assertApproxEqRel(actual, expected, 100); 
+        }
     }
 }
