@@ -778,7 +778,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
      * @param amount The amount to repay in debt tokens.
      * @return creditToYield The amount of yield tokens repaid.
      */
-    function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
+
+     function _forceRepay(uint256 accountId, uint256 amount, bool skipPoke) internal returns (uint256) {
         if (amount == 0) {
             return 0;
         }
