@@ -36,42 +36,43 @@ contract InvariantBaseTest is InvariantsTest {
         _targetSender(makeAddr("Sender8"));
     }
 
-    function _deposit(uint256 tokenId, uint256 amount, address onBehalf) internal logCall("deposit") {
-        fakeUnderlyingToken.mint(onBehalf, amount);
+    function _deposit(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "deposit") {
+        deal(mockVaultCollateral, onBehalf, amount);
         vm.startPrank(onBehalf);
-        fakeUnderlyingToken.approve(address(fakeYieldToken), amount);
-        fakeYieldToken.mint(amount, onBehalf);
+        IERC20(mockVaultCollateral).approve(address(vault), amount * 2);
+        vault.mint(amount, onBehalf);
 
         alchemist.deposit(amount, onBehalf, tokenId);
         vm.stopPrank();
     }
 
-    function _borrow(uint256 tokenId, uint256 amount, address onBehalf) internal logCall("borrow") {
+    function _borrow(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "borrow") {
         vm.prank(onBehalf);
         alchemist.mint(tokenId, amount, onBehalf);
     }
 
-    function _withdraw(uint256 tokenId, uint256 amount, address onBehalf) internal logCall("withdraw") {
+    function _withdraw(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "withdraw") {
         vm.prank(onBehalf);
         alchemist.withdraw(amount, onBehalf, tokenId);
     }
 
-    function _repay(uint256 tokenId, uint256 amount, address onBehalf) internal logCall("repay") {
-        fakeUnderlyingToken.mint(onBehalf, amount);
+    function _repay(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "repay") {
+        vm.roll(block.number + 1);
+        deal(mockVaultCollateral, onBehalf, amount * 2);
         vm.startPrank(onBehalf);
-        fakeUnderlyingToken.approve(address(fakeYieldToken), amount);
-        fakeYieldToken.mint(amount, onBehalf);
+        IERC20(mockVaultCollateral).approve(address(vault), amount);
+        vault.mint(amount, onBehalf);
 
         alchemist.repay(amount, tokenId);
         vm.stopPrank();
     }
 
-    function _burn(uint256 tokenId, uint256 amount, address onBehalf) internal logCall("burn") {
+    function _burn(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "burn") {
         vm.prank(onBehalf);
         alchemist.burn(amount, tokenId);
     }
 
-    function _stake(uint256 amount, address onBehalf) internal logCall("stake") {
+    function _stake(uint256 amount, address onBehalf) internal logCall(onBehalf, "stake") {
         vm.startPrank(onBehalf);
         alToken.mint(onBehalf, amount);
         alToken.approve(address(transmuterLogic), amount);
@@ -79,10 +80,10 @@ contract InvariantBaseTest is InvariantsTest {
         vm.stopPrank();
     }
 
-    function _claim(uint256 amount) internal logCall("stake") {
-        vm.roll(block.number + 10);
-        vm.startPrank(address(transmuterLogic));
-        alchemist.redeem(amount);
+    function _claim(uint256 tokenId, address onBehalf) internal logCall(onBehalf, "claim") {
+        vm.roll(block.number + (1000000));
+        vm.startPrank(onBehalf);
+        transmuterLogic.claimRedemption(tokenId);
         vm.stopPrank();
     }
 
@@ -114,10 +115,7 @@ contract InvariantBaseTest is InvariantsTest {
 
         (uint256 collat, uint256 debt,) = alchemist.getCDP(tokenId);
         uint256 debtToCollateral = alchemist.convertDebtTokensToYield(debt);
-        uint256 maxWithdraw = (collat * FIXED_POINT_SCALAR / alchemist.minimumCollateralization()) > debtToCollateral
-            ? (collat * FIXED_POINT_SCALAR / alchemist.minimumCollateralization()) - debtToCollateral
-            : 0;
-
+        uint256 maxWithdraw = alchemist.getMaxWithdrawable(tokenId);
         amount = bound(amount, 0, maxWithdraw);
         if (amount == 0) return;
 
@@ -127,6 +125,9 @@ contract InvariantBaseTest is InvariantsTest {
     function borrowCollateral(uint256 amount, uint256 onBehalfSeed) external {
         address onBehalf = _randomMinter(targetSenders(), onBehalfSeed);
         if (onBehalf == address(0)) return;
+
+        // To ensure no repay or mint on the same block which is not allowed
+        vm.roll(block.number + 1);
 
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(onBehalf, address(alchemistNFT));
 
@@ -140,10 +141,12 @@ contract InvariantBaseTest is InvariantsTest {
         address onBehalf = _randomRepayer(targetSenders(), onBehalfSeed);
         if (onBehalf == address(0)) return;
 
-        amount = bound(amount, 0, MAX_TEST_VALUE);
-        if (amount == 0) return;
-
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(onBehalf, address(alchemistNFT));
+        (, uint256 debt,) = alchemist.getCDP(tokenId);
+
+        uint256 maxRepayShares = alchemist.convertDebtTokensToYield(debt);
+        amount = bound(amount, 0, maxRepayShares);
+        if (amount == 0) return;
 
         _repay(tokenId, amount, onBehalf);
     }
@@ -152,34 +155,39 @@ contract InvariantBaseTest is InvariantsTest {
         address onBehalf = _randomBurner(targetSenders(), onBehalfSeed);
         if (onBehalf == address(0)) return;
 
-        amount = bound(amount, 0, MAX_TEST_VALUE);
-        if (amount == 0) return;
+        // Roll before we check CDP so new earmark does not accumulate and cause illegal state after checking account
+        vm.roll(block.number + 1);
 
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(onBehalf, address(alchemistNFT));
+
+        (, uint256 debt, uint256 earmarked) = alchemist.getCDP(tokenId);
+
+        uint256 burnable = (debt - earmarked) > (alchemist.totalSyntheticsIssued() - transmuterLogic.totalLocked()) 
+        ? (alchemist.totalSyntheticsIssued() - transmuterLogic.totalLocked()) 
+        : (debt - earmarked);
+
+        amount = bound(amount, 0, burnable);
+        if (amount == 0) return;
 
         _burn(tokenId, amount, onBehalf);
     }
 
     function transmuterStake(uint256 amount, uint256 onBehalfSeed) external {
-        address onBehalf = _randomDepositor(targetSenders(), onBehalfSeed);
+        address onBehalf = _randomNonZero(targetSenders(), onBehalfSeed);
         if (onBehalf == address(0)) return;
 
-        // TODO: Fix after burn discussion
-        // uint256 totalLocked = transmuterLogic.totalLocked() > fakeYieldToken.balanceOf(address(transmuterLogic))
-        //     ? transmuterLogic.totalLocked() - fakeYieldToken.balanceOf(address(transmuterLogic))
-        //    : 0;
+        uint256 maxStakeable = alchemist.totalSyntheticsIssued() - transmuterLogic.totalLocked();
 
-        amount = bound(amount, 0, alchemist.totalDebt());
+        amount = bound(amount, 0, maxStakeable);
         if (amount == 0) return;
 
         _stake(amount, onBehalf);
     }
 
-    function transmuterClaim(uint256 amount, uint256 onBehalfSeed) external {
-        // amount = bound(amount, 0, alchemist.totalDebt());
-        // if (amount == 0) return;
-        // // if (amount > )
+    function transmuterClaim(uint256 onBehalfSeed) external {
+        address onBehalf = _randomClaimer(targetSenders(), onBehalfSeed);
+        if (onBehalf == address(0)) return;
 
-        // _claim(amount);
+        _claim(IERC721Enumerable(address(transmuterLogic)).tokenOfOwnerByIndex(onBehalf, 0), onBehalf);
     }
 }

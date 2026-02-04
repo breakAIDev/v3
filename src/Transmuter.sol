@@ -11,6 +11,7 @@ import {NFTMetadataGenerator} from "./libraries/NFTMetadataGenerator.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {StakingGraph} from "./libraries/StakingGraph.sol";
 import {TokenUtils} from "./libraries/TokenUtils.sol";
+import {FixedPointMath} from "./libraries/FixedPointMath.sol";
 
 import {Unauthorized, IllegalArgument, IllegalState, InsufficientAllowance} from "./base/Errors.sol";
 import "./base/TransmuterErrors.sol";
@@ -46,6 +47,9 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
     uint256 public totalLocked;
 
     /// @inheritdoc ITransmuter
+    uint256 public totalActiveLocked; 
+
+    /// @inheritdoc ITransmuter
     address public admin;
 
     /// @inheritdoc ITransmuter
@@ -63,6 +67,9 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
     /// @dev Map of user positions data.
     mapping(uint256 => StakingPosition) private _positions;
 
+    /// @dev Map of users whos position counts towards deposit cap.
+    mapping(uint256 => bool) private _countsTowardCap;
+
     /// @dev Graph of transmuter positions.
     StakingGraph.Graph private _stakingGraph;
 
@@ -76,6 +83,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
     constructor(ITransmuter.TransmuterInitializationParams memory params) ERC721("Alchemix V3 Transmuter", "TRNSMTR") {
         syntheticToken = params.syntheticToken;
+        require(params.timeToTransmute != 0, "Must set transmutation time");
         timeToTransmute = params.timeToTransmute;
         transmutationFee = params.transmutationFee;
         exitFee = params.exitFee;
@@ -165,7 +173,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
             revert DepositZeroAmount();
         }
 
-        if (totalLocked + syntheticDepositAmount > depositCap) {
+        if (totalActiveLocked + syntheticDepositAmount > depositCap) {
             revert DepositCapReached();
         }
 
@@ -181,6 +189,9 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         _updateStakingGraph(syntheticDepositAmount.toInt256() * BLOCK_SCALING_FACTOR / timeToTransmute.toInt256(), timeToTransmute);
 
         totalLocked += syntheticDepositAmount;
+
+        totalActiveLocked += syntheticDepositAmount;
+        _countsTowardCap[_nonce] = true;
 
         _mint(msg.sender, _nonce);
 
@@ -201,8 +212,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
         uint256 transmutationTime = position.maturationBlock - position.startBlock;
         uint256 blocksLeft = position.maturationBlock > block.number ? position.maturationBlock - block.number : 0;
-        uint256 rounded = position.amount * blocksLeft / transmutationTime + (position.amount * blocksLeft % transmutationTime == 0 ? 0 : 1);
-        uint256 amountNottransmuted = blocksLeft > 0 ? rounded : 0;
+        uint256 amountNottransmuted = blocksLeft > 0 ? FixedPointMath.mulDivUp(position.amount, blocksLeft, transmutationTime) : 0;
         uint256 amountTransmuted = position.amount - amountNottransmuted;
 
         if (_requireOwned(id) != msg.sender) {
@@ -214,10 +224,16 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         
         // Ratio of total synthetics issued by the alchemist / underlingying value of collateral stored in the alchemist
         // If the system experiences bad debt we use this ratio to scale back the value of yield tokens that are transmuted
-        uint256 yieldTokenBalance = TokenUtils.safeBalanceOf(alchemist.myt(), address(this));
+        address myt = alchemist.myt();
+        uint256 yieldTokenBalance = TokenUtils.safeBalanceOf(myt, address(this));
+
         // Avoid divide by 0
-        uint256 denominator = alchemist.getTotalUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance) > 0 ? alchemist.getTotalUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance) : 1;
-        uint256 badDebtRatio = alchemist.totalSyntheticsIssued() * 10**TokenUtils.expectDecimals(alchemist.underlyingToken()) / denominator;
+        uint256 backingUnderlying = alchemist.getTotalLockedUnderlyingValue() + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance);
+        uint256 denominator = backingUnderlying > 0 ? backingUnderlying : 1;
+
+        // Round up so badDebtRatio is never understated.
+        // Understating badDebtRatio makes scaledTransmuted slightly too large, which can cause alchemist.redeem(amountToRedeem) to revert due to share rounding.
+        uint256 badDebtRatio = FixedPointMath.mulDivUp(alchemist.totalSyntheticsIssued(), 10 ** TokenUtils.expectDecimals(alchemist.underlyingToken()), denominator);
 
         uint256 scaledTransmuted = amountTransmuted;
 
@@ -229,15 +245,16 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         uint256 debtValue = alchemist.convertYieldTokensToDebt(yieldTokenBalance);
         uint256 amountToRedeem = scaledTransmuted > debtValue ? scaledTransmuted - debtValue : 0;
 
-        if (amountToRedeem > 0) alchemist.redeem(amountToRedeem);
+        uint256 redeemedShares = 0;
+        if (amountToRedeem > 0) {
+            redeemedShares = alchemist.redeem(amountToRedeem);
+        }
 
+        uint256 sharesAvailable = yieldTokenBalance + redeemedShares;
         uint256 totalYield = alchemist.convertDebtTokensToYield(scaledTransmuted);
+        uint256 distributable = totalYield <= sharesAvailable ? totalYield : sharesAvailable;
 
-        // Cap to what we actually hold now (handles redeem() rounding shortfalls).
-        uint256 balAfterRedeem = TokenUtils.safeBalanceOf(alchemist.myt(), address(this));
-        uint256 distributable = totalYield <= balAfterRedeem ? totalYield : balAfterRedeem;
-
-        // Split distributable amount. Round fee down; claimant gets the remainder.
+        // Split distributable amount. Round fee down. claimant gets the remainder.
         uint256 feeYield = distributable * transmutationFee / BPS;
         uint256 claimYield = distributable - feeYield;
 
@@ -247,22 +264,19 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         }
 
         // Shortfall debt to offset if some amount of MYT cannot be paid to the user
-        // We will return some synthetics instead of burnign them all if this is the case
+        // We will return some synthetics instead of burning them all if this is the case
         uint256 shortfallDebt = scaledTransmuted > debtPaid ? scaledTransmuted - debtPaid : 0;
-        uint256 haircutDebt = amountTransmuted > scaledTransmuted ? amountTransmuted - scaledTransmuted : 0;
-        uint256 burnAmountDebt = debtPaid + haircutDebt;
-        if (burnAmountDebt > position.amount) {
-            burnAmountDebt = position.amount;
-        }
 
         uint256 syntheticFee = amountNottransmuted * exitFee / BPS;
         uint256 syntheticReturned = (amountNottransmuted - syntheticFee) + shortfallDebt;
 
+        uint256 burnAmountDebt = position.amount - (syntheticReturned + syntheticFee);
+
         // Remove untransmuted amount from the staking graph
         if (blocksLeft > 0) _updateStakingGraph(-position.amount.toInt256() * BLOCK_SCALING_FACTOR / transmutationTime.toInt256(), blocksLeft);
 
-        TokenUtils.safeTransfer(alchemist.myt(), msg.sender, claimYield);
-        TokenUtils.safeTransfer(alchemist.myt(), protocolFeeReceiver, feeYield);
+        TokenUtils.safeTransfer(myt, msg.sender, claimYield);
+        TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeYield);
 
         TokenUtils.safeTransfer(syntheticToken, msg.sender, syntheticReturned);
         TokenUtils.safeTransfer(syntheticToken, protocolFeeReceiver, syntheticFee);
@@ -272,7 +286,13 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
             alchemist.reduceSyntheticsIssued(burnAmountDebt);
         }
 
-        alchemist.setTransmuterTokenBalance(TokenUtils.safeBalanceOf(alchemist.myt(), address(this)));
+        alchemist.setTransmuterTokenBalance(TokenUtils.safeBalanceOf(myt, address(this)));
+
+        // If this position still counted toward cap, remove it now.
+        if (_countsTowardCap[id]) {
+            _countsTowardCap[id] = false;
+            totalActiveLocked -= position.amount;
+        }
 
         totalLocked -= position.amount;
 
@@ -289,6 +309,25 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         if (queried == 0) return 0;
 
         return (queried / BLOCK_SCALING_FACTOR).toUint256() + (queried % BLOCK_SCALING_FACTOR == 0 ? 0 : 1);
+    }
+
+    /// @inheritdoc ITransmuter
+    function pokeMatured(uint256 id) external {
+        StakingPosition storage position = _positions[id];
+
+        if (position.maturationBlock == 0) revert PositionNotFound();
+
+        // must be fully matured
+        if (block.number < position.maturationBlock) {
+            revert PositionNotMatured(id, position.maturationBlock, block.number);
+        }
+
+        if (!_countsTowardCap[id]) revert PositionAlreadyPoked(id);
+
+        _countsTowardCap[id] = false;
+        totalActiveLocked -= position.amount;
+
+        emit PositionPoked(id, position.amount);
     }
 
     /// @dev Updates staking graphs

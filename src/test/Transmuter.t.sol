@@ -49,10 +49,11 @@ contract MockAlchemist {
         return amount * FIXED_POINT_SCALAR / (2 * FIXED_POINT_SCALAR);
     }
 
-    function redeem(uint256 underlying) external {
-        IERC20(myt).transfer(msg.sender, convertUnderlyingTokensToYield(underlying));
+    function redeem(uint256 underlying) external returns (uint256 sharesSent) {
+        sharesSent = convertUnderlyingTokensToYield(underlying);
+        IERC20(myt).transfer(msg.sender, sharesSent);
     }
-
+    
     function totalDebt() external pure returns (uint256) {
         return type(uint256).max;
     }
@@ -77,7 +78,7 @@ contract MockAlchemist {
         return address(myt);
     }
 
-    function getTotalUnderlyingValue() external view returns (uint256) {
+    function getTotalLockedUnderlyingValue() external view returns (uint256) {
         if (underlyingValue > 0) {
             return underlyingValue;
         } else {
@@ -476,7 +477,7 @@ contract TransmuterTest is Test {
         transmuter.createRedemption(100e18);
         vm.roll(block.number + 5_256_000); // Mature the staking position
         alchemist.setUnderlyingValue(0); // Simulate all users exiting with 0 underlying left
-        emit log_named_uint("total token there", alchemist.getTotalUnderlyingValue());
+        emit log_named_uint("total token there", alchemist.getTotalLockedUnderlyingValue());
         vm.prank(address(0xbeef));
         transmuter.claimRedemption(1);
     }
@@ -501,5 +502,108 @@ contract TransmuterTest is Test {
         // Check that the graph queries only to its max size and does not return negative number
         int256 result = graph.queryStake(63, 63);
         assertEq(result, 0);
+    }
+
+    function testStakingGraph_Bounds_AcceptsDeltaMax() public {
+        int256 deltaMax = (int256(1) << 111) - 1;
+
+        this._addStakeExternal(deltaMax, 1, 1);
+
+        int256 result = this._queryStakeExternal(1, 2);
+        assertEq(result, deltaMax);
+    }
+
+    function testStakingGraph_Bounds_AcceptsDeltaMin() public {
+        int256 deltaMin = -(int256(1) << 111);
+
+        this._addStakeExternal(deltaMin, 1, 1);
+
+        int256 result = this._queryStakeExternal(1, 2);
+        assertEq(result, deltaMin);
+    }
+
+    function testStakingGraph_Bounds_RevertsAboveDeltaMax() public {
+        // DELTA_BITS = 112 => max signed delta is 2^111 - 1
+        // so 2^111 must revert.
+        int256 aboveMax = (int256(1) << 111);
+
+        vm.expectRevert(); // hits require(amount <= DELTA_MAX && amount >= DELTA_MIN)
+        this._addStakeExternal(aboveMax, 1, 1);
+    }
+
+    function testStakingGraph_Bounds_RevertsBelowDeltaMin() public {
+        // min signed delta is -2^111, so -2^111 - 1 must revert.
+        int256 deltaMin = -(int256(1) << 111);
+        int256 belowMin = deltaMin - 1;
+
+        vm.expectRevert();
+        this._addStakeExternal(belowMin, 1, 1);
+    }
+
+    function testStakingGraph_Bounds_MaxDelta_WithLargeStart_DoesNotRevert() public {
+        int256 deltaMax = (int256(1) << 111) - 1;
+
+        // GRAPH_MAX is intended to be 2^32 for the 112/144 split design.
+        // start must satisfy start < GRAPH_MAX - 1, so pick something comfortably < 2^32 - 1.
+        uint256 start = uint256(type(uint32).max) - 3; // ~ 2^32 - 4
+        uint256 duration = 1;
+
+        // Should NOT revert
+        graph.addStake(deltaMax, start, duration);
+
+        int256 result = graph.queryStake(start, start + duration);
+        assertEq(result, deltaMax, "deltaMax should work at large start without corruption/revert");
+    }
+
+    // External wrappers so vm.expectRevert can catch internal/library reverts.
+    function _addStakeExternal(int256 amount, uint256 start, uint256 duration) external {
+        graph.addStake(amount, start, duration);
+    }
+
+    function _queryStakeExternal(uint256 start, uint256 end) external view returns (int256) {
+        return graph.queryStake(start, end);
+    }
+
+    function testPokeMatured_FreesDepositCap() public {
+        // cap only allows 100e18 in-flight
+        transmuter.setDepositCap(100e18);
+
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18);
+
+        // should fail before poke (still in-flight, not matured)
+        vm.prank(address(0xbeef));
+        vm.expectRevert(DepositCapReached.selector);
+        transmuter.createRedemption(1e18);
+
+        // mature it
+        vm.roll(block.number + transmuter.timeToTransmute());
+
+        // poke by anyone
+        transmuter.pokeMatured(1);
+
+        // now cap should be freed, deposit succeeds
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(1e18);
+    }
+
+    function testPokeMatured_RevertsIfNotMatured() public {
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18);
+
+        vm.expectRevert(); // PositionNotMatured (custom error)
+        transmuter.pokeMatured(1);
+    }
+
+    function testPokeMatured_RevertsIfAlreadyPoked() public {
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18);
+
+        vm.roll(block.number + transmuter.timeToTransmute());
+
+        transmuter.pokeMatured(1);
+
+        vm.expectRevert(); // PositionAlreadyPoked
+        transmuter.pokeMatured(1);
     }
 }

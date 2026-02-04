@@ -16,3 +16,7 @@ error PrematureClaim();
 error DepositTooLarge();
 
 error CallerNotOwner();
+
+error PositionNotMatured(uint256 id, uint256 maturationBlock, uint256 currentBlock);
+
+error PositionAlreadyPoked(uint256 id);

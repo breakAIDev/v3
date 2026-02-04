@@ -11,6 +11,9 @@ library FixedPointMath {
     uint256 public constant DECIMALS = 18;
     uint256 public constant ONE = 10 ** DECIMALS;
 
+    error MulDivZeroDenominator();
+    error MulDivOverflow();
+
     /**
      * @notice A struct representing a fixed point decimal.
      */
@@ -137,6 +140,73 @@ library FixedPointMath {
     function div(Number memory self, uint256 value) internal pure returns (Number memory) {
         return Number(self.n / value);
     }
+
+    /// @notice floor(x * y / denominator) with full precision.
+    function mulDiv(uint256 x, uint256 y, uint256 denominator) internal pure returns (uint256 result) {
+        unchecked {
+            if (denominator == 0) revert MulDivZeroDenominator();
+
+            // 512-bit multiply: [prod1 prod0] = x * y
+            uint256 prod0;
+            uint256 prod1;
+            assembly {
+                let mm := mulmod(x, y, not(0))
+                prod0 := mul(x, y)
+                prod1 := sub(sub(mm, prod0), lt(mm, prod0))
+            }
+
+            // Handle non-overflow case (prod1 == 0)
+            if (prod1 == 0) {
+                return prod0 / denominator;
+            }
+
+            // Ensure result fits in 256 bits and denominator != 0
+            if (denominator <= prod1) revert MulDivOverflow();
+
+            // Make division exact by subtracting remainder from [prod1 prod0]
+            uint256 remainder;
+            assembly {
+                remainder := mulmod(x, y, denominator)
+                prod1 := sub(prod1, gt(remainder, prod0))
+                prod0 := sub(prod0, remainder)
+            }
+
+            // Factor powers of two out of denominator
+            uint256 twos = denominator & (~denominator + 1);
+            assembly {
+                denominator := div(denominator, twos)
+                prod0 := div(prod0, twos)
+                // twos = 2^256 / twos
+                twos := add(div(sub(0, twos), twos), 1)
+            }
+
+            // Shift high bits into prod0
+            prod0 |= prod1 * twos;
+
+            // Compute modular inverse of denominator mod 2^256 (denominator is now odd)
+            uint256 inv = (3 * denominator) ^ 2;
+            inv *= 2 - denominator * inv; // 8 bits
+            inv *= 2 - denominator * inv; // 16
+            inv *= 2 - denominator * inv; // 32
+            inv *= 2 - denominator * inv; // 64
+            inv *= 2 - denominator * inv; // 128
+            inv *= 2 - denominator * inv; // 256
+
+            // Multiply by inverse to get the quotient
+            result = prod0 * inv;
+        }
+    }
+
+    /// @notice ceil(x * y / denominator) with full precision.
+    function mulDivUp(uint256 x, uint256 y, uint256 denominator) internal pure returns (uint256 result) {
+        result = mulDiv(x, y, denominator);
+        unchecked {
+            if (mulmod(x, y, denominator) != 0) {
+                if (result == type(uint256).max) revert MulDivOverflow();
+                result += 1;
+            }
+        }
+    }
     
     /**
      * @notice Compares two fixed point decimals.
@@ -178,5 +248,40 @@ library FixedPointMath {
      */
     function truncate(Number memory self) internal pure returns (uint256) {
         return self.n / ONE;
+    }
+
+    // Math helpers for Q128.128
+    function mulQ128(uint256 aQ, uint256 bQ) internal pure returns (uint256 z) {
+        if (aQ == 0 || bQ == 0) return 0;
+        uint256 lo;
+        uint256 hi;
+        assembly {
+            // 512-bit product [hi lo] = aQ * bQ
+            let mm := mulmod(aQ, bQ, not(0))
+            lo := mul(aQ, bQ)
+            hi := sub(sub(mm, lo), lt(mm, lo))
+        }
+        // floor((a*b) / 2^128)
+        z = (hi << 128) | (lo >> 128);
+        // if there are non-zero low bits, round up
+        if (lo & ((uint256(1) << 128) - 1) != 0) {
+            unchecked {
+                z += 1;
+            }
+        }
+    }
+
+    function divQ128(uint256 numerQ128, uint256 denomQ128) internal pure returns (uint256) {
+        if (numerQ128 == 0) return 0;
+        unchecked {
+            // Fast path: shifting is safe if numerQ128 < 2^128
+            if (numerQ128 <= type(uint256).max >> 128) {
+                return (numerQ128 << 128) / denomQ128;
+            }
+            // Slow path: numerQ128 can only be 2^128 here.
+            uint256 q = numerQ128 / denomQ128; // 0 or 1 in our domain
+            uint256 r = numerQ128 - q * denomQ128; // remainder
+            return (q << 128) + ((r << 128) / denomQ128);
+        }
     }
 }

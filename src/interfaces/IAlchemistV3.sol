@@ -50,13 +50,18 @@ struct Account {
     uint256 lastCollateralWeight;
     /// @notice Block of the most recent mint
     uint256 lastMintBlock;
-    /// @notice The un-scaled locked collateral.
-    uint256 rawLocked;
+    /// @notice Block of the most recent repay
+    uint256 lastRepayBlock;
+    /// @notice Last stored survival accumulator
+    uint256 lastSurvivalAccumulator;
+    /// @notice Total debt redeemed at last sync
+    uint256 lastTotalRedeemedDebt;
+    /// @notice Total debt paid out from redemptions at last sync
+    uint256 lastTotalRedeemedSharesOut;
     /// @notice allowances for minting alAssets, per version.
     mapping(uint256 => mapping(address => uint256)) mintAllowances;
     /// @notice id used in the mintAllowances map which is incremented on reset.
     uint256 allowancesVersion;
-    uint256 lastSurvivalAccumulator;
 }
 
 /// @notice Information associated with a redemption.
@@ -274,7 +279,7 @@ interface IAlchemistV3Actions {
     /// @notice Emits a {Redeem} event.
     ///
     /// @param amount The amount of tokens to redeem.
-    function redeem(uint256 amount) external;
+    function redeem(uint256 amount) external returns (uint256 sharesSent);
 
     /// @notice Reduces syntheticTokensIssued by `amount`.
     ///
@@ -799,10 +804,23 @@ interface IAlchemistV3State {
     /// @return maxDebt   Maximum debt that can be taken.
     function getMaxBorrowable(uint256 tokenId) external view returns (uint256 maxDebt);
 
+    
+    /// @notice Returns the maximum MYT shares that could be withdrawn from a position
+    ///
+    /// @param tokenId    tokenId of the account to query.
+    ///
+    /// @return maxWithraw   Maximum yield tokens that can be withdrawn.
+    function getMaxWithdrawable(uint256 tokenId) external view returns (uint256 maxWithraw);
+
+    /// @dev Gets total underlying value deposited in the alchemist.
+    ///
+    /// @return TVL   Total value deposited.
+    function getTotalUnderlyingValue() external view returns (uint256 TVL);
+
     /// @dev Gets total underlying value locked in the alchemist.
     ///
     /// @return TVL   Total value locked.
-    function getTotalUnderlyingValue() external view returns (uint256 TVL);
+    function getTotalLockedUnderlyingValue() external view returns (uint256);
 
     /// @notice Gets the amount of debt tokens `spender` is allowed to mint on behalf of `owner`.
     ///
@@ -843,6 +861,9 @@ interface IAlchemistV3Errors {
 
     /// @notice An error which is used to indicate that a user is trying to repay on the same block they are minting
     error CannotRepayOnMintBlock();
+    error CannotMintOnRepayBlock();
+
+    error GlobalCollateralizationTooLow(uint256, uint256);
 
     /// @notice An error which is used to indicate that an account is not healthy
     error AccountNotHealthy();

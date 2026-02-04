@@ -15,6 +15,7 @@ import {Unauthorized, IllegalArgument, IllegalState, MissingInputData} from "./b
 import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IAlchemistTokenVault} from "./interfaces/IAlchemistTokenVault.sol";
 import {IVaultV2} from "../lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {FixedPointMath} from "./libraries/FixedPointMath.sol";
 
 /// @title  AlchemistV3
 /// @author Alchemix Finance
@@ -113,25 +114,27 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3State
     mapping(address => bool) public guardians;
 
+    /// @dev Total debt redeemed via Transmuter redemptions
+    uint256 private _totalRedeemedDebt;
+
+    /// @dev Total MYT shares paid out for redemptions (collRedeemed + feeCollateral)
+    uint256 private _totalRedeemedSharesOut;
+
     /// @dev Weight of earmarked amount / total unearmarked debt
     uint256 private _earmarkWeight;
 
     /// @dev Weight of redemption amount / total earmarked debt
     uint256 private _redemptionWeight;
 
-    /// @dev Weight of redeemed collateral and fees / value of total collateral
-    uint256 private _collateralWeight;
-
     /// @dev Earmarked scaled by survival
     uint256 private _survivalAccumulator;
-
-    /// @dev Total locked collateral.
-    /// Locked collateral is the collateral that cannot be withdrawn due to LTV constraints
-    uint256 private _totalLocked;
 
     /// @dev Total yield tokens deposited
     /// This is used to differentiate between tokens deposited into a CDP and balance of the contract
     uint256 private _mytSharesDeposited;
+
+    /// @dev MYT shares of transmuter balance increase not yet applied as cover in _earmark()
+    uint256 private _pendingCoverShares;
 
     /// @dev User accounts
     mapping(uint256 => Account) private _accounts;
@@ -291,7 +294,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3AdminActions
     function setMinimumCollateralization(uint256 value) external onlyAdmin {
         _checkArgument(value >= FIXED_POINT_SCALAR);
-        minimumCollateralization = value;
+
+        // cannot exceed global minimum
+        minimumCollateralization = value > globalMinimumCollateralization ? globalMinimumCollateralization : value;
 
         emit MinimumCollateralizationUpdated(value);
     }
@@ -343,6 +348,22 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3State
+    function getMaxWithdrawable(uint256 tokenId) external view returns (uint256) {
+        (uint256 debt,, uint256 collateral) = _calculateUnrealizedDebt(tokenId);
+
+        uint256 lockedCollateral = 0;
+        if (debt != 0) {
+            lockedCollateral = (convertDebtTokensToYield(debt) * minimumCollateralization) / FIXED_POINT_SCALAR;
+        }
+
+        uint256 positionFree = collateral > lockedCollateral ? collateral - lockedCollateral : 0;
+        uint256 required = _requiredLockedShares();
+        uint256 globalFree = _mytSharesDeposited > required ? _mytSharesDeposited - required : 0;
+
+        return positionFree < globalFree ? positionFree : globalFree;
+    }
+
+    /// @inheritdoc IAlchemistV3State
     function mintAllowance(uint256 ownerTokenId, address spender) external view returns (uint256) {
         Account storage account = _accounts[ownerTokenId];
         return account.mintAllowances[account.allowancesVersion][spender];
@@ -351,6 +372,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3State
     function getTotalUnderlyingValue() external view returns (uint256) {
         return _getTotalUnderlyingValue();
+    }
+
+    
+    /// @inheritdoc IAlchemistV3State
+    function getTotalLockedUnderlyingValue() external view returns (uint256) {
+        return _getTotalLockedUnderlyingValue();
     }
 
     /// @inheritdoc IAlchemistV3State
@@ -371,6 +398,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             emit AlchemistV3PositionNFTMinted(recipient, tokenId);
         } else {
             _checkForValidAccountId(tokenId);
+            _earmark();
+            _sync(tokenId);
         }
 
         _accounts[tokenId].collateralBalance += amount;
@@ -396,15 +425,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 lockedCollateral = convertDebtTokensToYield(_accounts[tokenId].debt) * minimumCollateralization / FIXED_POINT_SCALAR;
         _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
-
-        _accounts[tokenId].collateralBalance -= amount;
+        _subCollateralBalance(amount, tokenId);
 
         // Assure that the collateralization invariant is still held.
         _validate(tokenId);
 
         // Transfer the yield tokens to msg.sender
         TokenUtils.safeTransfer(myt, recipient, amount);
-        _mytSharesDeposited -= amount;
 
         emit Withdraw(amount, tokenId, recipient);
 
@@ -483,8 +510,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Update the recipient's debt.
         _subDebt(recipientId, credit);
+        _accounts[recipientId].lastRepayBlock = block.number;
 
         totalSyntheticsIssued -= credit;
+
+        // Assure that the collateralization invariant is still held.
+        _validate(recipientId);
 
         emit Burn(msg.sender, credit, recipientId);
 
@@ -530,6 +561,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         _subDebt(recipientTokenId, credit);
+        account.lastRepayBlock = block.number;
 
         // Transfer the repaid tokens to the transmuter.
         TokenUtils.safeTransferFrom(myt, msg.sender, transmuter, creditToYield);
@@ -580,7 +612,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3Actions
-    function redeem(uint256 amount) external onlyTransmuter {
+    function redeem(uint256 amount) external onlyTransmuter returns (uint256 sharesSent) {
         _earmark();
 
         uint256 liveEarmarked = cumulativeEarmarked;
@@ -589,7 +621,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
        // Apply redemption weights/decay to the full amount that left the earmarked bucket
         if (liveEarmarked != 0 && amount != 0) {
             uint256 survival = ((liveEarmarked - amount) << 128) / liveEarmarked;
-            _survivalAccumulator = _mulQ128(_survivalAccumulator, survival);
+            _survivalAccumulator = FixedPointMath.mulQ128(_survivalAccumulator, survival);
             _redemptionWeight += PositionDecay.WeightIncrement(amount, cumulativeEarmarked);
         }
 
@@ -604,18 +636,23 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // move only the net collateral + fee
         uint256 collRedeemed  = convertDebtTokensToYield(amount);
         uint256 feeCollateral = collRedeemed * protocolFee / BPS;
-        uint256 totalOut      = collRedeemed + feeCollateral;
 
-        // update locked collateral + collateral weight
-        uint256 old = _totalLocked;
-        _totalLocked = totalOut > old ? 0 : old - totalOut;
-        _collateralWeight += PositionDecay.WeightIncrement(totalOut > old ? old : totalOut, old);
+        _totalRedeemedDebt += amount;
+        _totalRedeemedSharesOut += collRedeemed;
 
         TokenUtils.safeTransfer(myt, transmuter, collRedeemed);
-        TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeCollateral);
-        _mytSharesDeposited -= collRedeemed + feeCollateral;
+        _mytSharesDeposited -= collRedeemed;
+
+        // If system is insolvent and there are not enough funds to pay fee to protocol then we skip the fee
+        if (feeCollateral <= _mytSharesDeposited) {
+            TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeCollateral);
+            _mytSharesDeposited -= feeCollateral;
+            _totalRedeemedSharesOut += feeCollateral;
+        }
 
         emit Redemption(amount);
+
+        return collRedeemed;
     }
 
     ///@inheritdoc IAlchemistV3Actions
@@ -625,6 +662,26 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     ///@inheritdoc IAlchemistV3Actions
     function setTransmuterTokenBalance(uint256 amount) external onlyTransmuter {
+        uint256 last = lastTransmuterTokenBalance;
+
+        // If balance went down, assume cover could have been spent and reduce it conservatively.
+        if (amount < last) {
+            uint256 spent = last - amount;
+            uint256 cover = _pendingCoverShares;
+
+            if (spent >= cover) {
+                _pendingCoverShares = 0;
+            } else {
+                _pendingCoverShares = cover - spent;
+            }
+        }
+
+        // Always keep cover <= actual transmuter balance.
+        if (_pendingCoverShares > amount) {
+            _pendingCoverShares = amount;
+        }
+
+        // Update baseline
         lastTransmuterTokenBalance = amount;
     }
 
@@ -699,6 +756,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param amount    The amount to mint.
     /// @param recipient The recipient of the minted debt tokens.
     function _mint(uint256 tokenId, uint256 amount, address recipient) internal {
+        if (block.number == _accounts[tokenId].lastRepayBlock) revert CannotMintOnRepayBlock();
         _addDebt(tokenId, amount);
 
         totalSyntheticsIssued += amount;
@@ -720,8 +778,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
      * @param amount The amount to repay in debt tokens.
      * @return creditToYield The amount of yield tokens repaid.
      */
-
-     function _forceRepay(uint256 accountId, uint256 amount, bool skipPoke) internal returns (uint256) {
+    function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
         if (amount == 0) {
             return 0;
         }
@@ -993,10 +1050,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 toLock = convertDebtTokensToYield(amount) * minimumCollateralization / FIXED_POINT_SCALAR;
         uint256 lockedCollateral = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
 
-        if (account.collateralBalance - lockedCollateral < toLock) revert Undercollateralized();
+        if (account.collateralBalance < lockedCollateral + toLock) revert Undercollateralized();
 
-        account.rawLocked = lockedCollateral + toLock;
-        _totalLocked += toLock;
         account.debt += amount;
         totalDebt += amount;
     }
@@ -1008,18 +1063,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _subDebt(uint256 tokenId, uint256 amount) internal {
         Account storage account = _accounts[tokenId];
 
-        // Update collateral variables
-        uint256 toFree = convertDebtTokensToYield(amount) * minimumCollateralization / FIXED_POINT_SCALAR;
-        uint256 lockedCollateral = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
-
-        // For cases when someone above minimum LTV gets liquidated.
-        if (toFree > _totalLocked) {
-            toFree = _totalLocked;
-        }
         account.debt -= amount;
         totalDebt -= amount;
-        _totalLocked -= toFree;
-        account.rawLocked = lockedCollateral - toFree;
 
         // Clamp to avoid underflow due to rounding later at a later time
         if (cumulativeEarmarked > totalDebt) {
@@ -1132,29 +1177,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _sync(uint256 tokenId) internal {
         Account storage account = _accounts[tokenId];
 
-        // Calculate the locked before performing majority of sync so that we can properly decrement account collateral
-        uint256 requiredLockPre = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
-
-        if (_collateralWeight - account.lastCollateralWeight != 0) {
-            uint256 base = requiredLockPre <= account.collateralBalance ? requiredLockPre : account.collateralBalance;
-
-            if (base != 0) {
-                uint256 collateralRemoval = PositionDecay.ScaleByWeightDelta(base, _collateralWeight - account.lastCollateralWeight);
-
-                if (collateralRemoval > account.collateralBalance) {
-                    collateralRemoval = account.collateralBalance;
-                }
-                account.collateralBalance -= collateralRemoval;
-            }
-        }
- 
-        // Redemption survival now and at last sync
-        // Survival is the amount of earmark that is left after a redemption
-        uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
-        if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
-        uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
         // Survival during current sync window
-        uint256 survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+        uint256 survivalRatio = _redemptionSurvivalRatio(account.lastAccruedRedemptionWeight, _redemptionWeight);
+
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
         uint256 earmarkRaw = PositionDecay.ScaleByWeightDelta(userExposure, _earmarkWeight - account.lastAccruedEarmarkWeight);
@@ -1164,31 +1189,43 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 earmarkSurvival = PositionDecay.SurvivalFromWeight(account.lastAccruedEarmarkWeight);
         if (earmarkSurvival == 0) earmarkSurvival = ONE_Q128;
         // Decay snapshot by what was redeemed from last sync until now
-        uint256 decayedRedeemed = _mulQ128(account.lastSurvivalAccumulator, survivalRatio);
+        uint256 decayedRedeemed = FixedPointMath.mulQ128(account.lastSurvivalAccumulator, survivalRatio);
         // What was added to the survival accumulator in the current sync window
         uint256 survivalDiff = _survivalAccumulator > decayedRedeemed ? _survivalAccumulator - decayedRedeemed : 0;
 
         // Unwind accumulated earmarked at last sync
-        uint256 unredeemedRatio = _divQ128(survivalDiff, earmarkSurvival);
+        uint256 unredeemedRatio = FixedPointMath.divQ128(survivalDiff, earmarkSurvival);
         // Portion of earmark that remains after applying the redemption. Scaled back from 128.128
-        uint256 earmarkedUnredeemed = _mulQ128(userExposure, unredeemedRatio);
+        uint256 earmarkedUnredeemed = FixedPointMath.mulQ128(userExposure, unredeemedRatio);
         if (earmarkedUnredeemed > earmarkRaw) earmarkedUnredeemed = earmarkRaw;
 
         // Old earmarks that survived redemptions in the current sync window
-        uint256 exposureSurvival = _mulQ128(account.earmarked, survivalRatio);
+        uint256 exposureSurvival = FixedPointMath.mulQ128(account.earmarked, survivalRatio);
         // What was redeemed from the newly earmark between last sync and now
         uint256 redeemedFromEarmarked = earmarkRaw - earmarkedUnredeemed;
         // Total overall earmarked to adjust user debt
         uint256 redeemedTotal = (account.earmarked - exposureSurvival) + redeemedFromEarmarked;
 
+        // Calculate collateral to remove
+        uint256 globalDebtDelta = _totalRedeemedDebt - account.lastTotalRedeemedDebt;
+        if (globalDebtDelta != 0 && redeemedTotal != 0) {
+            uint256 globalSharesDelta = _totalRedeemedSharesOut - account.lastTotalRedeemedSharesOut;
+
+            // sharesToDebit = redeemedTotal * globalSharesDelta / globalDebtDelta
+            uint256 sharesToDebit = FixedPointMath.mulDivUp(redeemedTotal, globalSharesDelta, globalDebtDelta);
+
+            if (sharesToDebit > account.collateralBalance) sharesToDebit = account.collateralBalance;
+            account.collateralBalance -= sharesToDebit;
+        }
+
+        // advance checkpoints even if redeemedTotal==0
+        account.lastTotalRedeemedDebt = _totalRedeemedDebt;
+        account.lastTotalRedeemedSharesOut = _totalRedeemedSharesOut;
+
         account.earmarked = exposureSurvival + earmarkedUnredeemed;
         account.debt = account.debt >= redeemedTotal ? account.debt - redeemedTotal : 0;
 
-        // Update locked collateral to the true new locked amount
-        account.rawLocked = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
-
         // Advance account checkpoint
-        account.lastCollateralWeight = _collateralWeight;
         account.lastAccruedEarmarkWeight = _earmarkWeight;
         account.lastAccruedRedemptionWeight = _redemptionWeight;
 
@@ -1201,17 +1238,29 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (totalDebt == 0) return;
         if (block.number <= lastEarmarkBlock) return;
 
-        // Yield the transmuter accumulated since last earmark (cover)
-        uint256 transmuterCurrentBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
-        uint256 transmuterDifference = transmuterCurrentBalance > lastTransmuterTokenBalance ? transmuterCurrentBalance - lastTransmuterTokenBalance : 0;
+        // update pending cover shares based on transmuter balance delta
+        uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
 
+        if (transmuterBalance > lastTransmuterTokenBalance) {
+            _pendingCoverShares += (transmuterBalance - lastTransmuterTokenBalance);
+        }
+
+        lastTransmuterTokenBalance = transmuterBalance;
+
+        // how to earmark this window
         uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
 
-        // Proper saturating subtract in DEBT units
-        uint256 coverInDebt = convertYieldTokensToDebt(transmuterDifference);
-        amount = amount > coverInDebt ? amount - coverInDebt : 0;
+        // apply cover 
+        uint256 coverInDebt = convertYieldTokensToDebt(_pendingCoverShares);
+        if (amount != 0 && coverInDebt != 0) {
+            uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
+            amount -= usedDebt;
 
-        lastTransmuterTokenBalance = transmuterCurrentBalance;
+            // consume the corresponding portion of pending cover shares so we can't reuse it
+            uint256 sharesUsed = FixedPointMath.mulDivUp(_pendingCoverShares, usedDebt, coverInDebt);
+            if (sharesUsed > _pendingCoverShares) sharesUsed = _pendingCoverShares;
+            _pendingCoverShares -= sharesUsed;
+        }
 
         uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
         if (amount > liveUnearmarked) amount = liveUnearmarked;
@@ -1222,9 +1271,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             if (previousSurvival == 0) previousSurvival = ONE_Q128;
 
             // Fraction of unearmarked debt being earmarked now in UQ128.128
-            uint256 earmarkedFraction = _divQ128(amount, liveUnearmarked);
+            uint256 earmarkedFraction = FixedPointMath.divQ128(amount, liveUnearmarked);
 
-            _survivalAccumulator += _mulQ128(previousSurvival, earmarkedFraction);
+            _survivalAccumulator += FixedPointMath.mulQ128(previousSurvival, earmarkedFraction);
             _earmarkWeight += PositionDecay.WeightIncrement(amount, liveUnearmarked);
 
             cumulativeEarmarked += amount;
@@ -1253,14 +1302,28 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Simulate earmark since lastEarmarkBlock
         if (block.number > lastEarmarkBlock) {
-            uint256 transmuterCurrentBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
-            uint256 transmuterDifference = transmuterCurrentBalance > lastTransmuterTokenBalance ? transmuterCurrentBalance - lastTransmuterTokenBalance : 0;
+            // update pending cover shares based on transmuter balance delta
+            uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
+            uint256 pendingCoverSharesCopy = _pendingCoverShares;
 
+            if (transmuterBalance > lastTransmuterTokenBalance) {
+                pendingCoverSharesCopy += (transmuterBalance - lastTransmuterTokenBalance);
+            }
+
+            // how much to earmark this window
             uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
 
-            // cover in DEBT units
-            uint256 coverInDebt = convertYieldTokensToDebt(transmuterDifference);
-            amount = amount > coverInDebt ? amount - coverInDebt : 0;
+            // apply cover 
+            uint256 coverInDebt = convertYieldTokensToDebt(pendingCoverSharesCopy);
+            if (amount != 0 && coverInDebt != 0) {
+                uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
+                amount -= usedDebt;
+
+                // consume the corresponding portion of pending cover shares so we can't reuse it
+                uint256 sharesUsed = FixedPointMath.mulDivUp(pendingCoverSharesCopy, usedDebt, coverInDebt);
+                if (sharesUsed > pendingCoverSharesCopy) sharesUsed = pendingCoverSharesCopy;
+                pendingCoverSharesCopy -= sharesUsed;
+            }
 
             uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
             if (amount > liveUnearmarked) amount = liveUnearmarked;
@@ -1271,32 +1334,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
                 if (previousSurvival == 0) previousSurvival = ONE_Q128;
 
                 // Fraction of unearmarked debt being earmarked now in UQ128.128
-                uint256 earmarkedFraction = _divQ128(amount, liveUnearmarked);
+                uint256 earmarkedFraction = FixedPointMath.divQ128(amount, liveUnearmarked);
 
-                survivalAccumulatorCopy += _mulQ128(previousSurvival, earmarkedFraction);
+                survivalAccumulatorCopy += FixedPointMath.mulQ128(previousSurvival, earmarkedFraction);
                 earmarkWeightCopy += PositionDecay.WeightIncrement(amount, liveUnearmarked);
             }
         }
 
-        // Calculate collateral to remove from fees and redemptions
-        uint256 collateralBalanceCopy = account.collateralBalance;
-        uint256 requiredLockPre = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
-        if (_collateralWeight - account.lastCollateralWeight != 0) {
-            uint256 base = requiredLockPre <= collateralBalanceCopy ? requiredLockPre : collateralBalanceCopy;
-            if (base != 0) {
-                uint256 removal = PositionDecay.ScaleByWeightDelta(base, _collateralWeight - account.lastCollateralWeight);
-                if (removal > collateralBalanceCopy) removal = collateralBalanceCopy;
-                collateralBalanceCopy -= removal;
-            }
-        }
-
-        // Redemption survival now and at last sync
-        // Survival is the amount of earmark that is left after a redemption
-        uint256 redemptionSurvivalOld = PositionDecay.SurvivalFromWeight(account.lastAccruedRedemptionWeight);
-        if (redemptionSurvivalOld == 0) redemptionSurvivalOld = ONE_Q128;
-        uint256 redemptionSurvivalNew  = PositionDecay.SurvivalFromWeight(_redemptionWeight);
-        // Survival during the current sync window
-        uint256 survivalRatio = _divQ128(redemptionSurvivalNew, redemptionSurvivalOld);
+        // Survival during current sync window
+        uint256 survivalRatio = _redemptionSurvivalRatio(account.lastAccruedRedemptionWeight, _redemptionWeight);
 
         // User exposure at last sync used to calculate newly earmarked debt pre redemption
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
@@ -1307,18 +1353,18 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 earmarkSurvival = PositionDecay.SurvivalFromWeight(account.lastAccruedEarmarkWeight);
         if (earmarkSurvival == 0) earmarkSurvival = ONE_Q128;
         // Decay snapshot by what was redeemed from last sync until now
-        uint256 decayedRedeemed = _mulQ128(account.lastSurvivalAccumulator, survivalRatio);
+        uint256 decayedRedeemed = FixedPointMath.mulQ128(account.lastSurvivalAccumulator, survivalRatio);
         // What was added to the survival accumulator in the current sync window
         uint256 survivalDiff  = survivalAccumulatorCopy > decayedRedeemed ? survivalAccumulatorCopy - decayedRedeemed : 0;
 
         // Unwind accumulated earmarked at last sync
-        uint256 unredeemedRatio = _divQ128(survivalDiff, earmarkSurvival);
+        uint256 unredeemedRatio = FixedPointMath.divQ128(survivalDiff, earmarkSurvival);
         // Portion of earmark that remains after applying the redemption. Scaled back from 128.128
-        uint256 earmarkedUnredeemed = _mulQ128(userExposure, unredeemedRatio);
+        uint256 earmarkedUnredeemed = FixedPointMath.mulQ128(userExposure, unredeemedRatio);
         if (earmarkedUnredeemed > earmarkRaw) earmarkedUnredeemed = earmarkRaw;
 
         // Old earmarks that survived redemptions in the current sync window
-        uint256 exposureSurvival = _mulQ128(account.earmarked, survivalRatio);
+        uint256 exposureSurvival = FixedPointMath.mulQ128(account.earmarked, survivalRatio);
 
         // What was redeemed from the newly earmark between last sync and now
         uint256 redeemedFromEarmarked = earmarkRaw - earmarkedUnredeemed;
@@ -1326,7 +1372,18 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 redeemedTotal = (account.earmarked - exposureSurvival) + redeemedFromEarmarked;
 
         uint256 newDebt = account.debt >= redeemedTotal ? account.debt - redeemedTotal : 0;
+        uint256 redeemedTotalSim = account.debt > newDebt ? account.debt - newDebt : 0;
         uint256 newEarmarked = exposureSurvival + earmarkedUnredeemed;
+
+        // Calculate collateral to remove from fees and redemptions
+        uint256 collateralBalanceCopy = account.collateralBalance;
+        uint256 globalDebtDelta = _totalRedeemedDebt - account.lastTotalRedeemedDebt;
+        if (globalDebtDelta != 0 && redeemedTotalSim != 0) {
+            uint256 globalSharesDelta = _totalRedeemedSharesOut - account.lastTotalRedeemedSharesOut;
+            uint256 sharesToDebit = FixedPointMath.mulDivUp(redeemedTotalSim, globalSharesDelta, globalDebtDelta);
+            if (sharesToDebit > collateralBalanceCopy) sharesToDebit = collateralBalanceCopy;
+            collateralBalanceCopy -= sharesToDebit;
+        }
 
         return (newDebt, newEarmarked, collateralBalanceCopy);
     }
@@ -1339,7 +1396,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 debt = _accounts[tokenId].debt;
         if (debt == 0) return false;
 
-        uint256 collateralization = totalValue(tokenId) * FIXED_POINT_SCALAR / debt;
+        uint256 collateralization = FixedPointMath.mulDivUp(totalValue(tokenId), FIXED_POINT_SCALAR, debt);
         return collateralization < minimumCollateralization;
     }
 
@@ -1348,6 +1405,33 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _getTotalUnderlyingValue() internal view returns (uint256 totalUnderlyingValue) {
         uint256 yieldTokenTVLInUnderlying = convertYieldTokensToUnderlying(_mytSharesDeposited);
         totalUnderlyingValue = yieldTokenTVLInUnderlying;
+    }
+
+    /// @dev Calculates the total value locked in the system from collateralization requirements
+    function _getTotalLockedUnderlyingValue() internal view returns (uint256) {
+        uint256 required = _requiredLockedShares();
+
+        // Cap by actual shares held in the Alchemist
+        uint256 held = _mytSharesDeposited;
+
+        uint256 lockedShares = required > held ? held : required;
+        return convertYieldTokensToUnderlying(lockedShares);
+    }
+
+    /// @dev Calculates locked collateral based on share price
+    function _requiredLockedShares() internal view returns (uint256) {
+        if (totalDebt == 0) return 0;
+
+        uint256 debtShares = convertDebtTokensToYield(totalDebt);
+        return FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
+    }
+
+    /// @dev Computes redemption survival ratio between two redemption weights.
+    ///      Uses division when survivals are representable, and falls back to delta-weight
+    ///      when SurvivalFromWeight() underflows to 0 for both endpoints.
+    function _redemptionSurvivalRatio(uint256 oldWeight, uint256 newWeight) internal pure returns (uint256) {
+        if (newWeight <= oldWeight) return ONE_Q128;
+        return PositionDecay.SurvivalFromWeight(newWeight - oldWeight);
     }
 
     /// @inheritdoc IAlchemistV3State
@@ -1395,40 +1479,5 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // gross collateral seize = net + fee
         grossCollateralToSeize = debtToBurn + fee;
-    }
-
-    // Math helpers for Q128.128
-    function _mulQ128(uint256 aQ, uint256 bQ) private pure returns (uint256 z) {
-        if (aQ == 0 || bQ == 0) return 0;
-        uint256 lo;
-        uint256 hi;
-        assembly {
-            // 512-bit product [hi lo] = aQ * bQ
-            let mm := mulmod(aQ, bQ, not(0))
-            lo := mul(aQ, bQ)
-            hi := sub(sub(mm, lo), lt(mm, lo))
-        }
-        // floor((a*b) / 2^128)
-        z = (hi << 128) | (lo >> 128);
-        // if there are non-zero low bits, round up
-        if (lo & ((uint256(1) << 128) - 1) != 0) {
-            unchecked {
-                z += 1;
-            }
-        }
-    }
-
-    function _divQ128(uint256 numerQ128, uint256 denomQ128) private pure returns (uint256) {
-        if (numerQ128 == 0) return 0;
-        unchecked {
-            // Fast path: shifting is safe if numerQ128 < 2^128
-            if (numerQ128 <= type(uint256).max >> 128) {
-                return (numerQ128 << 128) / denomQ128;
-            }
-            // Slow path: numerQ128 can only be 2^128 here.
-            uint256 q = numerQ128 / denomQ128; // 0 or 1 in our domain
-            uint256 r = numerQ128 - q * denomQ128; // remainder
-            return (q << 128) + ((r << 128) / denomQ128);
-        }
     }
 }
