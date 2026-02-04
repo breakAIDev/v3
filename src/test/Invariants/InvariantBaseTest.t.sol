@@ -115,10 +115,7 @@ contract InvariantBaseTest is InvariantsTest {
 
         (uint256 collat, uint256 debt,) = alchemist.getCDP(tokenId);
         uint256 debtToCollateral = alchemist.convertDebtTokensToYield(debt);
-        uint256 maxWithdraw = (collat * FIXED_POINT_SCALAR / alchemist.minimumCollateralization()) > debtToCollateral
-            ? (collat * FIXED_POINT_SCALAR / alchemist.minimumCollateralization()) - debtToCollateral
-            : 0;
-
+        uint256 maxWithdraw = alchemist.getMaxWithdrawable(tokenId);
         amount = bound(amount, 0, maxWithdraw);
         if (amount == 0) return;
 
@@ -145,11 +142,11 @@ contract InvariantBaseTest is InvariantsTest {
         if (onBehalf == address(0)) return;
 
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(onBehalf, address(alchemistNFT));
-        (, uint256 debt, uint256 earmarked) = alchemist.getCDP(tokenId);
+        (, uint256 debt,) = alchemist.getCDP(tokenId);
 
-        amount = bound(amount, 0, debt);
+        uint256 maxRepayShares = alchemist.convertDebtTokensToYield(debt);
+        amount = bound(amount, 0, maxRepayShares);
         if (amount == 0) return;
-
 
         _repay(tokenId, amount, onBehalf);
     }

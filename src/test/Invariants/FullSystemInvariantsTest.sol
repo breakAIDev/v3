@@ -5,16 +5,6 @@ import "./InvariantBaseTest.t.sol";
 
 contract FullSystemInvariantsTest is InvariantBaseTest {
     function setUp() public virtual override {
-        selectors.push(this.depositCollateral.selector);
-        selectors.push(this.withdrawCollateral.selector);
-        selectors.push(this.borrowCollateral.selector);
-        selectors.push(this.repayDebt.selector);
-        selectors.push(this.repayDebtViaBurn.selector);
-        selectors.push(this.transmuterStake.selector);
-        selectors.push(this.transmuterClaim.selector);
-
-        selectors.push(this.mine.selector);
-
         super.setUp();
     }
 
@@ -60,19 +50,14 @@ contract FullSystemInvariantsTest is InvariantBaseTest {
     // }
 
     // Total debt in the system is equal to sum of all user debts
-    function invariantConsistentDebt() public {
+    function invariantConsistentDebt() public view {
         address[] memory users = targetSenders();
-
         uint256 totalDebt;
 
         for (uint256 i; i < users.length; ++i) {
-            // a single position nft would have been minted to address(0xbeef)
             uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(users[i], address(alchemistNFT));
             if (tokenId != 0) {
-                alchemist.poke(tokenId);
-
                 (, uint256 debt,) = alchemist.getCDP(tokenId);
-
                 totalDebt += debt;
             }
         }

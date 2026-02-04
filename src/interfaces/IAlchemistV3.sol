@@ -601,10 +601,10 @@ interface IAlchemistV3Events {
     /// @notice Emitted when `amount` of debt is repaid from `accountId`.
     ///
     /// @param accountId       The tokenId of the account.
-    /// @param amount          The amount of debt repaid.
     /// @param feeReciever     The address of the fee receiver.
-    /// @param fee             The amount of fee paid.
-    event RepaymentFee(uint256 indexed accountId, uint256 amount, address feeReciever, uint256 fee);
+    /// @param feeInYield      The amount of fee paid in yield tokens.
+    /// @param feeInUnderlying The amount of fee paid in underlying tokens.
+    event RepaymentFee(uint256 indexed accountId, address feeReciever, uint256 feeInYield, uint256 feeInUnderlying);
 }
 
 interface IAlchemistV3Immutables {

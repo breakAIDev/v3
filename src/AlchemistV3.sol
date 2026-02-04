@@ -382,10 +382,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3State
     function totalValue(uint256 tokenId) public view returns (uint256) {
-        uint256 totalUnderlying;
-        (,, uint256 collateral) = _calculateUnrealizedDebt(tokenId);
-        if (collateral > 0) totalUnderlying += convertYieldTokensToUnderlying(collateral);
-        return normalizeUnderlyingTokensToDebt(totalUnderlying);
+        return _totalCollateralValue(tokenId, true);
     }
 
     /// @inheritdoc IAlchemistV3Actions
@@ -428,23 +425,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 lockedCollateral = convertDebtTokensToYield(_accounts[tokenId].debt) * minimumCollateralization / FIXED_POINT_SCALAR;
         _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
-
-        _accounts[tokenId].collateralBalance -= amount;
+        _subCollateralBalance(amount, tokenId);
 
         // Assure that the collateralization invariant is still held.
         _validate(tokenId);
 
-        // Maintain solvency by stopping withdrawals that would put the system into bad debt
-        uint256 required = _requiredLockedShares();
-        uint256 totalAfter = _mytSharesDeposited - amount;
-
-        if (required > totalAfter) {
-            revert GlobalCollateralizationTooLow(required, totalAfter);
-        }
-
         // Transfer the yield tokens to msg.sender
         TokenUtils.safeTransfer(myt, recipient, amount);
-        _mytSharesDeposited -= amount;
 
         emit Withdraw(amount, tokenId, recipient);
 
@@ -557,21 +544,20 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 yieldToDebt = convertYieldTokensToDebt(amount);
         uint256 credit = yieldToDebt > debt ? debt : yieldToDebt;
-        uint256 creditToYield = convertDebtTokensToYield(credit);
 
         // Repay debt from earmarked amount of debt first
-        uint256 earmarkToRemove = credit > account.earmarked ? account.earmarked : credit;
-        account.earmarked -= earmarkToRemove;
+        _subEarmarkedDebt(credit, recipientTokenId);
 
-        uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
-        cumulativeEarmarked -= earmarkPaidGlobal;
+
+        uint256 creditToYield = convertDebtTokensToYield(credit);
+
 
         // Debt is subject to protocol fee similar to redemptions
         uint256 feeAmount = creditToYield * protocolFee / BPS;
         if (feeAmount > account.collateralBalance) {
             revert("Not enough collateral to pay for debt fee");
         } else {
-            account.collateralBalance -= creditToYield * protocolFee / BPS;
+            _subCollateralBalance(feeAmount, recipientTokenId);
         }
 
         _subDebt(recipientTokenId, credit);
@@ -580,18 +566,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // Transfer the repaid tokens to the transmuter.
         TokenUtils.safeTransferFrom(myt, msg.sender, transmuter, creditToYield);
         TokenUtils.safeTransfer(myt, protocolFeeReceiver, creditToYield * protocolFee / BPS);
-        _mytSharesDeposited -= creditToYield * protocolFee / BPS;
-
-        // Exclude earmarked-paid portion from being seen as future cover
-        if (earmarkPaidGlobal != 0 && credit != 0) {
-            uint256 nonCoverShares = FixedPointMath.mulDivUp(creditToYield, earmarkPaidGlobal, credit);
-            if (nonCoverShares > creditToYield) nonCoverShares = creditToYield;
-
-            // This makes next _earmark() delta smaller by nonCoverShares.
-            // So only the unearmarked portion can become _pendingCoverShares.
-            lastTransmuterTokenBalance += nonCoverShares;
-        }
-
         emit Repay(msg.sender, amount, recipientTokenId, creditToYield);
 
         return creditToYield;
@@ -798,74 +772,82 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
      * @return creditToYield The amount of yield tokens repaid.
      */
     function _forceRepay(uint256 accountId, uint256 amount) internal returns (uint256) {
-        if (amount == 0) return 0;
-
+        if (amount == 0) {
+            return 0;
+        }
         _checkForValidAccountId(accountId);
         Account storage account = _accounts[accountId];
 
+        // Query transmuter and earmark global debt
         _earmark();
+
+        // Sync current user debt before deciding how much is available to be repaid
         _sync(accountId);
 
-        uint256 debt = account.debt;
-        _checkState(debt > 0);
+        uint256 debt;
 
-        // Requested debt repayment 
-        uint256 requestedCredit = amount > debt ? debt : amount;
+        // Burning yieldTokens will pay off all types of debt
+        _checkState((debt = account.debt) > 0);
 
-        // Shares needed to repay requestedCredit
-        uint256 sharesToRepay = convertDebtTokensToYield(requestedCredit);
+        // earmarked debt always <= account debt
+        uint256 credit = amount > debt ? debt : amount;
+        // Repay debt from earmarked amount of debt first
+        _subEarmarkedDebt(credit, accountId);
+        _subDebt(accountId, credit);
+        
+        // sub the amount in yield tokens from collateral balance
+        uint256 creditToYield = _subCollateralBalance(convertDebtTokensToYield(credit), accountId);
 
-        // Clamp by available collateral before burning debt
-        if (sharesToRepay > account.collateralBalance) {
-            sharesToRepay = account.collateralBalance;
+        // sub the protocol fee from collateral balance. collateral balance may be zero 
+        uint256 targetProtocolFee = creditToYield * protocolFee / BPS;
+        uint256 protocolFeeTotal = _subCollateralBalance(targetProtocolFee, accountId);
+
+
+        emit ForceRepay(accountId, amount, creditToYield, protocolFeeTotal);
+
+        if (creditToYield > 0) {
+            // Transfer the repaid tokens from the account to the transmuter.
+            TokenUtils.safeTransfer(myt, address(transmuter), creditToYield);
         }
 
-        if (sharesToRepay == 0) return 0;
+        if (protocolFeeTotal > 0) {
+            // Transfer the protocol fee to the protocol fee receiver
+            TokenUtils.safeTransfer(myt, protocolFeeReceiver, protocolFeeTotal);
+        }
 
-        // Derive the actual debt repaid from the shares we will send
-        // This prevents burning more debt than we actually repay
-        uint256 credit = convertYieldTokensToDebt(sharesToRepay);
+        return creditToYield;
+    }
 
-        // never burn more than requestedCredit
-        if (credit > requestedCredit) credit = requestedCredit;
+    /// @dev Subtracts the earmarked debt by `amount` for the account owned by `accountId`.
+    /// @param amountInDebtTokens The amount of debt tokens to subtract from the earmarked debt.
+    /// @param accountId The tokenId of the account to subtract the earmarked debt from.
+    /// @return The amount of debt tokens subtracted from the earmarked debt.
+    function _subEarmarkedDebt(uint256 amountInDebtTokens, uint256 accountId) internal returns (uint256) {
+        Account storage account = _accounts[accountId];
+        uint256 earmarkedDebt = account.earmarked;
+        uint256 debt = account.debt;
 
-        if (credit == 0) return 0;
-
-        // update earmarks before calling _subDebt to avoid double-reductions
-        // caused by _subDebt() clamping cumulativeEarmarked to totalDebt
-        uint256 earmarkToRemove = credit > account.earmarked ? account.earmarked : credit;
+        uint256 credit = amountInDebtTokens > debt ? debt : amountInDebtTokens;
+        uint256 earmarkToRemove = credit > earmarkedDebt ? earmarkedDebt : credit;
         account.earmarked -= earmarkToRemove;
 
         uint256 earmarkPaidGlobal = cumulativeEarmarked > earmarkToRemove ? earmarkToRemove : cumulativeEarmarked;
-        cumulativeEarmarked -= earmarkPaidGlobal;
+        cumulativeEarmarked -= earmarkPaidGlobal;     
+        return earmarkToRemove;
+    }
 
-        _subDebt(accountId, credit);
 
-        // Pull principal shares from the account and send to transmuter
-        account.collateralBalance -= sharesToRepay;
-
-        uint256 protocolFeeTotal = (sharesToRepay * protocolFee) / BPS;
-
-        emit ForceRepay(accountId, amount, sharesToRepay, protocolFeeTotal);
-
-        if (account.collateralBalance >= protocolFeeTotal && protocolFeeTotal > 0) {
-            account.collateralBalance -= protocolFeeTotal;
-            TokenUtils.safeTransfer(myt, protocolFeeReceiver, protocolFeeTotal);
-            _mytSharesDeposited -= protocolFeeTotal;
-        }
-
-        TokenUtils.safeTransfer(myt, address(transmuter), sharesToRepay);
-        _mytSharesDeposited -= sharesToRepay;
-        
-        // Exclude earmarked-paid portion from future cover
-        if (earmarkPaidGlobal != 0 && credit != 0) {
-            uint256 nonCoverShares = FixedPointMath.mulDivUp(sharesToRepay, earmarkPaidGlobal, credit);
-            if (nonCoverShares > sharesToRepay) nonCoverShares = sharesToRepay;
-
-            lastTransmuterTokenBalance += nonCoverShares;
-        }
-
-        return sharesToRepay;
+    /// @dev Subtracts the collateral balance by `amount` for the account owned by `accountId`.
+    /// @param amountInYieldTokens The amount of yield tokens to subtract from the collateral balance.
+    /// @param accountId The tokenId of the account to subtract the collateral balance from.
+    /// @return The amount of yield tokens subtracted from the collateral balance.
+    function _subCollateralBalance(uint256 amountInYieldTokens, uint256 accountId) internal returns (uint256) {
+        Account storage account = _accounts[accountId];
+        uint256 collateralBalance = account.collateralBalance;
+        uint256 amountToRemove = amountInYieldTokens > collateralBalance ? collateralBalance : amountInYieldTokens;
+        account.collateralBalance -= amountToRemove;
+        _mytSharesDeposited -= amountToRemove;
+        return amountToRemove;
     }
 
     /// @dev Fetches and applies the liquidation amount to account `tokenId` if the account collateral ratio touches `collateralizationLowerBound`.
@@ -883,22 +865,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         Account storage account = _accounts[accountId];
 
-        // Early return if no debt exists
-        if (account.debt == 0) {
-            return (0, 0, 0);
-        }
-
         // In the rare scenario where 1 share is worth 0 underlying asset
         if (IVaultV2(myt).convertToAssets(1e18) == 0) {
             return (0, 0, 0);
         }
-
-        // Calculate initial collateralization ratio
-        uint256 collateralInUnderlying = totalValue(accountId);
-        uint256 collateralizationRatio = collateralInUnderlying * FIXED_POINT_SCALAR / account.debt;
-
-        // If account is healthy, nothing to liquidate
-        if (collateralizationRatio > collateralizationLowerBound) {
+       
+        if (_isAccountHealthy(accountId, false)) {
             return (0, 0, 0);
         }
 
@@ -906,93 +878,121 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked);
-        }
-        // If debt is fully cleared, return with only the repaid amount, no liquidation needed, caller receives repayment fee
-        if (account.debt == 0) {
-            feeInYield = _resolveRepaymentFee(accountId, repaidAmountInYield);
-            TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
-            return (repaidAmountInYield, feeInYield, 0);
+            (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
+            // Final safety check after all deductions
+            if (account.collateralBalance == 0 && account.debt > 0) {
+                _subDebt(accountId, account.debt);
+            }
         }
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
-        collateralInUnderlying = totalValue(accountId);
-        collateralizationRatio = collateralInUnderlying * FIXED_POINT_SCALAR / account.debt;
+        if (_isAccountHealthy(accountId, false)) {
 
-        if (collateralizationRatio <= collateralizationLowerBound) {
-            // Do actual liquidation
-            return _doLiquidation(accountId, collateralInUnderlying, repaidAmountInYield);
+            if (feeInYield > 0) {
+                TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
+            } else if (feeInUnderlying > 0) {
+                feeInUnderlying = _payWithFeeVault(feeInUnderlying);
+            }
+            emit RepaymentFee(accountId, msg.sender, feeInYield, feeInUnderlying);
+            return (repaidAmountInYield, feeInYield, feeInUnderlying);
         } else {
-            // Since only a repayment happened, send repayment fee to caller
-            feeInYield = _resolveRepaymentFee(accountId, repaidAmountInYield);
-            TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
-            return (repaidAmountInYield, feeInYield, 0);
+            // Do actual liquidation
+            return _doLiquidation(accountId);
         }
+
+    }
+
+    /// @dev Pays the fee to msg.sender in underlying tokens using the fee vault
+    /// @param amountInUnderlying The amount of underlying tokens to pay
+    /// @return actual amount paid based on the vault balance
+    function _payWithFeeVault(uint256 amountInUnderlying) internal returns (uint256) {
+        uint256 vaultBalance = IFeeVault(alchemistFeeVault).totalDeposits();
+        if (vaultBalance > 0) {
+            uint256 adjustedAmount = amountInUnderlying > vaultBalance ? vaultBalance : amountInUnderlying;
+            IFeeVault(alchemistFeeVault).withdraw(msg.sender, adjustedAmount);
+            return adjustedAmount;
+        }
+        return 0;
+    }
+
+    /// @dev Checks if the account is healthy
+    /// @dev An account is healthy if its collateralization ratio is greater than the collateralization lower bound
+    /// @dev An account is healthy if it has no debt
+    /// @param accountId The tokenId of the account to check.
+    /// @param refresh Whether to refresh the account's collateral value by including unrealized debt.
+    /// @return true if the account is healthy, false otherwise.
+    function _isAccountHealthy(uint256 accountId, bool refresh) internal view returns (bool) {
+        if (_accounts[accountId].debt == 0) {
+            return true;
+        }
+        uint256 collateralInUnderlying = _totalCollateralValue(accountId, refresh);
+        uint256 collateralizationRatio = collateralInUnderlying * FIXED_POINT_SCALAR / _accounts[accountId].debt;
+        return collateralizationRatio > collateralizationLowerBound;
     }
 
     /// @dev Performs the actual liquidation logic when collateralization is below the lower bound
     /// @param accountId The tokenId of the account to to liquidate.
-    /// @param collateralInUnderlying The total collateral value of the account in debt tokens.
-    /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
     /// @return amountLiquidated The amount of yield tokens liquidated.
     /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
     /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
-    function _doLiquidation(uint256 accountId, uint256 collateralInUnderlying, uint256 repaidAmountInYield)
+    function _doLiquidation(uint256 accountId)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying)
     {
         Account storage account = _accounts[accountId];
-
+        uint256 debt = account.debt;
+        uint256 collateralInUnderlying = totalValue(accountId);
         (uint256 liquidationAmount, uint256 debtToBurn, uint256 baseFee, uint256 outsourcedFee) = calculateLiquidation(
             collateralInUnderlying,
-            account.debt,
+            debt,
             minimumCollateralization,
             normalizeUnderlyingTokensToDebt(_getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / totalDebt,
             globalMinimumCollateralization,
             liquidatorFee
         );
 
-        amountLiquidated = convertDebtTokensToYield(liquidationAmount);
-        feeInYield = convertDebtTokensToYield(baseFee);
+        if(liquidationAmount == 0) {
+            return (0, 0, 0);
+        }
 
+        amountLiquidated = convertDebtTokensToYield(liquidationAmount) > account.collateralBalance ? account.collateralBalance : convertDebtTokensToYield(liquidationAmount);
+        feeInYield = convertDebtTokensToYield(baseFee);
         // update user balance and debt
-        account.collateralBalance = account.collateralBalance > amountLiquidated ? account.collateralBalance - amountLiquidated : 0;
+        _subCollateralBalance(amountLiquidated, accountId);
         _subDebt(accountId, debtToBurn);
 
         // send liquidation amount - fee to transmuter
         TokenUtils.safeTransfer(myt, transmuter, amountLiquidated - feeInYield);
 
         // send base fee to liquidator if available
-        if (feeInYield > 0 && account.collateralBalance >= feeInYield) {
+        if (feeInYield > 0) {
             TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
+        } else if (normalizeDebtTokensToUnderlying(outsourcedFee) > 0) {
+            // Handle outsourced fee from vault
+            feeInUnderlying = _payWithFeeVault(normalizeDebtTokensToUnderlying(outsourcedFee));
         }
-
-        // Handle outsourced fee from vault
-        if (outsourcedFee > 0) {
-            uint256 vaultBalance = IFeeVault(alchemistFeeVault).totalDeposits();
-            if (vaultBalance > 0) {
-                uint256 feeBonus = normalizeDebtTokensToUnderlying(outsourcedFee);
-                feeInUnderlying = vaultBalance > feeBonus ? feeBonus : vaultBalance;
-                IFeeVault(alchemistFeeVault).withdraw(msg.sender, feeInUnderlying);
-            }
-        }
-
-        _mytSharesDeposited -= amountLiquidated;
-
-        emit Liquidated(accountId, msg.sender, amountLiquidated + repaidAmountInYield, feeInYield, feeInUnderlying);
-        return (amountLiquidated + repaidAmountInYield, feeInYield, feeInUnderlying);
+        emit Liquidated(accountId, msg.sender, amountLiquidated, feeInYield, feeInUnderlying);
+        return (amountLiquidated, feeInYield, feeInUnderlying);
     }
 
     /// @dev Handles repayment fee calculation and account deduction
     /// @param accountId The tokenId of the account to force a repayment on.
     /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
-    /// @return fee The fee in yield tokens to be sent to the liquidator.
-    function _resolveRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal returns (uint256 fee) {
+    /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
+    /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
+    function _resolveRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal returns (uint256 feeInYield, uint256 feeInUnderlying) {
         Account storage account = _accounts[accountId];
-        // calculate repayment fee and deduct from account
-        fee = repaidAmountInYield * repaymentFee / BPS;
-        account.collateralBalance -= fee > account.collateralBalance ? account.collateralBalance : fee;
-        emit RepaymentFee(accountId, repaidAmountInYield, msg.sender, fee);
-        return fee;
+        uint256 debtInYield = convertDebtTokensToYield(account.debt);
+        uint256 surplus = account.collateralBalance > debtInYield ? account.collateralBalance - debtInYield : 0;
+        if(surplus > 0){
+            // calculate repayment fee and deduct from account
+            uint256 targetFee = surplus * repaymentFee / BPS;
+            feeInYield = _subCollateralBalance(targetFee, accountId);
+        } else {
+            uint256 targetFee = repaidAmountInYield * repaymentFee / BPS;
+            feeInUnderlying = convertYieldTokensToUnderlying(targetFee);
+        }
+        return (feeInYield, feeInUnderlying);
     }
 
     /// @dev Increases the debt by `amount` for the account owned by `tokenId`.
@@ -1112,6 +1112,21 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param tokenId The id of the account owner.
     function _validate(uint256 tokenId) internal view {
         if (_isUnderCollateralized(tokenId)) revert Undercollateralized();
+    }
+
+
+    /// @dev Calculate the total collateral value of the account in debt tokens.
+    /// @param tokenId The id of the account owner.
+    /// @return The total collateral value of the account in debt tokens.
+    function _totalCollateralValue(uint256 tokenId, bool includeUnrealizedDebt) internal view returns (uint256) {
+        uint256 totalUnderlying;
+        if (includeUnrealizedDebt) {
+            (,, uint256 collateral) = _calculateUnrealizedDebt(tokenId);
+            if (collateral > 0) totalUnderlying += convertYieldTokensToUnderlying(collateral);
+        } else {
+            totalUnderlying = convertYieldTokensToUnderlying(_accounts[tokenId].collateralBalance);
+        }
+        return normalizeUnderlyingTokensToDebt(totalUnderlying);
     }
 
     /// @dev Update the user's earmarked and redeemed debt amounts.
@@ -1337,7 +1352,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 debt = _accounts[tokenId].debt;
         if (debt == 0) return false;
 
-        uint256 collateralization = totalValue(tokenId) * FIXED_POINT_SCALAR / debt;
+        uint256 collateralization = FixedPointMath.mulDivUp(totalValue(tokenId), FIXED_POINT_SCALAR, debt);
         return collateralization < minimumCollateralization;
     }
 
@@ -1403,13 +1418,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // collateral remaining for margin‐restore calc
         uint256 adjCollat = collateral - fee;
-
         // compute m*d  (both plain units)
         uint256 md = (targetCollateralization * debt) / FIXED_POINT_SCALAR;
-
         // if md <= adjCollat, nothing to liquidate
         if (md <= adjCollat) {
-            return (0, 0, fee, 0);
+            return (0, 0, 0, 0);
         }
 
         // numerator = md - adjCollat
@@ -1418,7 +1431,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // denom = m - 1  =>  (targetCollateralization - FIXED_POINT_SCALAR)/FIXED_POINT_SCALAR
         uint256 denom = targetCollateralization - FIXED_POINT_SCALAR;
 
-        // debtToBurn = (num * FIXED_POINT_SCALAR) / denom
         debtToBurn = (num * FIXED_POINT_SCALAR) / denom;
 
         // gross collateral seize = net + fee

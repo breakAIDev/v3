@@ -342,19 +342,15 @@ contract InvariantsTest is Test {
 
         for (uint256 i; i < users.length; ++i) {
             address user = users[i];
-
             uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(alchemistNFT));
 
-            uint256 borrowable;
+            uint256 withdrawable = 0;
+            if (tokenId != 0) withdrawable = alchemist.getMaxWithdrawable(tokenId);
 
-            if (tokenId != 0) borrowable = alchemist.getMaxBorrowable(tokenId);
-
-            if (borrowable > 0) {
-                candidates[i] = user;
-            }
+            if (withdrawable > 0) candidates[i] = user;
         }
 
-        return _randomNonZero(users, seed);
+        return _randomNonZero(candidates, seed);
     }
 
     function _randomMinter(address[] memory users, uint256 seed) internal view returns (address) {
