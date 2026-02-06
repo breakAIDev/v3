@@ -15,6 +15,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {AlchemistV3Position} from "../AlchemistV3Position.sol";
+import {AlchemistV3PositionRenderer} from "../AlchemistV3PositionRenderer.sol";
 import {Transmuter} from "../Transmuter.sol";
 import {AlchemicTokenV3} from "../test/mocks/AlchemicTokenV3.sol";
 import {Whitelist} from "../utils/Whitelist.sol";
@@ -138,7 +139,8 @@ contract MYTStrategyTest is Test {
         transmuter.setAlchemist(address(alchemist));
         transmuter.setDepositCap(uint256(type(int256).max));
 
-        alchemistNFT = new AlchemistV3Position(address(alchemist));
+        alchemistNFT = new AlchemistV3Position(address(alchemist), alOwner);
+        alchemistNFT.setMetadataRenderer(address(new AlchemistV3PositionRenderer()));
         alchemist.setAlchemistPositionNFT(address(alchemistNFT));
 
         AlchemistTokenVault alchemistFeeVault = new AlchemistTokenVault(address(vault.asset()), address(alchemist), alOwner);

@@ -23,6 +23,7 @@ import {InsufficientAllowance} from "../base/Errors.sol";
 import {Unauthorized, IllegalArgument, IllegalState, MissingInputData} from "../base/Errors.sol";
 import {AlchemistNFTHelper} from "./libraries/AlchemistNFTHelper.sol";
 import {AlchemistV3Position} from "../AlchemistV3Position.sol";
+import {AlchemistV3PositionRenderer} from "../AlchemistV3PositionRenderer.sol";
 import {AlchemistETHVault} from "../AlchemistETHVault.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
@@ -174,7 +175,8 @@ contract IntegrationTest is Test {
 
         transmuterLogic.setAlchemist(address(alchemist));
 
-        alchemistNFT = new AlchemistV3Position(address(alchemist));
+        alchemistNFT = new AlchemistV3Position(address(alchemist), alOwner);
+        alchemistNFT.setMetadataRenderer(address(new AlchemistV3PositionRenderer()));
         alchemist.setAlchemistPositionNFT(address(alchemistNFT));
 
         vm.stopPrank();

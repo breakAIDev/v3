@@ -27,6 +27,28 @@ interface IAlchemistV3Position is IERC721Enumerable {
     function alchemist() external view returns (address);
 
     /**
+     * @notice Returns the address of the admin allowed to update the metadata renderer.
+     */
+    function admin() external view returns (address);
+
+    /**
+     * @notice Returns the address of the current metadata renderer contract.
+     */
+    function metadataRenderer() external view returns (address);
+
+    /**
+     * @notice Sets or updates the metadata renderer contract. Only callable by the admin.
+     * @param renderer The address of the new metadata renderer.
+     */
+    function setMetadataRenderer(address renderer) external;
+
+    /**
+     * @notice Transfers admin rights to a new address. Only callable by the current admin.
+     * @param newAdmin The address of the new admin.
+     */
+    function setAdmin(address newAdmin) external;
+
+    /**
      * @dev Returns the total amount of tokens stored by the contract.
      */
     function totalSupply() external view returns (uint256);
