@@ -188,9 +188,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         myt = params.myt;
     }
 
-    /// @notice Emitted when a new Position NFT is minted.
-    event AlchemistV3PositionNFTMinted(address indexed to, uint256 indexed tokenId);
-
     /// @notice Sets the NFT position token, callable by admin.
     function setAlchemistPositionNFT(address nft) external onlyAdmin {
         if (nft == address(0)) {

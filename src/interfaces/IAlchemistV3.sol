@@ -626,6 +626,13 @@ interface IAlchemistV3Events {
     /// @param feeInYield      The amount of fee paid in yield tokens.
     /// @param feeInUnderlying The amount of fee paid in underlying tokens.
     event RepaymentFee(uint256 indexed accountId, address feeReciever, uint256 feeInYield, uint256 feeInUnderlying);
+
+
+    /// @notice Emitted when a new Position NFT is minted.
+    ///
+    /// @param to The address of the account that minted the Position NFT.
+    /// @param tokenId The tokenId of the Position NFT.
+    event AlchemistV3PositionNFTMinted(address indexed to, uint256 indexed tokenId);
 }
 
 interface IAlchemistV3Immutables {
