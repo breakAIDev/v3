@@ -2431,7 +2431,7 @@ contract AlchemistV3Test is Test {
         assertTrue(size <= 24_576, "Contract too large");
     }
 
-    function testAlchemistV3TokenUri() public {
+    function testAlchemistV3PositionTokenUri() public {
         uint256 amount = 100e18;
         vm.startPrank(address(0xbeef));
         SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
@@ -2458,6 +2458,93 @@ contract AlchemistV3Test is Test {
         // revert if the token does not exist
         vm.expectRevert();
         alchemistNFT.tokenURI(2);
+    }
+
+    function testAlchemistV3PositionSetMetadataRenderer_PostDeployment() public {
+        uint256 amount = 100e18;
+
+        // Mint a position so we have a token to test tokenURI against
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        vm.stopPrank();
+
+        // Capture the original tokenURI
+        string memory originalUri = alchemistNFT.tokenURI(tokenId);
+
+        // Deploy a new renderer and swap it in
+        AlchemistV3PositionRenderer newRenderer = new AlchemistV3PositionRenderer();
+        address originalRenderer = alchemistNFT.metadataRenderer();
+
+        vm.prank(alOwner);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+
+        // Verify the renderer address was updated
+        assertEq(alchemistNFT.metadataRenderer(), address(newRenderer));
+        assertTrue(alchemistNFT.metadataRenderer() != originalRenderer, "Renderer address should have changed");
+
+        // Verify tokenURI still works after renderer swap
+        string memory newUri = alchemistNFT.tokenURI(tokenId);
+        assertEq(
+            AlchemistNFTHelper.slice(newUri, 0, 29),
+            "data:application/json;base64,",
+            "URI should start with data:application/json;base64, after renderer swap"
+        );
+
+        // Since both renderers use the same NFTMetadataGenerator, output should match
+        assertEq(keccak256(bytes(newUri)), keccak256(bytes(originalUri)), "URI content should match with same renderer logic");
+    }
+
+    function testAlchemistV3PositionSetMetadataRenderer_RevertsForNonAdmin() public {
+        AlchemistV3PositionRenderer newRenderer = new AlchemistV3PositionRenderer();
+
+        // Non-admin should revert
+        vm.prank(address(0xbeef));
+        vm.expectRevert(AlchemistV3Position.CallerNotAdmin.selector);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+    }
+
+    function testAlchemistV3PositionSetAdmin_RevertsForNonAdmin() public {
+        vm.prank(address(0xbeef));
+        vm.expectRevert(AlchemistV3Position.CallerNotAdmin.selector);
+        alchemistNFT.setAdmin(address(0xbeef));
+    }
+
+    function testAlchemistV3PositionSetAdmin_TransfersAdminRights() public {
+        address newAdmin = address(0xbeef02);
+
+        vm.prank(alOwner);
+        alchemistNFT.setAdmin(newAdmin);
+        assertEq(alchemistNFT.admin(), newAdmin);
+
+        // Old admin can no longer set renderer
+        AlchemistV3PositionRenderer newRenderer = new AlchemistV3PositionRenderer();
+        vm.prank(alOwner);
+        vm.expectRevert(AlchemistV3Position.CallerNotAdmin.selector);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+
+        // New admin can set renderer
+        vm.prank(newAdmin);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+        assertEq(alchemistNFT.metadataRenderer(), address(newRenderer));
+    }
+
+    function testAlchemistV3PositionTokenURI_RevertsWhenRendererNotSet() public {
+        // Set the renderer to address(0) to simulate no renderer
+        vm.prank(alOwner);
+        alchemistNFT.setMetadataRenderer(address(0));
+
+        // Mint a token
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), 100e18);
+        alchemist.deposit(100e18, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        vm.stopPrank();
+
+        // tokenURI should revert because no renderer is set
+        vm.expectRevert(AlchemistV3Position.MetadataRendererNotSet.selector);
+        alchemistNFT.tokenURI(tokenId);
     }
 
     function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment() external {
