@@ -2169,6 +2169,48 @@ contract AlchemistV3Test is Test {
         );
     }
 
+    function testLiquidate_Bad_Debt_With_Unset_FeeVault_Returns_Zero_FeeInUnderlying() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global alchemist collateralization stays above minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        // Create bad debt: increase yield token supply by 12% while keeping underlying unchanged
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1200 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Unset the fee vault by writing address(0) to storage slot 1 (alchemistFeeVault)
+        vm.store(address(alchemist), bytes32(uint256(1)), bytes32(0));
+        assertEq(alchemist.alchemistFeeVault(), address(0));
+
+        // Liquidate with no fee vault set
+        vm.startPrank(externalUser);
+        uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        (, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // _payWithFeeVault should return 0 when alchemistFeeVault is address(0)
+        assertEq(feeInUnderlying, 0);
+        // feeInYield should be 0 in bad debt scenario (all collateral seized)
+        assertEq(feeInYield, 0);
+        // Liquidator should not have received any underlying tokens
+        assertEq(IERC20(vault.asset()).balanceOf(address(externalUser)), liquidatorPrevUnderlyingBalance);
+    }
+
     function testLiquidate_Full_Liquidation_Globally_Undercollateralized() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
