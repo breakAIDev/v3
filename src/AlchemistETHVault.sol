@@ -79,6 +79,7 @@ contract AlchemistETHVault is AbstractFeeVault, ReentrancyGuard {
      * @param amount Amount to withdraw
      */
     function withdraw(address recipient, uint256 amount) external override onlyAuthorized nonReentrant {
+        _checkNonZeroAddress(recipient);
         if (amount == 0) revert ZeroAmount();
 
         // Check if the vault has enough balance
