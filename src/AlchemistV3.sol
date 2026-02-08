@@ -16,6 +16,7 @@ import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20
 import {IAlchemistTokenVault} from "./interfaces/IAlchemistTokenVault.sol";
 import {IVaultV2} from "../lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {FixedPointMath} from "./libraries/FixedPointMath.sol";
+import {console} from "../lib/forge-std/src/console.sol";
 
 /// @title  AlchemistV3
 /// @author Alchemix Finance
@@ -353,7 +354,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 lockedCollateral = 0;
         if (debt != 0) {
-            lockedCollateral = (convertDebtTokensToYield(debt) * minimumCollateralization) / FIXED_POINT_SCALAR;
+            uint256 debtShares = convertDebtTokensToYield(debt);
+            lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
         }
 
         uint256 positionFree = collateral > lockedCollateral ? collateral - lockedCollateral : 0;
@@ -423,7 +425,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         _sync(tokenId);
 
-        uint256 lockedCollateral = convertDebtTokensToYield(_accounts[tokenId].debt) * minimumCollateralization / FIXED_POINT_SCALAR;
+        uint256 debtShares = convertDebtTokensToYield(_accounts[tokenId].debt);
+        uint256 lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
         _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
         _subCollateralBalance(amount, tokenId);
 
@@ -618,17 +621,35 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 liveEarmarked = cumulativeEarmarked;
         if (amount > liveEarmarked) amount = liveEarmarked;
 
-       // Apply redemption weights/decay to the full amount that left the earmarked bucket
         if (liveEarmarked != 0 && amount != 0) {
-            uint256 survival = ((liveEarmarked - amount) << 128) / liveEarmarked;
-            _survivalAccumulator = FixedPointMath.mulQ128(_survivalAccumulator, survival);
-            _redemptionWeight += PositionDecay.WeightIncrement(amount, cumulativeEarmarked);
+            // Compute weight increment ONCE
+            uint256 oldW = _redemptionWeight;
+            uint256 dW   = PositionDecay.WeightIncrement(amount, liveEarmarked);
+            uint256 newW = oldW + dW;
+
+            // Compute survival the SAME way _redemptionSurvivalRatio() does
+            uint256 oldS = PositionDecay.SurvivalFromWeight(oldW);
+            uint256 newS = PositionDecay.SurvivalFromWeight(newW);
+
+            uint256 survivalRatio;
+            if (oldS != 0 && newS != 0) {
+                survivalRatio = FixedPointMath.divQ128(newS, oldS);
+            } else {
+                survivalRatio = PositionDecay.SurvivalFromWeight(dW);
+            }
+
+            // Apply survival using the SAME ratio used in _sync/_calculateUnrealizedDebt
+            _survivalAccumulator = FixedPointMath.mulQ128(_survivalAccumulator, survivalRatio);
+            _redemptionWeight = newW;
+
+            // Optional debug:
+            uint256 ratioExact = ((liveEarmarked - amount) << 128) / liveEarmarked;
+            console.log("ratioExact", ratioExact);
+            console.log("survivalRatioUsed", survivalRatio);
+            console.log("diffUsed", survivalRatio > ratioExact ? survivalRatio - ratioExact : ratioExact - survivalRatio);
         }
 
-        // earmarks are reduced by the full redeemed amount (net + cover)
         cumulativeEarmarked -= amount;
-
-        // global borrower debt falls by the full redeemed amount
         totalDebt -= amount;
 
         lastRedemptionBlock = block.number;
@@ -1002,13 +1023,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _addDebt(uint256 tokenId, uint256 amount) internal {
         Account storage account = _accounts[tokenId];
 
-        // Update collateral variables
-        uint256 toLock = convertDebtTokensToYield(amount) * minimumCollateralization / FIXED_POINT_SCALAR;
-        uint256 lockedCollateral = convertDebtTokensToYield(account.debt) * minimumCollateralization / FIXED_POINT_SCALAR;
+        uint256 newDebt = account.debt + amount;
 
-        if (account.collateralBalance < lockedCollateral + toLock) revert Undercollateralized();
+        // After _sync(tokenId), you can use the current collateralBalance (no simulation needed)
+        uint256 collateralValue = _totalCollateralValue(tokenId, false);
 
-        account.debt += amount;
+        uint256 required = FixedPointMath.mulDivUp(newDebt, minimumCollateralization, FIXED_POINT_SCALAR);
+        if (collateralValue < required) revert Undercollateralized();
+
+        account.debt = newDebt;
         totalDebt += amount;
     }
 
@@ -1352,8 +1375,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 debt = _accounts[tokenId].debt;
         if (debt == 0) return false;
 
-        uint256 collateralization = FixedPointMath.mulDivUp(totalValue(tokenId), FIXED_POINT_SCALAR, debt);
-        return collateralization < minimumCollateralization;
+        // totalValue(tokenId) is already denominated in debt-token units
+        uint256 collateralValue = totalValue(tokenId);
+
+        // Required collateral value = ceil(debt * minCollat / 1e18)
+        uint256 required = FixedPointMath.mulDivUp(debt, minimumCollateralization, FIXED_POINT_SCALAR);
+
+        return collateralValue < required;
     }
 
     /// @dev Calculates the total value of the alchemist in the underlying token.
@@ -1387,6 +1415,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     ///      when SurvivalFromWeight() underflows to 0 for both endpoints.
     function _redemptionSurvivalRatio(uint256 oldWeight, uint256 newWeight) internal pure returns (uint256) {
         if (newWeight <= oldWeight) return ONE_Q128;
+
+        uint256 oldS = PositionDecay.SurvivalFromWeight(oldWeight);
+        uint256 newS = PositionDecay.SurvivalFromWeight(newWeight);
+
+        // If both representable, ratio cancels shared bias
+        if (oldS != 0 && newS != 0) {
+            return FixedPointMath.divQ128(newS, oldS);
+        }
+
+        // fallback when both underflow
         return PositionDecay.SurvivalFromWeight(newWeight - oldWeight);
     }
 

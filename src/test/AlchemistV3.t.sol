@@ -1193,7 +1193,7 @@ contract AlchemistV3Test is Test {
         // a single position nft would have been minted to address(0xbeef)
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
 
-        uint256 mintAmount = ((alchemist.totalValue(tokenId) * FIXED_POINT_SCALAR) / collateralization) + 1;
+        uint256 mintAmount = ((alchemist.totalValue(tokenId) * FIXED_POINT_SCALAR) / collateralization);
         alchemist.mint(tokenId, mintAmount, address(0xbeef));
         vm.stopPrank();
     }
