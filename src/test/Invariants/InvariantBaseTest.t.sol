@@ -8,6 +8,9 @@ contract InvariantBaseTest is InvariantsTest {
 
     uint256 internal immutable MAX_TEST_VALUE = 1e28;
 
+    uint256 public maxTokenIdMinted;
+    bytes32 internal constant POS_MINT_SIG = keccak256("AlchemistV3PositionNFTMinted(address,uint256)");
+
     constructor() {
         USER = makeAddr("User");
     }
@@ -36,7 +39,22 @@ contract InvariantBaseTest is InvariantsTest {
         _targetSender(makeAddr("Sender8"));
     }
 
+    function _updateMaxTokenIdFromLogs() internal {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            // Event is emitted by the Alchemist contract (NOT the NFT contract).
+            if (logs[i].emitter != address(alchemist)) continue;
+            if (logs[i].topics.length != 3) continue;
+            if (logs[i].topics[0] != POS_MINT_SIG) continue;
+
+            // topics[2] is the indexed tokenId
+            uint256 tokenId = uint256(logs[i].topics[2]);
+            if (tokenId > maxTokenIdMinted) maxTokenIdMinted = tokenId;
+        }
+    }
+
     function _deposit(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "deposit") {
+        vm.recordLogs();
         deal(mockVaultCollateral, onBehalf, amount);
         vm.startPrank(onBehalf);
         IERC20(mockVaultCollateral).approve(address(vault), amount * 2);
@@ -44,6 +62,8 @@ contract InvariantBaseTest is InvariantsTest {
 
         alchemist.deposit(amount, onBehalf, tokenId);
         vm.stopPrank();
+
+        _updateMaxTokenIdFromLogs();
 
         _checkDebtInvariant("deposit");
     }
@@ -88,7 +108,7 @@ contract InvariantBaseTest is InvariantsTest {
     }
 
     function _claim(uint256 tokenId, address onBehalf) internal logCall(onBehalf, "claim") {
-        vm.roll(block.number + (1000000));
+        vm.roll(block.number + (10000));
         vm.startPrank(onBehalf);
         _logDebts("BEFORE_CLAIM");
         transmuterLogic.claimRedemption(tokenId);

@@ -7,7 +7,7 @@ import {IERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions
 
 import {TransparentUpgradeableProxy} from "../../lib/openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {SafeCast} from "../libraries/SafeCast.sol";
-import {Test} from "../../lib/forge-std/src/Test.sol";
+import {Test, Vm} from "../../lib/forge-std/src/Test.sol";
 import {SafeERC20} from "../libraries/SafeERC20.sol";
 import {console} from "../../lib/forge-std/src/console.sol";
 import {console2} from "../../lib/forge-std/src/console2.sol";
