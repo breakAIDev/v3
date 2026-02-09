@@ -73,6 +73,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     uint256 public globalMinimumCollateralization;
 
     /// @inheritdoc IAlchemistV3State
+    uint256 public liquidationTargetCollateralization;
+
+    /// @inheritdoc IAlchemistV3State
     uint256 public totalDebt;
 
     /// @inheritdoc IAlchemistV3State
@@ -177,6 +180,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         minimumCollateralization = params.minimumCollateralization;
         globalMinimumCollateralization = params.globalMinimumCollateralization;
         collateralizationLowerBound = params.collateralizationLowerBound;
+        _checkArgument(params.liquidationTargetCollateralization >= params.minimumCollateralization);
+        liquidationTargetCollateralization = params.liquidationTargetCollateralization;
         admin = params.admin;
         transmuter = params.transmuter;
         protocolFee = params.protocolFee;
@@ -295,6 +300,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // cannot exceed global minimum
         minimumCollateralization = value > globalMinimumCollateralization ? globalMinimumCollateralization : value;
 
+        // cannot exceed liquidation target
+        if (minimumCollateralization > liquidationTargetCollateralization) {
+            minimumCollateralization = liquidationTargetCollateralization;
+        }
+
         emit MinimumCollateralizationUpdated(value);
     }
 
@@ -311,6 +321,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkArgument(value >= FIXED_POINT_SCALAR);
         collateralizationLowerBound = value;
         emit CollateralizationLowerBoundUpdated(value);
+    }
+
+    /// @inheritdoc IAlchemistV3AdminActions
+    function setLiquidationTargetCollateralization(uint256 value) external onlyAdmin {
+        _checkArgument(value > FIXED_POINT_SCALAR);
+        _checkArgument(value >= minimumCollateralization);
+        _checkArgument(value > collateralizationLowerBound);
+        _checkArgument(value <= 2 * FIXED_POINT_SCALAR);
+        liquidationTargetCollateralization = value;
+        emit LiquidationTargetCollateralizationUpdated(value);
     }
 
     /// @inheritdoc IAlchemistV3AdminActions
@@ -988,7 +1008,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         (uint256 liquidationAmount, uint256 debtToBurn, uint256 baseFee, uint256 outsourcedFee) = calculateLiquidation(
             collateralInUnderlying,
             debt,
-            minimumCollateralization,
+            liquidationTargetCollateralization,
             normalizeUnderlyingTokensToDebt(_getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / totalDebt,
             globalMinimumCollateralization,
             liquidatorFee

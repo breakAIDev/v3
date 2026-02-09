@@ -79,6 +79,8 @@ contract AlchemistV3Test is Test {
     uint256 public repaymentFeeBPS = 100;
 
     uint256 public minimumCollateralization = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 9e17;
+    uint256 public liquidationTargetCollateralization = uint256(1e36) / 88e16; // ~113.63% (88% LTV)
+
 
     // ----- Variables for deposits & withdrawals -----
 
@@ -226,6 +228,7 @@ contract AlchemistV3Test is Test {
             minimumCollateralization: minimumCollateralization,
             collateralizationLowerBound: 1_052_631_578_950_000_000, // 1.05 collateralization
             globalMinimumCollateralization: 1_111_111_111_111_111_111, // 1.1
+            liquidationTargetCollateralization: liquidationTargetCollateralization,
             transmuter: address(transmuterLogic),
             protocolFee: 0,
             protocolFeeReceiver: protocolFeeReceiver,
@@ -468,7 +471,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -622,6 +625,45 @@ contract AlchemistV3Test is Test {
         vm.stopPrank();
     }
 
+    function testSetLiquidationTargetCollateralization_Success() external {
+        // Set to a valid value between minimumCollateralization and 2x
+        uint256 newTarget = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 85e16; // ~117.6% (85% LTV)
+        vm.startPrank(alOwner);
+        alchemist.setLiquidationTargetCollateralization(newTarget);
+        assertEq(alchemist.liquidationTargetCollateralization(), newTarget);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_Below_MinimumCollateralization() external {
+        // Value below minimumCollateralization should revert
+        uint256 belowMinimum = minimumCollateralization - 1;
+        vm.startPrank(alOwner);
+        vm.expectRevert(IllegalArgument.selector);
+        alchemist.setLiquidationTargetCollateralization(belowMinimum);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_Below_One() external {
+        vm.startPrank(alOwner);
+        vm.expectRevert(IllegalArgument.selector);
+        alchemist.setLiquidationTargetCollateralization(FIXED_POINT_SCALAR);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_Above_Upper_Bound() external {
+        // Value above 2x should revert
+        uint256 aboveUpperBound = 2 * FIXED_POINT_SCALAR + 1;
+        vm.startPrank(alOwner);
+        vm.expectRevert(IllegalArgument.selector);
+        alchemist.setLiquidationTargetCollateralization(aboveUpperBound);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_NotAdmin() external {
+        vm.expectRevert();
+        alchemist.setLiquidationTargetCollateralization(liquidationTargetCollateralization);
+    }
+
     function testSetNewAdmin() external {
         vm.prank(alOwner);
         alchemist.setPendingAdmin(address(0xbeef));
@@ -699,10 +741,10 @@ contract AlchemistV3Test is Test {
     }
 
     function testSetMinCollateralization_Variable_Collateralization(uint256 collateralization) external {
-        vm.assume(collateralization >= alchemist.minimumCollateralization());
-        vm.assume(collateralization < 20e18);
+        collateralization = bound(collateralization, alchemist.minimumCollateralization(), 2 * FIXED_POINT_SCALAR);
         vm.startPrank(address(0xdead));
         alchemist.setGlobalMinimumCollateralization(collateralization);
+        alchemist.setLiquidationTargetCollateralization(collateralization);
         alchemist.setMinimumCollateralization(collateralization);
         vm.assertApproxEqAbs(alchemist.minimumCollateralization(), collateralization, minimumDepositOrWithdrawalLoss);
         vm.stopPrank();
@@ -1974,7 +2016,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2015,6 +2057,130 @@ contract AlchemistV3Test is Test {
             IERC20(address(vault)).balanceOf(address(transmuterLogic)),
             transmuterPreviousBalance + expectedLiquidationAmountInYield - expectedBaseFeeInYield,
             1e18
+        );
+    }
+
+    function testLiquidate_Restores_To_LiquidationTargetCollateralization() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global alchemist collateralization stays above the minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        // Manipulate yield token price to push account into liquidation zone (5.9% increase in yield token supply)
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 590 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Liquidate
+        vm.startPrank(externalUser);
+        alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // Verify post-liquidation collateralization ratio matches liquidationTargetCollateralization
+        (uint256 postCollateral, uint256 postDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        // This is a partial liquidation — debt must remain
+        assertGt(postDebt, 0, "Partial liquidation should leave remaining debt");
+        assertGt(postCollateral, 0, "Partial liquidation should leave remaining collateral");
+
+        uint256 postCollateralInUnderlying = alchemist.totalValue(tokenIdFor0xBeef);
+        uint256 postCollateralizationRatio = postCollateralInUnderlying * FIXED_POINT_SCALAR / postDebt;
+
+        // Post-liquidation CR should match liquidationTargetCollateralization (~113.63%), not minimumCollateralization (~111.11%)
+        vm.assertApproxEqAbs(
+            postCollateralizationRatio,
+            alchemist.liquidationTargetCollateralization(),
+            1e16, // 0.01 tolerance for rounding
+            "Post-liquidation CR should match liquidationTargetCollateralization"
+        );
+
+        // Explicitly verify it's higher than minimumCollateralization
+        assertGt(
+            postCollateralizationRatio,
+            alchemist.minimumCollateralization(),
+            "Post-liquidation CR should be above minimumCollateralization"
+        );
+    }
+
+    function testLiquidate_Aggressive_Target_60_Percent_LTV_Nearly_Full_Liquidation() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Set aggressive liquidation target: 60% LTV (~166.67% CR)
+        uint256 aggressiveTarget = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 60e16;
+        vm.prank(alOwner);
+        alchemist.setLiquidationTargetCollateralization(aggressiveTarget);
+        assertEq(alchemist.liquidationTargetCollateralization(), aggressiveTarget);
+
+        // Ensure global alchemist collateralization stays above the minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        (uint256 prevCollateral, uint256 prevDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        // Manipulate yield token price to push account into liquidation zone (5.9% increase in yield token supply)
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 590 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Liquidate
+        vm.startPrank(externalUser);
+        alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        (uint256 postCollateral, uint256 postDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        // This is a partial liquidation — debt and collateral must remain
+        assertGt(postDebt, 0, "Partial liquidation should leave remaining debt");
+        assertGt(postCollateral, 0, "Partial liquidation should leave remaining collateral");
+
+        uint256 postCollateralInUnderlying = alchemist.totalValue(tokenIdFor0xBeef);
+        uint256 postCollateralizationRatio = postCollateralInUnderlying * FIXED_POINT_SCALAR / postDebt;
+
+        // Post-liquidation CR should match the aggressive target (~166.67%)
+        vm.assertApproxEqAbs(
+            postCollateralizationRatio,
+            aggressiveTarget,
+            1e16,
+            "Post-liquidation CR should match aggressive 60% LTV target"
+        );
+
+        // Verify the vast majority of the position was liquidated (>90% of debt burned)
+        assertGt(
+            prevDebt - postDebt,
+            prevDebt * 90 / 100,
+            "Aggressive target should liquidate >90% of debt"
+        );
+
+        // Verify the vast majority of collateral was seized
+        assertGt(
+            prevCollateral - postCollateral,
+            prevCollateral * 85 / 100,
+            "Aggressive target should seize >85% of collateral"
         );
     }
 
@@ -2059,7 +2225,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn,,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2127,7 +2293,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2247,7 +2413,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn,,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2822,7 +2988,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             collateralInUnderlyingForLiquidation,
             debtAfterRepayment,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2971,7 +3137,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount,,,) = alchemist.calculateLiquidation(
             badCollateralAfterDrop,
             badInitialDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemist.normalizeUnderlyingTokensToDebt(alchemist.getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / alchemist.totalDebt(),
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -3868,7 +4034,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 debtToBurn, uint256 baseFee, uint256 outSourcedFee) = alchemist.calculateLiquidation(
             alchemist.totalValue(position.tokenId),
             position.debt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -4368,7 +4534,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee, uint256 outsourcedFee) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS

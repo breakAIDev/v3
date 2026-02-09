@@ -159,6 +159,7 @@ contract IntegrationTest is Test {
             minimumCollateralization: minimumCollateralization,
             collateralizationLowerBound: 1_052_631_578_950_000_000, // 1.05 collateralization
             globalMinimumCollateralization: 1_111_111_111_111_111_111, // 1.1
+            liquidationTargetCollateralization: uint256(1e36) / 88e16, // ~113.63% (88% LTV)
             transmuter: address(transmuterLogic),
             protocolFee: 100,
             protocolFeeReceiver: receiver,

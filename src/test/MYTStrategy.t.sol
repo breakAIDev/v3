@@ -118,6 +118,7 @@ contract MYTStrategyTest is Test {
             minimumCollateralization: 150e18,
             collateralizationLowerBound: 110e18,
             globalMinimumCollateralization: 150e18,
+            liquidationTargetCollateralization: 150e18,
             transmuter: address(transmuter),
             protocolFee: 50,
             protocolFeeReceiver: admin,
