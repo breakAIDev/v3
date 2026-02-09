@@ -2872,6 +2872,67 @@ contract AlchemistV3Test is Test {
         vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether - expectedFeeInUnderlying);
     }
 
+    /// @notice Regression test: repayment fee must not be stranded when forced repayment
+    ///         does not restore health and _doLiquidation proceeds.
+    function testLiquidate_Earmarked_Repayment_Fee_Not_Stranded_When_Liquidation_Continues() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global collateralization stays above the minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        // 0xbeef opens a position at max borrow
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Create transmuter redemption to start earmarking debt
+        vm.startPrank(anotherExternalUser);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
+        transmuterLogic.createRedemption(mintAmount);
+        vm.stopPrank();
+
+        // Advance ~5% through the transmutation period so only a small portion is earmarked
+        vm.roll(block.number + (5_256_000 * 5 / 100));
+
+        // Verify earmarked debt exists
+        (, uint256 prevDebt, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(earmarked > 0, "Must have earmarked debt");
+
+        // Apply a large price drop (50%) so forced repayment does NOT restore health
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 5000 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Capture accounting state before liquidation
+        uint256 mytBalanceBefore = IERC20(address(vault)).balanceOf(address(alchemist));
+        uint256 accountedBefore = alchemist.getTotalDeposited();
+        uint256 driftBefore = mytBalanceBefore - accountedBefore;
+
+        // Liquidate (forced repayment insufficient → _doLiquidation runs)
+        vm.startPrank(externalUser);
+        (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // Capture accounting state after liquidation
+        uint256 mytBalanceAfter = IERC20(address(vault)).balanceOf(address(alchemist));
+        uint256 accountedAfter = alchemist.getTotalDeposited();
+        uint256 driftAfter = mytBalanceAfter - accountedAfter;
+
+        // The delta between actual MYT balance and tracked _mytSharesDeposited must not increase.
+        // If it increased, the repayment fee was deducted from accounting but never transferred out.
+        assertEq(driftAfter, driftBefore, "Repayment fee shares must not be stranded in the contract");
+    }
+
     function testLiquidate_Debt_Exceeds_Collateral_Shortfall_Absorbed_By_Healthy_Account() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);

@@ -920,7 +920,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked, false);
-            (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
+            (feeInYield, feeInUnderlying) = _calculateRepaymentFee(accountId, repaidAmountInYield);
             // Final safety check after all deductions
             if (account.collateralBalance == 0 && account.debt > 0) {
                 _subDebt(accountId, account.debt);
@@ -929,8 +929,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
         if (_isAccountHealthy(accountId, false)) {
-
             if (feeInYield > 0) {
+                feeInYield = _subCollateralBalance(feeInYield, accountId); // clamps to available balance
                 TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
             } else if (feeInUnderlying > 0) {
                 feeInUnderlying = _payWithFeeVault(feeInUnderlying);
@@ -1018,19 +1018,19 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return (amountLiquidated, feeInYield, feeInUnderlying);
     }
 
-    /// @dev Handles repayment fee calculation and account deduction
-    /// @param accountId The tokenId of the account to force a repayment on.
+ 
+    /// @dev Handles repayment fee calculation.
+    /// @param accountId The tokenId of the account to compute the repayment fee for.
     /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
     /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
     /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
-    function _resolveRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal returns (uint256 feeInYield, uint256 feeInUnderlying) {
+    function _calculateRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal view returns (uint256 feeInYield, uint256 feeInUnderlying) {
         Account storage account = _accounts[accountId];
         uint256 debtInYield = convertDebtTokensToYield(account.debt);
         uint256 surplus = account.collateralBalance > debtInYield ? account.collateralBalance - debtInYield : 0;
         if(surplus > 0){
-            // calculate repayment fee and deduct from account
-            uint256 targetFee = surplus * repaymentFee / BPS;
-            feeInYield = _subCollateralBalance(targetFee, accountId);
+            // calculate repayment fee
+            feeInYield = surplus * repaymentFee / BPS;
         } else {
             uint256 targetFee = repaidAmountInYield * repaymentFee / BPS;
             feeInUnderlying = convertYieldTokensToUnderlying(targetFee);
