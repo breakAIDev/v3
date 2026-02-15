@@ -13,45 +13,6 @@ contract FullSystemInvariantsTest is InvariantBaseTest {
 
     /* INVARIANTS */
 
-    // // Total deposited equals the sum of all individual CDPs
-    // // This uses getCDP which calculates balances/debts without updating storage
-    // function invariantConsistentCollateral() public view {
-    //     address[] memory users = targetSenders();
-
-    //     uint256 totalDeposited;
-
-    //     for (uint256 i; i < users.length; ++i) {
-    //         // a single position nft would have been minted to address(0xbeef)
-    //         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(users[i], address(alchemistNFT));
-    //         (uint256 collateral,,) = alchemist.getCDP(tokenId);
-
-    //         totalDeposited += collateral;
-    //     }
-
-    //     assertApproxEqAbs(totalDeposited, alchemist.getTotalDeposited(), 7);
-    // }
-
-    // // Underlying value of collateral equals sum of all user accounts
-    // // This test uses poke() to perform an actual storage update to the user account
-    // function invariantConsistentCollateralwithPoke() public {
-    //     address[] memory users = targetSenders();
-
-    //     uint256 totalDeposited;
-
-    //     for (uint256 i; i < users.length; ++i) {
-    //         // a single position nft would have been minted to address(0xbeef)
-    //         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(users[i], address(alchemistNFT));
-
-    //         if (tokenId != 0) {
-    //             alchemist.poke(tokenId);
-
-    //             totalDeposited += alchemist.totalValue(tokenId);
-    //         }
-    //     }
-
-    //     assertApproxEqAbs(totalDeposited, alchemist.convertYieldTokensToDebt(alchemist.getTotalDeposited()), 7);
-    // }
-
     // Total debt in the system is equal to sum of all user debts
     function invariantConsistentDebtAndEarmark() public {
         address[] memory users = targetSenders();
@@ -80,10 +41,20 @@ contract FullSystemInvariantsTest is InvariantBaseTest {
         if (earmarkDelta > maxEarmarkDeltaSeen) maxEarmarkDeltaSeen = earmarkDelta;
 
         // Tolerance:
-        // - base: 1e12 (your original)
-        // - plus: conversionFactor * active positions (covers underlying/share rounding showing up in debt units)
+        // - base: 100
+        // - plus: conversionFactor * active positions
         uint256 cf = alchemist.underlyingConversionFactor();
-        uint256 tol = _max(1e12, cf * _max(active, 1));
+        uint256 tol = _max(100, cf * _max(active, 1));
+
+        if (debtDelta > tol || earmarkDelta > tol) {
+            emit log_named_uint("debtDelta", debtDelta);
+            emit log_named_uint("earmarkDelta", earmarkDelta);
+            emit log_named_uint("sumDebt", sumDebt);
+            emit log_named_uint("totalDebt", totalDebt);
+            emit log_named_uint("sumEarmarked", sumEarmarked);
+            emit log_named_uint("cumEarmarked", cumEarmarked);
+            emit log_named_uint("tol", tol);
+        }
 
         assertLe(debtDelta, tol);
         assertLe(earmarkDelta, tol);
@@ -92,19 +63,6 @@ contract FullSystemInvariantsTest is InvariantBaseTest {
         assertLe(cumEarmarked, totalDebt);
         assertLe(sumEarmarked, sumDebt);
     }
-
-    // // Amount stakes in the transmuter cannot exceed the total debt in the alchemist plus the debt value of yield tokens in the transmuter
-    // function invariantTransmuterStakeLessThanTotalDebt() public view {
-    //     uint256 totalLocked = transmuterLogic.totalLocked() > alchemist.convertYieldTokensToDebt(fakeYieldToken.balanceOf(address(transmuterLogic)))
-    //         ? transmuterLogic.totalLocked() - alchemist.convertYieldTokensToDebt(fakeYieldToken.balanceOf(address(transmuterLogic)))
-    //         : 0;
-    //     assertLe(totalLocked, alchemist.totalDebt());
-    // }
-
-    // // Earmarked can never be more than total debt
-    // function invariantEarmarkedLessThanTotalDebt() public view {
-    //     assertLe(alchemist.cumulativeEarmarked(), alchemist.totalDebt());
-    // }
 
     function _absDiff(uint256 a, uint256 b) internal pure returns (uint256) {
         return a > b ? a - b : b - a;

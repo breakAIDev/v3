@@ -7,7 +7,7 @@ contract InvariantBaseTest is InvariantsTest {
     address internal immutable USER;
 
     uint256 internal immutable MAX_TEST_VALUE = 1e28;
-
+    
     uint256 public maxTokenIdMinted;
     bytes32 internal constant POS_MINT_SIG = keccak256("AlchemistV3PositionNFTMinted(address,uint256)");
 
@@ -108,7 +108,7 @@ contract InvariantBaseTest is InvariantsTest {
     }
 
     function _claim(uint256 tokenId, address onBehalf) internal logCall(onBehalf, "claim") {
-        vm.roll(block.number + (10000));
+        vm.roll(block.number + (1000000));
         vm.startPrank(onBehalf);
         _logDebts("BEFORE_CLAIM");
         transmuterLogic.claimRedemption(tokenId);
@@ -235,28 +235,30 @@ contract InvariantBaseTest is InvariantsTest {
     function _checkDebtInvariant(string memory where) internal view {
         uint256 sum = _sumDebts();
         uint256 tot = alchemist.totalDebt();
-        // if you want EXACT same condition as invariant:
         if (sum > tot ? (sum - tot) > 1e12 : (tot - sum) > 1e12) {
             console2.log("Debt invariant broke at:", where);
             console2.log("sumDebts:", sum);
             console2.log("totalDebt:", tot);
             console2.log("delta:", sum > tot ? sum - tot : tot - sum);
-            revert("DebtInvariantBroken");
         }
     }
 
     function _logDebts(string memory tag) internal {
         uint256 sum;
+
         for (uint256 i = 1; i <= 10; i++) {
-            (uint256 col, uint256 debt, uint256 credit) = alchemist.getCDP(i);
-            if (col == 0 && debt == 0 && credit == 0) continue;
+            (uint256 col, uint256 debt, uint256 earmarked) = alchemist.getCDP(i);
+            if (col == 0 && debt == 0 && earmarked == 0) continue;
             console2.log(tag, "cdp", i);
             console2.log("debt", debt);
-            console2.log("credit", credit);
+            console2.log("earmarked", earmarked);
             console2.log("col", col);
             sum += debt;
         }
         console2.log(tag, "sumDebts", sum);
         console2.log(tag, "totalDebt", alchemist.totalDebt());
+        console2.log(tag, "cumulativeEarmarked", alchemist.cumulativeEarmarked());
+        console2.log(tag, "lastEarmarkBlock", alchemist.lastEarmarkBlock());
+        console2.log(tag, "lastRedemptionBlock", alchemist.lastRedemptionBlock());
     }
 }

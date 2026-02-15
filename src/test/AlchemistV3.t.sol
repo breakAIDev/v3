@@ -4249,6 +4249,157 @@ contract AlchemistV3Test is Test {
         assertEq(alchemist.getTotalDeposited(), amount);
     }
 
+    function test_Regression_StaleAccountAcrossEpochsThenRedeem_TracksGlobalDebt() external {
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xbeef), 0);
+        uint256 beefId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(beefId, 10_000e18, address(0xbeef));
+        vm.stopPrank();
+
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xdad), 0);
+        uint256 dadId = AlchemistNFTHelper.getFirstTokenId(address(0xdad), address(alchemistNFT));
+        alchemist.mint(dadId, 1_000e18, address(0xdad));
+        vm.stopPrank();
+
+        // Force full earmark on every _earmark() call to drive epoch transitions quickly.
+        vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(type(uint256).max));
+
+        // Epoch +1 while beef account remains unsynced/stale.
+        vm.roll(block.number + 1);
+        alchemist.poke(dadId);
+
+        // Create fresh unearmarked debt after first epoch.
+        vm.roll(block.number + 1);
+        vm.prank(address(0xdad));
+        alchemist.mint(dadId, 1_000e18, address(0xdad));
+
+        // Epoch +1 again (beef is now stale across multiple earmark epochs).
+        vm.roll(block.number + 1);
+        alchemist.poke(dadId);
+
+        uint256 debtBefore = alchemist.totalDebt();
+        assertGt(debtBefore, 0);
+
+        uint256 redeemAmount = debtBefore / 3;
+        assertGt(redeemAmount, 0);
+
+        vm.prank(address(transmuterLogic));
+        uint256 redeemedShares = alchemist.redeem(redeemAmount);
+        assertGt(redeemedShares, 0);
+
+        (, uint256 beefDebt, uint256 beefEarmarked) = alchemist.getCDP(beefId);
+        (, uint256 dadDebt, uint256 dadEarmarked) = alchemist.getCDP(dadId);
+
+        uint256 sumDebt = beefDebt + dadDebt;
+        uint256 sumEarmarked = beefEarmarked + dadEarmarked;
+        uint256 totalDebt = alchemist.totalDebt();
+        uint256 cumEarmarked = alchemist.cumulativeEarmarked();
+
+        // Rounding noise can exist, but drift must remain tiny and bounded.
+        assertApproxEqAbs(sumDebt, totalDebt, 10);
+        assertApproxEqAbs(sumEarmarked, cumEarmarked, 10);
+        assertLe(cumEarmarked, totalDebt);
+        assertLe(sumEarmarked, sumDebt);
+    }
+
+    function test_Regression_StaleAccountSingleEpochThenRedeem_TracksGlobalDebt() external {
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xbeef), 0);
+        uint256 beefId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(beefId, 10_000e18, address(0xbeef));
+        vm.stopPrank();
+
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xdad), 0);
+        uint256 dadId = AlchemistNFTHelper.getFirstTokenId(address(0xdad), address(alchemistNFT));
+        alchemist.mint(dadId, 1_000e18, address(0xdad));
+        vm.stopPrank();
+
+        vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(type(uint256).max));
+
+        // Exactly one stale epoch for beef account.
+        vm.roll(block.number + 1);
+        alchemist.poke(dadId);
+
+        uint256 debtBefore = alchemist.totalDebt();
+        assertGt(debtBefore, 0);
+
+        uint256 redeemAmount = debtBefore / 3;
+        assertGt(redeemAmount, 0);
+
+        vm.prank(address(transmuterLogic));
+        uint256 redeemedShares = alchemist.redeem(redeemAmount);
+        assertGt(redeemedShares, 0);
+
+        (, uint256 beefDebt, uint256 beefEarmarked) = alchemist.getCDP(beefId);
+        (, uint256 dadDebt, uint256 dadEarmarked) = alchemist.getCDP(dadId);
+
+        uint256 sumDebt = beefDebt + dadDebt;
+        uint256 sumEarmarked = beefEarmarked + dadEarmarked;
+        uint256 totalDebt = alchemist.totalDebt();
+        uint256 cumEarmarked = alchemist.cumulativeEarmarked();
+
+        assertApproxEqAbs(sumDebt, totalDebt, 10);
+        assertApproxEqAbs(sumEarmarked, cumEarmarked, 10);
+        assertLe(cumEarmarked, totalDebt);
+        assertLe(sumEarmarked, sumDebt);
+    }
+
+    function test_Regression_StaleAccountSingleEpochWithPreBoundaryRedemption_TracksGlobalDebt() external {
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xbeef), 0);
+        uint256 beefId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(beefId, 10_000e18, address(0xbeef));
+        vm.stopPrank();
+
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xdad), 0);
+        uint256 dadId = AlchemistNFTHelper.getFirstTokenId(address(0xdad), address(alchemistNFT));
+        alchemist.mint(dadId, 1_000e18, address(0xdad));
+        vm.stopPrank();
+
+        // Step 1: partial earmark (no epoch advance yet).
+        vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(1_000e18));
+        vm.roll(block.number + 1);
+        alchemist.poke(dadId);
+
+        // Redemption happens before stale account crosses into the next earmark epoch.
+        vm.prank(address(transmuterLogic));
+        alchemist.redeem(500e18);
+
+        // Step 2: force full earmark to cross exactly one epoch for stale beef account.
+        vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(type(uint256).max));
+        vm.roll(block.number + 1);
+        alchemist.poke(dadId);
+
+        uint256 debtBefore = alchemist.totalDebt();
+        assertGt(debtBefore, 0);
+
+        vm.prank(address(transmuterLogic));
+        uint256 redeemedShares = alchemist.redeem(debtBefore / 4);
+        assertGt(redeemedShares, 0);
+
+        (, uint256 beefDebt, uint256 beefEarmarked) = alchemist.getCDP(beefId);
+        (, uint256 dadDebt, uint256 dadEarmarked) = alchemist.getCDP(dadId);
+
+        uint256 sumDebt = beefDebt + dadDebt;
+        uint256 sumEarmarked = beefEarmarked + dadEarmarked;
+        uint256 totalDebt = alchemist.totalDebt();
+        uint256 cumEarmarked = alchemist.cumulativeEarmarked();
+
+        assertApproxEqAbs(sumDebt, totalDebt, 10);
+        assertApproxEqAbs(sumEarmarked, cumEarmarked, 10);
+        assertLe(cumEarmarked, totalDebt);
+        assertLe(sumEarmarked, sumDebt);
+    }
+
     function test_QueryGraphBug_ConsecutiveBlocksUnderearmarksCausesRedemptionLoss() external {
         uint256 depositAmount = 10_000_000e18;
         uint256 borrowAmount = 5_256_000e18;
