@@ -1713,32 +1713,6 @@ contract AlchemistV3Test is Test {
         assertEq(userDebt, 0);
     }
 
-    function testBurnWithFee() external {
-        vm.prank(alOwner);
-        // 1%
-        alchemist.setProtocolFee(100);
-
-        uint256 amount = 100e18;
-
-        vm.startPrank(address(0xbeef));
-        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
-        alchemist.deposit(amount, address(0xbeef), 0);
-        // a single position nft would have been minted to 0xbeef
-        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
-        alchemist.mint(tokenId, amount / 2, address(0xbeef));
-
-        vm.roll(block.number + 1);
-
-        SafeERC20.safeApprove(address(alToken), address(alchemist), amount / 2);
-        alchemist.burn(amount / 2, tokenId);
-        vm.stopPrank();
-
-        (, uint256 userDebt,) = alchemist.getCDP(tokenId);
-
-        assertEq(userDebt, 0);
-        assertEq(IERC20(address(vault)).balanceOf(address(10)), (amount / 2) * 100 / 10_000);
-    }
-
     function testBurnSameBlock() external {
         uint256 amount = 100e18;
 

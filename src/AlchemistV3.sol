@@ -516,11 +516,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // Burn the tokens from the message sender
         TokenUtils.safeBurnFrom(debtToken, msg.sender, credit);
 
-        // Debt is subject to protocol fee similar to redemptions
-        _accounts[recipientId].collateralBalance -= convertDebtTokensToYield(credit) * protocolFee / BPS;
-        TokenUtils.safeTransfer(myt, protocolFeeReceiver, convertDebtTokensToYield(credit) * protocolFee / BPS);
-        _mytSharesDeposited -= convertDebtTokensToYield(credit) * protocolFee / BPS;
-
         // Update the recipient's debt.
         _subDebt(recipientId, credit);
         _accounts[recipientId].lastRepayBlock = block.number;
@@ -560,14 +555,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (credit == 0) return 0;
 
         // Repay debt from earmarked amount of debt first
-        _subEarmarkedDebt(credit, recipientTokenId);
+        uint256 earmarkedRepaid = _subEarmarkedDebt(credit, recipientTokenId);
 
 
         uint256 creditToYield = convertDebtTokensToYield(credit);
+        uint256 earmarkedRepaidToYield = convertDebtTokensToYield(earmarkedRepaid);
 
 
-        // Debt is subject to protocol fee similar to redemptions
-        uint256 feeAmount = creditToYield * protocolFee / BPS;
+        // Protocol fee only applies to earmarked debt repaid.
+        uint256 feeAmount = earmarkedRepaidToYield * protocolFee / BPS;
         if (feeAmount > account.collateralBalance) {
             revert("Not enough collateral to pay for debt fee");
         } else {
@@ -579,7 +575,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Transfer the repaid tokens to the transmuter.
         TokenUtils.safeTransferFrom(myt, msg.sender, transmuter, creditToYield);
-        TokenUtils.safeTransfer(myt, protocolFeeReceiver, creditToYield * protocolFee / BPS);
+        if (feeAmount > 0) {
+            TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeAmount);
+        }
         emit Repay(msg.sender, amount, recipientTokenId, creditToYield);
 
         return creditToYield;

@@ -284,8 +284,8 @@ contract IntegrationTest is Test {
         (uint256 collateral, uint256 debt,) = alchemist.getCDP(tokenId);
 
         assertApproxEqAbs(debt, 0, 9201);
-        assertEq(collateral, 100_000e18 - alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000);
-        assertEq(IERC20(address(vault)).balanceOf(receiver), alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000);
+        assertEq(collateral, 100_000e18);
+        assertEq(IERC20(address(vault)).balanceOf(receiver), 0);
     }
     // ├─ emit TestIntegrationLog(message: "0xdad shares", value: 100000000000000000000000 [1e23])
 
@@ -361,11 +361,12 @@ contract IntegrationTest is Test {
         (collateral, debt, earmarked) = alchemist.getCDP(tokenId);
 
         assertApproxEqAbs(debt, 0, 9201);
-        assertApproxEqAbs(collateral, 100_000e18 - alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000, 1);
+        uint256 expectedProtocolFee = alchemist.convertDebtTokensToYield(maxBorrow / 2) * 100 / 10_000;
+        assertApproxEqAbs(collateral, 100_000e18 - expectedProtocolFee, 1);
         assertApproxEqAbs(earmarked, 0, 9201);
 
         assertApproxEqAbs(IERC20(alchemist.myt()).balanceOf(address(transmuterLogic)), alchemist.convertDebtTokensToYield(maxBorrow), 1);
-        assertEq(IERC20(address(vault)).balanceOf(receiver), alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000);
+        assertEq(IERC20(address(vault)).balanceOf(receiver), expectedProtocolFee);
     }
 
     function testRepayEarmarkedPartialRepayment() external {
@@ -446,7 +447,8 @@ contract IntegrationTest is Test {
 
         // Loss of precision. Small, but consider using LTV rather than minimum collateralization
         assertApproxEqAbs(debt, 0, 1);
-        assertEq(collateral, 100_000e18 - alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000);
+        uint256 expectedProtocolFee = alchemist.convertDebtTokensToYield(maxBorrow / 2) * 100 / 10_000;
+        assertEq(collateral, 100_000e18 - expectedProtocolFee);
         assertApproxEqAbs(earmarked, 0, 9201);
 
         // Overpayment sent back to user and transmuter received what was credited
@@ -473,8 +475,8 @@ contract IntegrationTest is Test {
         (uint256 collateral, uint256 debt,) = alchemist.getCDP(tokenId);
 
         assertEq(debt, 0);
-        assertEq(collateral, 100_000e18 - alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000);
-        assertEq(IERC20(address(vault)).balanceOf(receiver), alchemist.convertDebtTokensToYield(maxBorrow) * 100 / 10_000);
+        assertEq(collateral, 100_000e18);
+        assertEq(IERC20(address(vault)).balanceOf(receiver), 0);
     }
 
     function testBurnWithEarmarkPartial() external {
