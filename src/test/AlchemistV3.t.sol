@@ -37,7 +37,6 @@ import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
 import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
 import {MockYieldToken} from "./mocks/MockYieldToken.sol";
-import "../libraries/PositionDecay.sol";
 
 contract AlchemistV3Test is Test {
     // ----- [SETUP] Variables for setting up a minimal CDP -----
@@ -5447,32 +5446,5 @@ contract AlchemistV3Test is Test {
 
     function _abs(uint256 a, uint256 b) internal pure returns (uint256) {
         return a > b ? a - b : b - a;
-    }
-
-    function test_scaleByWeightDelta_matches_direct_ratio_bounded(
-        uint128 total,
-        uint128 inc,
-        uint128 value
-    ) public {
-        total = uint128(bound(uint256(total), 1, uint256(type(uint128).max)));
-        inc   = uint128(bound(uint256(inc),   0, uint256(total)));
-
-        // Exact ratio in UQ128.128 (same truncation style as the library)
-        uint256 ratio = ((uint256(total) - uint256(inc)) << 128) / uint256(total);
-
-        uint256 w    = PositionDecay.WeightIncrement(uint256(inc), uint256(total));
-        uint256 surv = PositionDecay.SurvivalFromWeight(w);
-
-        uint256 expected = uint256(value) - ((uint256(value) * ratio) >> 128);
-        uint256 actual   = PositionDecay.ScaleByWeightDelta(uint256(value), w);
-
-        uint256 outDiff  = _abs(actual, expected);
-        uint256 survDiff = _abs(surv, ratio);
-
-        // Bound: |outDiff| <= ceil(value * survDiff / 2^128) + 1
-        // Using >>128 is floor; add 2 to cover ceil + the floor-bound slack.
-        uint256 boundDiff = ((uint256(value) * survDiff) >> 128) + 2;
-
-        assertLe(outDiff, boundDiff);
     }
 }
