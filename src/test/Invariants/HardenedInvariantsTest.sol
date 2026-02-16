@@ -302,13 +302,13 @@ contract HardenedInvariantsTest is InvariantsTest {
 
         uint256 cf = alchemist.underlyingConversionFactor();
         // Debt/earmark tolerance: 1e12 absolute or cf-scaled per-position (rounding from Q128 math)
-        uint256 debtTol = _max(1e12, cf * _max(active, 1));
+        uint256 debtTol = _max(100, cf * _max(active, 1));
         // Collateral tolerance: higher because mulDivUp rounding in _sync's sharesToDebit
         // accumulates across multiple redemption cycles at different conversion rates.
         // The lazy sync uses cumulative _totalRedeemedSharesOut/_totalRedeemedDebt (weighted
         // average), so per-position debits round differently than global physical transfers.
         // Observed: ~2.87e14 on ~1.7e28 total (0.0000000000017%). Not exploitable.
-        uint256 colTol = _max(1e15, cf * _max(active, 1) * 1e3);
+        uint256 colTol = _max(100, cf * _max(active, 1) * 1e3);
 
         assertLe(debtDelta, debtTol, "H1a: stored debt sum != totalDebt after full sync");
         assertLe(earmarkDelta, debtTol, "H1b: stored earmark sum != cumulativeEarmarked after full sync");
