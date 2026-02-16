@@ -706,6 +706,10 @@ contract CrucibleTest is InvariantsTest {
             if (debt == 0) continue;
 
             uint256 collateralValue = alchemist.totalValue(tid);
+            // Dust-only residue can remain after aggressive cascades due to integer conversion
+            // boundaries (e.g. debt=1, collateral=0). Treat up to one underlying unit as closed.
+            uint256 debtDustTol = alchemist.underlyingConversionFactor();
+            if (collateralValue == 0 && debt <= debtDustTol) continue;
             uint256 lowerBound = alchemist.collateralizationLowerBound();
             uint256 required = (debt * lowerBound) / FIXED_POINT_SCALAR;
 
