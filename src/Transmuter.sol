@@ -82,8 +82,13 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
     }
 
     constructor(ITransmuter.TransmuterInitializationParams memory params) ERC721("Alchemix V3 Transmuter", "TRNSMTR") {
+        _checkArgument(params.feeReceiver != address(0));
+        _checkArgument(params.timeToTransmute != 0);
+        _checkArgument(params.timeToTransmute <= type(int256).max.toUint256());
+        _checkArgument(params.transmutationFee <= BPS);
+        _checkArgument(params.exitFee <= BPS);
+
         syntheticToken = params.syntheticToken;
-        require(params.timeToTransmute != 0, "Must set transmutation time");
         timeToTransmute = params.timeToTransmute;
         transmutationFee = params.transmutationFee;
         exitFee = params.exitFee;
@@ -146,6 +151,8 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
 
     /// @inheritdoc ITransmuter
     function setTransmutationTime(uint256 time) external onlyAdmin {
+        _checkArgument(time != 0);
+        _checkArgument(time <= type(int256).max.toUint256());
         timeToTransmute = time;
 
         emit TransmutationTimeUpdated(time);

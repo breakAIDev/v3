@@ -413,7 +413,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return _totalCollateralValue(tokenId, true);
     }
 
-    /// @inheritdoc IAlchemistV3State
+    /// @notice Returns cumulative earmarked debt including one simulated pending earmark window.
     function getUnrealizedCumulativeEarmarked() external view returns (uint256) {
         if (totalDebt == 0) return 0;
         (, uint256 effectiveEarmarked) = _simulateUnrealizedEarmark();

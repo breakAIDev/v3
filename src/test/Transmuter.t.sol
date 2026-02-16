@@ -176,6 +176,51 @@ contract TransmuterTest is Test {
         assertEq(transmuter.timeToTransmute(), 20 days);
     }
 
+    function testSetTransmutationTimeZeroReverts() public {
+        vm.expectRevert();
+        transmuter.setTransmutationTime(0);
+    }
+
+    function testSetTransmutationTimeTooHighReverts() public {
+        vm.expectRevert();
+        transmuter.setTransmutationTime(uint256(type(int256).max) + 1);
+    }
+
+    function testConstructorFeeReceiverZeroReverts() public {
+        vm.expectRevert();
+        new Transmuter(
+            ITransmuter.TransmuterInitializationParams(address(alETH), address(0), 5_256_000, 0, 0, 52_560_000 / 2)
+        );
+    }
+
+    function testConstructorTransmutationFeeTooHighReverts() public {
+        vm.expectRevert();
+        new Transmuter(
+            ITransmuter.TransmuterInitializationParams(address(alETH), address(this), 5_256_000, 10_001, 0, 52_560_000 / 2)
+        );
+    }
+
+    function testConstructorExitFeeTooHighReverts() public {
+        vm.expectRevert();
+        new Transmuter(
+            ITransmuter.TransmuterInitializationParams(address(alETH), address(this), 5_256_000, 0, 10_001, 52_560_000 / 2)
+        );
+    }
+
+    function testConstructorTransmutationTimeZeroReverts() public {
+        vm.expectRevert();
+        new Transmuter(ITransmuter.TransmuterInitializationParams(address(alETH), address(this), 0, 0, 0, 52_560_000 / 2));
+    }
+
+    function testConstructorTransmutationTimeTooHighReverts() public {
+        vm.expectRevert();
+        new Transmuter(
+            ITransmuter.TransmuterInitializationParams(
+                address(alETH), address(this), uint256(type(int256).max) + 1, 0, 0, 52_560_000 / 2
+            )
+        );
+    }
+
     function testCreateRedemption() public {
         vm.prank(address(0xbeef));
         transmuter.createRedemption(100e18);
