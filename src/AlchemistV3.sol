@@ -739,6 +739,94 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return collRedeemed;
     }
 
+    /// @inheritdoc IAlchemistV3Actions
+    function selfLiquidate(uint256 accountId, address recipient) public returns (uint256 amountLiquidated) {
+        _checkArgument(recipient != address(0));
+        _checkForValidAccountId(accountId);
+        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(accountId), msg.sender);
+        _poke(accountId);
+        _checkState(_accounts[accountId].debt > 0);
+        if (!_isAccountHealthy(accountId, false)) {
+            // must use the regular liquidation path i.e. liquidate(accountId)
+           revert AccountNotHealthy();
+        }
+        Account storage account = _accounts[accountId];
+
+        // Repay any earmarked debt 
+        uint256 repaidEarmarkedDebtInYield = _forceRepay(accountId, account.earmarked, true);
+    
+        uint256 debt = account.debt;
+
+        // then clear all remaining debt
+        _subDebt(accountId, debt);
+
+        // sub the collateral used for repaying debt
+        uint256 repaidDebtInYield = _subCollateralBalance(convertDebtTokensToYield(debt), accountId);
+
+        // clear all remaining collateral
+        uint256 remainingCollateral = _subCollateralBalance(account.collateralBalance, accountId);
+
+        if(repaidDebtInYield > 0) {
+            // transfer collateral used for repaying debt to transmuter
+            TokenUtils.safeTransfer(myt, transmuter, repaidDebtInYield);
+        }
+
+        if(remainingCollateral > 0) {
+            // transfer remaining collateral to the recipient
+            TokenUtils.safeTransfer(myt, recipient, remainingCollateral);
+        }   
+        // emit event
+        emit SelfLiquidated(accountId, repaidEarmarkedDebtInYield + repaidDebtInYield);
+        return repaidEarmarkedDebtInYield + repaidDebtInYield;
+    }
+
+    /// @inheritdoc IAlchemistV3State
+    function calculateLiquidation(
+        uint256 collateral,
+        uint256 debt,
+        uint256 targetCollateralization,
+        uint256 alchemistCurrentCollateralization,
+        uint256 alchemistMinimumCollateralization,
+        uint256 feeBps
+    ) public pure returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee) {
+        if (debt >= collateral) {
+            outsourcedFee = (debt * feeBps) / BPS;
+            // fully liquidate debt if debt is greater than collateral
+            return (collateral, debt, 0, outsourcedFee);
+        }
+
+        if (alchemistCurrentCollateralization < alchemistMinimumCollateralization) {
+            outsourcedFee = (debt * feeBps) / BPS;
+            // fully liquidate debt in high ltv global environment
+            return (debt, debt, 0, outsourcedFee);
+        }
+
+        // fee is taken from surplus = collateral - debt
+        uint256 surplus = collateral > debt ? collateral - debt : 0;
+
+        fee = (surplus * feeBps) / BPS;
+
+        // collateral remaining for margin‐restore calc
+        uint256 adjCollat = collateral - fee;
+        // compute m*d  (both plain units)
+        uint256 md = (targetCollateralization * debt) / FIXED_POINT_SCALAR;
+        // if md <= adjCollat, nothing to liquidate
+        if (md <= adjCollat) {
+            return (0, 0, 0, 0);
+        }
+
+        // numerator = md - adjCollat
+        uint256 num = md - adjCollat;
+
+        // denom = m - 1  =>  (targetCollateralization - FIXED_POINT_SCALAR)/FIXED_POINT_SCALAR
+        uint256 denom = targetCollateralization - FIXED_POINT_SCALAR;
+
+        debtToBurn = (num * FIXED_POINT_SCALAR) / denom;
+
+        // gross collateral seize = net + fee
+        grossCollateralToSeize = debtToBurn + fee;
+    }
+
     ///@inheritdoc IAlchemistV3Actions
     function reduceSyntheticsIssued(uint256 amount) external onlyTransmuter {
         totalSyntheticsIssued -= amount;
@@ -904,47 +992,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         return creditToYield;
-    }
-
-    /// @inheritdoc IAlchemistV3Actions
-    function selfLiquidate(uint256 accountId, address recipient) public returns (uint256 amountLiquidated) {
-        _checkArgument(recipient != address(0));
-        _checkForValidAccountId(accountId);
-        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(accountId), msg.sender);
-        _poke(accountId);
-        _checkState(_accounts[accountId].debt > 0);
-        if (!_isAccountHealthy(accountId, false)) {
-            // must use the regular liquidation path i.e. liquidate(accountId)
-           revert AccountNotHealthy();
-        }
-        Account storage account = _accounts[accountId];
-
-        // Repay any earmarked debt 
-        uint256 repaidEarmarkedDebtInYield = _forceRepay(accountId, account.earmarked, true);
-    
-        uint256 debt = account.debt;
-
-        // then clear all remaining debt
-        _subDebt(accountId, debt);
-
-        // sub the collateral used for repaying debt
-        uint256 repaidDebtInYield = _subCollateralBalance(convertDebtTokensToYield(debt), accountId);
-
-        // clear all remaining collateral
-        uint256 remainingCollateral = _subCollateralBalance(account.collateralBalance, accountId);
-
-        if(repaidDebtInYield > 0) {
-            // transfer collateral used for repaying debt to transmuter
-            TokenUtils.safeTransfer(myt, transmuter, repaidDebtInYield);
-        }
-
-        if(remainingCollateral > 0) {
-            // transfer remaining collateral to the recipient
-            TokenUtils.safeTransfer(myt, recipient, remainingCollateral);
-        }   
-        // emit event
-        emit SelfLiquidated(accountId, repaidEarmarkedDebtInYield + repaidDebtInYield);
-        return repaidEarmarkedDebtInYield + repaidDebtInYield;
     }
 
     /// @dev Subtracts the earmarked debt by `amount` for the account owned by `accountId`.
@@ -1328,7 +1375,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (_isUnderCollateralized(tokenId)) revert Undercollateralized();
     }
 
-
     /// @dev Calculate the total collateral value of the account in debt tokens.
     /// @param tokenId The id of the account owner.
     /// @return The total collateral value of the account in debt tokens.
@@ -1623,6 +1669,25 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
     }
 
+    // Survival ratio of *unearmarked* exposure between two packed earmark states.
+    function _earmarkSurvivalRatio(uint256 oldPacked, uint256 newPacked) internal pure returns (uint256) {
+        if (newPacked == oldPacked) return ONE_Q128;
+        if (oldPacked == 0) return ONE_Q128; // uninitialized snapshot => assume "no change"
+
+        uint256 oldEpoch = oldPacked >> _EARMARK_INDEX_BITS;
+        uint256 newEpoch = newPacked >> _EARMARK_INDEX_BITS;
+
+        // Epoch advanced => old unearmarked was fully earmarked at some point.
+        if (newEpoch > oldEpoch) return 0;
+
+        uint256 oldIdx = oldPacked & _EARMARK_INDEX_MASK;
+        uint256 newIdx = newPacked & _EARMARK_INDEX_MASK;
+
+        if (oldIdx == 0) return 0;
+
+        return FixedPointMath.divQ128(newIdx, oldIdx);
+    }
+
     /// @dev Computes redemption survival ratio between two redemption weights.
     ///      Uses division when survivals are representable, and falls back to delta-weight
     ///      when SurvivalFromWeight() underflows to 0 for both endpoints.
@@ -1646,76 +1711,44 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return FixedPointMath.divQ128(newIndex, oldIndex);
     }
 
-    /// @inheritdoc IAlchemistV3State
-    function calculateLiquidation(
-        uint256 collateral,
-        uint256 debt,
-        uint256 targetCollateralization,
-        uint256 alchemistCurrentCollateralization,
-        uint256 alchemistMinimumCollateralization,
-        uint256 feeBps
-    ) public pure returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee) {
-        if (debt >= collateral) {
-            outsourcedFee = (debt * feeBps) / BPS;
-            // fully liquidate debt if debt is greater than collateral
-            return (collateral, debt, 0, outsourcedFee);
+    /// @dev Simulates one uncommitted earmark window using current on-chain state.
+    /// @return earmarkWeightCopy Simulated earmark packed weight after the window.
+    /// @return effectiveEarmarked The additional earmarked debt from this simulated window.
+    function _simulateUnrealizedEarmark() internal view returns (uint256 earmarkWeightCopy, uint256 effectiveEarmarked) {
+        earmarkWeightCopy = _earmarkWeight;
+        if (block.number <= lastEarmarkBlock || totalDebt == 0) return (earmarkWeightCopy, 0);
+
+        uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
+
+        // simulate pending cover
+        uint256 pendingCover = _pendingCoverShares;
+        if (transmuterBalance > lastTransmuterTokenBalance) {
+            pendingCover += (transmuterBalance - lastTransmuterTokenBalance);
         }
 
-        if (alchemistCurrentCollateralization < alchemistMinimumCollateralization) {
-            outsourcedFee = (debt * feeBps) / BPS;
-            // fully liquidate debt in high ltv global environment
-            return (debt, debt, 0, outsourcedFee);
+        // simulate earmark amount for this window
+        uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
+
+        // apply cover the same way
+        uint256 coverInDebt = convertYieldTokensToDebt(pendingCover);
+        if (amount != 0 && coverInDebt != 0) {
+            uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
+            amount -= usedDebt;
         }
 
-        // fee is taken from surplus = collateral - debt
-        uint256 surplus = collateral > debt ? collateral - debt : 0;
+        uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
+        if (amount > liveUnearmarked) amount = liveUnearmarked;
+        if (amount == 0 || liveUnearmarked == 0) return (earmarkWeightCopy, 0);
 
-        fee = (surplus * feeBps) / BPS;
+        // ratioWanted = (liveUnearmarked - amount) / liveUnearmarked
+        uint256 ratioWanted =
+            (amount == liveUnearmarked) ? 0 : FixedPointMath.divQ128(liveUnearmarked - amount, liveUnearmarked);
 
-        // collateral remaining for margin‐restore calc
-        uint256 adjCollat = collateral - fee;
-        // compute m*d  (both plain units)
-        uint256 md = (targetCollateralization * debt) / FIXED_POINT_SCALAR;
-        // if md <= adjCollat, nothing to liquidate
-        if (md <= adjCollat) {
-            return (0, 0, 0, 0);
-        }
+        (uint256 packedNew, uint256 ratioApplied,,,) = _simulateEarmarkPackedUpdate(earmarkWeightCopy, ratioWanted);
+        earmarkWeightCopy = packedNew;
 
-        // numerator = md - adjCollat
-        uint256 num = md - adjCollat;
-
-        // denom = m - 1  =>  (targetCollateralization - FIXED_POINT_SCALAR)/FIXED_POINT_SCALAR
-        uint256 denom = targetCollateralization - FIXED_POINT_SCALAR;
-
-        debtToBurn = (num * FIXED_POINT_SCALAR) / denom;
-
-        // gross collateral seize = net + fee
-        grossCollateralToSeize = debtToBurn + fee;
-    }
-
-    function _redEpoch(uint256 packed) private pure returns (uint256) {
-        return packed >> _REDEMPTION_INDEX_BITS;
-    }
-
-    function _redIndex(uint256 packed) private pure returns (uint256) {
-        return packed & _REDEMPTION_INDEX_MASK;
-    }
-
-    function _packRed(uint256 epoch, uint256 index) private pure returns (uint256) {
-        // index must fit in 129 bits and be <= ONE_Q128
-        return (epoch << _REDEMPTION_INDEX_BITS) | index;
-    }
-
-    function _earEpoch(uint256 packed) private pure returns (uint256) {
-        return packed >> _EARMARK_INDEX_BITS;
-    }
-
-    function _earIndex(uint256 packed) private pure returns (uint256) {
-        return packed & _EARMARK_INDEX_MASK;
-    }
-
-    function _packEar(uint256 epoch, uint256 index) private pure returns (uint256) {
-        return (epoch << _EARMARK_INDEX_BITS) | index;
+        uint256 newUnearmarked = FixedPointMath.mulQ128(liveUnearmarked, ratioApplied);
+        effectiveEarmarked = liveUnearmarked - newUnearmarked;
     }
 
     /// @dev Simulates the packed earmark update and returns the applied survival ratio.
@@ -1762,62 +1795,28 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         ratioApplied = epochAdvanced ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
     }
 
-    // Survival ratio of *unearmarked* exposure between two packed earmark states.
-    function _earmarkSurvivalRatio(uint256 oldPacked, uint256 newPacked) internal pure returns (uint256) {
-        if (newPacked == oldPacked) return ONE_Q128;
-        if (oldPacked == 0) return ONE_Q128; // uninitialized snapshot => assume "no change"
-
-        uint256 oldEpoch = oldPacked >> _EARMARK_INDEX_BITS;
-        uint256 newEpoch = newPacked >> _EARMARK_INDEX_BITS;
-
-        // Epoch advanced => old unearmarked was fully earmarked at some point.
-        if (newEpoch > oldEpoch) return 0;
-
-        uint256 oldIdx = oldPacked & _EARMARK_INDEX_MASK;
-        uint256 newIdx = newPacked & _EARMARK_INDEX_MASK;
-
-        if (oldIdx == 0) return 0;
-
-        return FixedPointMath.divQ128(newIdx, oldIdx);
+    // Bitwise helpers
+    function _redEpoch(uint256 packed) private pure returns (uint256) {
+        return packed >> _REDEMPTION_INDEX_BITS;
     }
 
-    /// @dev Simulates one uncommitted earmark window using current on-chain state.
-    /// @return earmarkWeightCopy Simulated earmark packed weight after the window.
-    /// @return effectiveEarmarked The additional earmarked debt from this simulated window.
-    function _simulateUnrealizedEarmark() internal view returns (uint256 earmarkWeightCopy, uint256 effectiveEarmarked) {
-        earmarkWeightCopy = _earmarkWeight;
-        if (block.number <= lastEarmarkBlock || totalDebt == 0) return (earmarkWeightCopy, 0);
+    function _redIndex(uint256 packed) private pure returns (uint256) {
+        return packed & _REDEMPTION_INDEX_MASK;
+    }
 
-        uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
+    function _packRed(uint256 epoch, uint256 index) private pure returns (uint256) {
+        return (epoch << _REDEMPTION_INDEX_BITS) | index;
+    }
 
-        // simulate pending cover
-        uint256 pendingCover = _pendingCoverShares;
-        if (transmuterBalance > lastTransmuterTokenBalance) {
-            pendingCover += (transmuterBalance - lastTransmuterTokenBalance);
-        }
+    function _earEpoch(uint256 packed) private pure returns (uint256) {
+        return packed >> _EARMARK_INDEX_BITS;
+    }
 
-        // simulate earmark amount for this window
-        uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
+    function _earIndex(uint256 packed) private pure returns (uint256) {
+        return packed & _EARMARK_INDEX_MASK;
+    }
 
-        // apply cover the same way
-        uint256 coverInDebt = convertYieldTokensToDebt(pendingCover);
-        if (amount != 0 && coverInDebt != 0) {
-            uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
-            amount -= usedDebt;
-        }
-
-        uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
-        if (amount > liveUnearmarked) amount = liveUnearmarked;
-        if (amount == 0 || liveUnearmarked == 0) return (earmarkWeightCopy, 0);
-
-        // ratioWanted = (liveUnearmarked - amount) / liveUnearmarked
-        uint256 ratioWanted =
-            (amount == liveUnearmarked) ? 0 : FixedPointMath.divQ128(liveUnearmarked - amount, liveUnearmarked);
-
-        (uint256 packedNew, uint256 ratioApplied,,,) = _simulateEarmarkPackedUpdate(earmarkWeightCopy, ratioWanted);
-        earmarkWeightCopy = packedNew;
-
-        uint256 newUnearmarked = FixedPointMath.mulQ128(liveUnearmarked, ratioApplied);
-        effectiveEarmarked = liveUnearmarked - newUnearmarked;
+    function _packEar(uint256 epoch, uint256 index) private pure returns (uint256) {
+        return (epoch << _EARMARK_INDEX_BITS) | index;
     }
 }
