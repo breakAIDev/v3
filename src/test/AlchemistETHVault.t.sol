@@ -32,21 +32,27 @@ import {IWETH} from "../interfaces/IWETH.sol";
 import {VmSafe} from "../../lib/forge-std/src/Vm.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {AbstractFeeVault} from "../adapters/AbstractFeeVault.sol";
+import {MockWETH} from "./mocks/MockWETH.sol";
 
 contract AlchemistETHVaultTest is Test {
     AlchemistETHVault public ethVault;
+    MockWETH public wethContract;
     address public owner = address(1);
     address public alchemist = address(2);
     address public user = address(3);
     address public otherUser = address(4);
-    address public weth = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2); // mainnent weth example
+    address public weth;
 
     uint256 public constant AMOUNT = 100 * 10 ** 18;
 
     function setUp() external {
+        // Deploy mock WETH
+        wethContract = new MockWETH();
+        weth = address(wethContract);
+
         // Deploy vault
         vm.prank(owner);
-        ethVault = new AlchemistETHVault(address(weth), alchemist, owner);
+        ethVault = new AlchemistETHVault(weth, alchemist, owner);
     }
 
     // === CONSTRUCTOR TESTS ===
@@ -184,6 +190,15 @@ contract AlchemistETHVaultTest is Test {
 
         // Verify the vault received the ETH
         assertEq(ethVault.totalDeposits(), amount);
+    }
+
+    function testWithdrawETHRevertsZeroRecipient() public {
+        uint256 amount = 1 ether;
+        vm.deal(address(ethVault), amount);
+
+        vm.prank(address(alchemist));
+        vm.expectRevert(AbstractFeeVault.ZeroAddress.selector);
+        ethVault.withdraw(address(0), amount);
     }
 
     function testDepositWETH() public {

@@ -66,6 +66,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     uint256 public globalMinimumCollateralization;
 
     /// @inheritdoc IAlchemistV3State
+    uint256 public liquidationTargetCollateralization;
+
+    /// @inheritdoc IAlchemistV3State
     uint256 public totalDebt;
 
     /// @inheritdoc IAlchemistV3State
@@ -179,6 +182,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         minimumCollateralization = params.minimumCollateralization;
         globalMinimumCollateralization = params.globalMinimumCollateralization;
         collateralizationLowerBound = params.collateralizationLowerBound;
+        _checkArgument(params.liquidationTargetCollateralization >= params.minimumCollateralization);
+        liquidationTargetCollateralization = params.liquidationTargetCollateralization;
         admin = params.admin;
         transmuter = params.transmuter;
         protocolFee = params.protocolFee;
@@ -197,9 +202,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _earmarkEpochStartRedemptionWeight[0] = _redemptionWeight;
         _earmarkEpochStartSurvivalAccumulator[0] = _survivalAccumulator;
     }
-
-    /// @notice Emitted when a new Position NFT is minted.
-    event AlchemistV3PositionNFTMinted(address indexed to, uint256 indexed tokenId);
 
     /// @notice Sets the NFT position token, callable by admin.
     function setAlchemistPositionNFT(address nft) external onlyAdmin {
@@ -308,6 +310,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // cannot exceed global minimum
         minimumCollateralization = value > globalMinimumCollateralization ? globalMinimumCollateralization : value;
 
+        // cannot exceed liquidation target
+        if (minimumCollateralization > liquidationTargetCollateralization) {
+            minimumCollateralization = liquidationTargetCollateralization;
+        }
+
         emit MinimumCollateralizationUpdated(value);
     }
 
@@ -324,6 +331,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkArgument(value >= FIXED_POINT_SCALAR);
         collateralizationLowerBound = value;
         emit CollateralizationLowerBoundUpdated(value);
+    }
+
+    /// @inheritdoc IAlchemistV3AdminActions
+    function setLiquidationTargetCollateralization(uint256 value) external onlyAdmin {
+        _checkArgument(value > FIXED_POINT_SCALAR);
+        _checkArgument(value >= minimumCollateralization);
+        _checkArgument(value > collateralizationLowerBound);
+        _checkArgument(value <= 2 * FIXED_POINT_SCALAR);
+        liquidationTargetCollateralization = value;
+        emit LiquidationTargetCollateralizationUpdated(value);
     }
 
     /// @inheritdoc IAlchemistV3AdminActions
@@ -394,6 +411,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3State
     function totalValue(uint256 tokenId) public view returns (uint256) {
         return _totalCollateralValue(tokenId, true);
+    }
+
+    /// @inheritdoc IAlchemistV3State
+    function getUnrealizedCumulativeEarmarked() external view returns (uint256) {
+        if (totalDebt == 0) return 0;
+        (, uint256 effectiveEarmarked) = _simulateUnrealizedEarmark();
+        return cumulativeEarmarked + effectiveEarmarked;
     }
 
     /// @inheritdoc IAlchemistV3Actions
@@ -996,6 +1020,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked, false);
+            (feeInYield, feeInUnderlying) = _calculateRepaymentFee(accountId, repaidAmountInYield);
             // Final safety check after all deductions
             if (account.collateralBalance == 0 && account.debt > 0) {
                 uint256 debtToClear = _clearableDebt(account.debt);
@@ -1007,12 +1032,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
         if (_isAccountHealthy(accountId, false)) {
-            // Repayment fee only applies when force-repay fully resolves liquidation.
-            if (repaidAmountInYield > 0) {
-                (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
-            }
-
             if (feeInYield > 0) {
+                feeInYield = _subCollateralBalance(feeInYield, accountId); // clamps to available balance
                 TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
             } else if (feeInUnderlying > 0) {
                 feeInUnderlying = _payWithFeeVault(feeInUnderlying);
@@ -1030,6 +1051,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param amountInUnderlying The amount of underlying tokens to pay
     /// @return actual amount paid based on the vault balance
     function _payWithFeeVault(uint256 amountInUnderlying) internal returns (uint256) {
+        if (alchemistFeeVault == address(0)) return 0;
         uint256 vaultBalance = IFeeVault(alchemistFeeVault).totalDeposits();
         if (vaultBalance > 0) {
             uint256 adjustedAmount = amountInUnderlying > vaultBalance ? vaultBalance : amountInUnderlying;
@@ -1069,7 +1091,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         (uint256 liquidationAmount, uint256 debtToBurn, uint256 baseFee, uint256 outsourcedFee) = calculateLiquidation(
             collateralInUnderlying,
             debt,
-            minimumCollateralization,
+            liquidationTargetCollateralization,
             normalizeUnderlyingTokensToDebt(_getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / totalDebt,
             globalMinimumCollateralization,
             liquidatorFee
@@ -1154,19 +1176,19 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return (amountLiquidated, feeInYield, feeInUnderlying);
     }
 
-    /// @dev Handles repayment fee calculation and account deduction
-    /// @param accountId The tokenId of the account to force a repayment on.
+ 
+    /// @dev Handles repayment fee calculation.
+    /// @param accountId The tokenId of the account to compute the repayment fee for.
     /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
     /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
     /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
-    function _resolveRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal returns (uint256 feeInYield, uint256 feeInUnderlying) {
+    function _calculateRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal view returns (uint256 feeInYield, uint256 feeInUnderlying) {
         Account storage account = _accounts[accountId];
         uint256 debtInYield = convertDebtTokensToYield(account.debt);
         uint256 surplus = account.collateralBalance > debtInYield ? account.collateralBalance - debtInYield : 0;
         if(surplus > 0){
-            // calculate repayment fee and deduct from account
-            uint256 targetFee = surplus * repaymentFee / BPS;
-            feeInYield = _subCollateralBalance(targetFee, accountId);
+            // calculate repayment fee
+            feeInYield = surplus * repaymentFee / BPS;
         } else {
             uint256 targetFee = repaidAmountInYield * repaymentFee / BPS;
             feeInUnderlying = convertYieldTokensToUnderlying(targetFee);
@@ -1757,12 +1779,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (oldIdx == 0) return 0;
 
         return FixedPointMath.divQ128(newIdx, oldIdx);
-    }
-
-    function getUnrealizedCumulativeEarmarked() external view returns (uint256) {
-        if (totalDebt == 0) return 0;
-        (, uint256 effectiveEarmarked) = _simulateUnrealizedEarmark();
-        return cumulativeEarmarked + effectiveEarmarked;
     }
 
     /// @dev Simulates one uncommitted earmark window using current on-chain state.

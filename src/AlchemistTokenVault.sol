@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./base/Errors.sol";
 import "./adapters/AbstractFeeVault.sol";
 
@@ -11,6 +12,7 @@ import "./adapters/AbstractFeeVault.sol";
  * but only authorized parties to withdraw.
  */
 contract AlchemistTokenVault is AbstractFeeVault {
+    using SafeERC20 for IERC20;
     /**
      * @notice Constructor initializes the token vault
      * @param _token The ERC20 token managed by this vault
@@ -25,7 +27,7 @@ contract AlchemistTokenVault is AbstractFeeVault {
      */
     function deposit(uint256 amount) external {
         _checkNonZeroAmount(amount);
-        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         emit Deposited(msg.sender, amount);
     }
 
@@ -37,8 +39,7 @@ contract AlchemistTokenVault is AbstractFeeVault {
     function withdraw(address recipient, uint256 amount) external override onlyAuthorized {
         _checkNonZeroAddress(recipient);
         _checkNonZeroAmount(amount);
-
-        IERC20(token).transfer(recipient, amount);
+        IERC20(token).safeTransfer(recipient, amount);
         emit Withdrawn(recipient, amount);
     }
 

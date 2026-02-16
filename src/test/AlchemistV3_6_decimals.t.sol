@@ -13,6 +13,7 @@ import {AlchemistV3} from "../AlchemistV3.sol";
 import {AlchemicTokenV3} from "../test/mocks/AlchemicTokenV3.sol";
 import {Transmuter} from "../Transmuter.sol";
 import {AlchemistV3Position} from "../AlchemistV3Position.sol";
+import {AlchemistV3PositionRenderer} from "../AlchemistV3PositionRenderer.sol";
 import {Whitelist} from "../utils/Whitelist.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
 import {TestYieldToken} from "./mocks/TestYieldToken.sol";
@@ -210,6 +211,7 @@ contract AlchemistV3Test is Test {
             minimumCollateralization: minimumCollateralization,
             collateralizationLowerBound: 1_052_631_578_950_000_000, // 1.05 collateralization
             globalMinimumCollateralization: 1_111_111_111_111_111_111, // 1.1
+            liquidationTargetCollateralization: uint256(1e36) / 88e16, // ~113.63% (88% LTV)
             transmuter: address(transmuterLogic),
             protocolFee: 0,
             protocolFeeReceiver: protocolFeeReceiver,
@@ -232,7 +234,8 @@ contract AlchemistV3Test is Test {
         transmuterLogic.setAlchemist(address(alchemist));
         transmuterLogic.setDepositCap(uint256(type(int256).max));
 
-        alchemistNFT = new AlchemistV3Position(address(alchemist));
+        alchemistNFT = new AlchemistV3Position(address(alchemist), alOwner);
+        alchemistNFT.setMetadataRenderer(address(new AlchemistV3PositionRenderer()));
         alchemist.setAlchemistPositionNFT(address(alchemistNFT));
 
         alchemistFeeVault = new AlchemistTokenVault(address(vault.asset()), address(alchemist), alOwner);
