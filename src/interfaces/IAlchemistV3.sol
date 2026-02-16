@@ -17,6 +17,8 @@ struct AlchemistInitializationParams {
     uint256 globalMinimumCollateralization;
     // The minimum collateralization for liquidation eligibility. between 1 and minimumCollateralization inclusive.
     uint256 collateralizationLowerBound;
+    // The target collateralization ratio to restore accounts to after liquidation. Must be >= minimumCollateralization.
+    uint256 liquidationTargetCollateralization;
     // The initial transmuter or transmuter buffer.
     address transmuter;
     // The fee on user debt paid to the protocol.
@@ -419,6 +421,15 @@ interface IAlchemistV3AdminActions {
     /// @param value The new collateralization lower bound ratio.
     function setCollateralizationLowerBound(uint256 value) external;
 
+    /// @notice Set the liquidation target collateralization ratio.
+    ///
+    /// @notice `msg.sender` must be the admin or this call will revert with an {Unauthorized} error.
+    ///
+    /// @notice Emits a {LiquidationTargetCollateralizationUpdated} event.
+    ///
+    /// @param value The new liquidation target collateralization ratio.
+    function setLiquidationTargetCollateralization(uint256 value) external;
+
     /// @notice Pause all future deposits in the Alchemist.
     ///
     /// @notice `msg.sender` must be the admin or guardian or this call will revert with an {Unauthorized} error.
@@ -498,6 +509,11 @@ interface IAlchemistV3Events {
     ///
     /// @param collateralizationLowerBound The updated collateralization lower bound.
     event CollateralizationLowerBoundUpdated(uint256 collateralizationLowerBound);
+
+    /// @notice Emitted when the liquidation target collateralization ratio is updated.
+    ///
+    /// @param liquidationTargetCollateralization The updated liquidation target collateralization.
+    event LiquidationTargetCollateralizationUpdated(uint256 liquidationTargetCollateralization);
 
     /// @notice Emitted when deposits are paused or unpaused in the alchemist.
     ///
@@ -729,6 +745,15 @@ interface IAlchemistV3State {
 
     ///  @notice Gets collaterlization level that will result in an account being eligible for partial liquidation
     function collateralizationLowerBound() external view returns (uint256 ratio);
+
+    /// @notice Gets the liquidation target collateralization ratio.
+    ///
+    /// @notice This is the collateralization ratio that accounts are restored to after liquidation.
+    ///
+    /// @dev The value returned is a 18 decimal fixed point integer.
+    ///
+    /// @return liquidationTargetCollateralization The liquidation target collateralization.
+    function liquidationTargetCollateralization() external view returns (uint256 liquidationTargetCollateralization);
 
     /// @dev Returns the debt value of `amount` yield tokens.
     ///

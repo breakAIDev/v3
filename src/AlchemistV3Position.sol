@@ -6,7 +6,7 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IAlchemistV3Position} from "./interfaces/IAlchemistV3Position.sol";
 import {IAlchemistV3} from "./interfaces/IAlchemistV3.sol";
-import {NFTMetadataGenerator} from "./libraries/NFTMetadataGenerator.sol";
+import {IMetadataRenderer} from "./interfaces/IMetadataRenderer.sol";
 
 /**
  * @title AlchemistV3Position
@@ -19,22 +19,29 @@ contract AlchemistV3Position is ERC721Enumerable {
     /// @notice The only address allowed to mint and burn position tokens.
     address public alchemist;
 
+    /// @notice The admin of the NFT contract, allowed to update the metadata renderer.
+    address public admin;
+
     /// @notice Counter used for generating unique token ids.
     uint256 private _currentTokenId;
 
-    // SVG colors
-    string private constant SVG_BG_COLOR = "#d4c3b7";
-    string private constant SVG_TEXT_COLOR = "#0a3a60";
-    string private constant SVG_ACCENT_COLOR = "#0a3a60";
+    /// @notice The external contract that generates tokenURI metadata.
+    address public metadataRenderer;
 
-    /// @notice An error which is used to indicate that the functioin call failed becasue the caller is not the alchemist
+    /// @notice An error which is used to indicate that the function call failed because the caller is not the alchemist
     error CallerNotAlchemist();
+
+    /// @notice An error which is used to indicate that the function call failed because the caller is not the admin
+    error CallerNotAdmin();
 
     /// @notice An error which is used to indicate that Alchemist set is the zero address
     error AlchemistZeroAddressError();
 
     /// @notice An error which is used to indicate that address minted to is the zero address
     error MintToZeroAddressError();
+
+    /// @notice An error which is used to indicate that the metadata renderer is not set
+    error MetadataRendererNotSet();
 
     /// @dev Modifier to restrict calls to only the authorized AlchemistV3 contract.
     modifier onlyAlchemist() {
@@ -45,15 +52,38 @@ contract AlchemistV3Position is ERC721Enumerable {
         _;
     }
 
+    /// @dev Modifier to restrict calls to only the admin.
+    modifier onlyAdmin() {
+        if (msg.sender != admin) {
+            revert CallerNotAdmin();
+        }
+
+        _;
+    }
+
     /**
-     * @notice Constructor that sets the Alchemist address and initializes the ERC721 token.
+     * @notice Constructor that sets the Alchemist address, admin, and initializes the ERC721 token.
      * @param alchemist_ The address of the Alchemist contract.
+     * @param admin_ The address of the admin allowed to update the metadata renderer.
      */
-    constructor(address alchemist_) ERC721("AlchemistV3Position", "ALCV3") {
+    constructor(address alchemist_, address admin_) ERC721("AlchemistV3Position", "ALCV3") {
         if (alchemist_ == address(0)) {
             revert AlchemistZeroAddressError();
         }
         alchemist = alchemist_;
+        admin = admin_;
+    }
+
+    /// @notice Sets or updates the metadata renderer. Only callable by the admin.
+    /// @param renderer The address of the new metadata renderer contract.
+    function setMetadataRenderer(address renderer) external onlyAdmin {
+        metadataRenderer = renderer;
+    }
+
+    /// @notice Transfers admin rights to a new address. Only callable by the current admin.
+    /// @param newAdmin The address of the new admin.
+    function setAdmin(address newAdmin) external onlyAdmin {
+        admin = newAdmin;
     }
 
     /**
@@ -84,7 +114,10 @@ contract AlchemistV3Position is ERC721Enumerable {
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         // revert if the token does not exist
         ERC721(address(this)).ownerOf(tokenId);
-        return NFTMetadataGenerator.generateTokenURI(tokenId, "Alchemist V3 Position");
+        if (metadataRenderer == address(0)) {
+            revert MetadataRendererNotSet();
+        }
+        return IMetadataRenderer(metadataRenderer).tokenURI(tokenId);
     }
 
     /**

@@ -8,6 +8,9 @@ contract InvariantBaseTest is InvariantsTest {
 
     uint256 internal immutable MAX_TEST_VALUE = 1e28;
 
+    uint256 public maxTokenIdMinted;
+    bytes32 internal constant POS_MINT_SIG = keccak256("AlchemistV3PositionNFTMinted(address,uint256)");
+
     constructor() {
         USER = makeAddr("User");
     }
@@ -36,7 +39,22 @@ contract InvariantBaseTest is InvariantsTest {
         _targetSender(makeAddr("Sender8"));
     }
 
+    function _updateMaxTokenIdFromLogs() internal {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            // Event is emitted by the Alchemist contract (NOT the NFT contract).
+            if (logs[i].emitter != address(alchemist)) continue;
+            if (logs[i].topics.length != 3) continue;
+            if (logs[i].topics[0] != POS_MINT_SIG) continue;
+
+            // topics[2] is the indexed tokenId
+            uint256 tokenId = uint256(logs[i].topics[2]);
+            if (tokenId > maxTokenIdMinted) maxTokenIdMinted = tokenId;
+        }
+    }
+
     function _deposit(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "deposit") {
+        vm.recordLogs();
         deal(mockVaultCollateral, onBehalf, amount);
         vm.startPrank(onBehalf);
         IERC20(mockVaultCollateral).approve(address(vault), amount * 2);
@@ -44,16 +62,22 @@ contract InvariantBaseTest is InvariantsTest {
 
         alchemist.deposit(amount, onBehalf, tokenId);
         vm.stopPrank();
+
+        _updateMaxTokenIdFromLogs();
+
+        _checkDebtInvariant("deposit");
     }
 
     function _borrow(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "borrow") {
         vm.prank(onBehalf);
         alchemist.mint(tokenId, amount, onBehalf);
+        _checkDebtInvariant("borrow");
     }
 
     function _withdraw(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "withdraw") {
         vm.prank(onBehalf);
         alchemist.withdraw(amount, onBehalf, tokenId);
+        _checkDebtInvariant("withdraw");
     }
 
     function _repay(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "repay") {
@@ -65,11 +89,13 @@ contract InvariantBaseTest is InvariantsTest {
 
         alchemist.repay(amount, tokenId);
         vm.stopPrank();
+        _checkDebtInvariant("repay");
     }
 
     function _burn(uint256 tokenId, uint256 amount, address onBehalf) internal logCall(onBehalf, "burn") {
         vm.prank(onBehalf);
         alchemist.burn(amount, tokenId);
+        _checkDebtInvariant("burn");
     }
 
     function _stake(uint256 amount, address onBehalf) internal logCall(onBehalf, "stake") {
@@ -78,13 +104,17 @@ contract InvariantBaseTest is InvariantsTest {
         alToken.approve(address(transmuterLogic), amount);
         transmuterLogic.createRedemption(amount);
         vm.stopPrank();
+        _checkDebtInvariant("stake");
     }
 
     function _claim(uint256 tokenId, address onBehalf) internal logCall(onBehalf, "claim") {
-        vm.roll(block.number + (1000000));
+        vm.roll(block.number + (10000));
         vm.startPrank(onBehalf);
+        _logDebts("BEFORE_CLAIM");
         transmuterLogic.claimRedemption(tokenId);
+        _logDebts("AFTER_CLAIM");
         vm.stopPrank();
+        _checkDebtInvariant("claim");
     }
 
     /* HANDLERS */
@@ -189,5 +219,44 @@ contract InvariantBaseTest is InvariantsTest {
         if (onBehalf == address(0)) return;
 
         _claim(IERC721Enumerable(address(transmuterLogic)).tokenOfOwnerByIndex(onBehalf, 0), onBehalf);
+    }
+
+    function _sumDebts() internal view returns (uint256 total) {
+        address[] memory users = targetSenders();
+        for (uint256 i; i < users.length; ++i) {
+            uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(users[i], address(alchemistNFT));
+            if (tokenId != 0) {
+                (, uint256 debt,) = alchemist.getCDP(tokenId);
+                total += debt;
+            }
+        }
+    }
+
+    function _checkDebtInvariant(string memory where) internal view {
+        uint256 sum = _sumDebts();
+        uint256 tot = alchemist.totalDebt();
+        // if you want EXACT same condition as invariant:
+        if (sum > tot ? (sum - tot) > 1e12 : (tot - sum) > 1e12) {
+            console2.log("Debt invariant broke at:", where);
+            console2.log("sumDebts:", sum);
+            console2.log("totalDebt:", tot);
+            console2.log("delta:", sum > tot ? sum - tot : tot - sum);
+            revert("DebtInvariantBroken");
+        }
+    }
+
+    function _logDebts(string memory tag) internal {
+        uint256 sum;
+        for (uint256 i = 1; i <= 10; i++) {
+            (uint256 col, uint256 debt, uint256 credit) = alchemist.getCDP(i);
+            if (col == 0 && debt == 0 && credit == 0) continue;
+            console2.log(tag, "cdp", i);
+            console2.log("debt", debt);
+            console2.log("credit", credit);
+            console2.log("col", col);
+            sum += debt;
+        }
+        console2.log(tag, "sumDebts", sum);
+        console2.log(tag, "totalDebt", alchemist.totalDebt());
     }
 }

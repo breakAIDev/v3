@@ -13,6 +13,7 @@ import {AlchemistV3} from "../AlchemistV3.sol";
 import {AlchemicTokenV3} from "../test/mocks/AlchemicTokenV3.sol";
 import {Transmuter} from "../Transmuter.sol";
 import {AlchemistV3Position} from "../AlchemistV3Position.sol";
+import {AlchemistV3PositionRenderer} from "../AlchemistV3PositionRenderer.sol";
 
 import {Whitelist} from "../utils/Whitelist.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
@@ -78,6 +79,8 @@ contract AlchemistV3Test is Test {
     uint256 public repaymentFeeBPS = 100;
 
     uint256 public minimumCollateralization = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 9e17;
+    uint256 public liquidationTargetCollateralization = uint256(1e36) / 88e16; // ~113.63% (88% LTV)
+
 
     // ----- Variables for deposits & withdrawals -----
 
@@ -225,6 +228,7 @@ contract AlchemistV3Test is Test {
             minimumCollateralization: minimumCollateralization,
             collateralizationLowerBound: 1_052_631_578_950_000_000, // 1.05 collateralization
             globalMinimumCollateralization: 1_111_111_111_111_111_111, // 1.1
+            liquidationTargetCollateralization: liquidationTargetCollateralization,
             transmuter: address(transmuterLogic),
             protocolFee: 0,
             protocolFeeReceiver: protocolFeeReceiver,
@@ -247,7 +251,8 @@ contract AlchemistV3Test is Test {
         transmuterLogic.setAlchemist(address(alchemist));
         transmuterLogic.setDepositCap(uint256(type(int256).max));
 
-        alchemistNFT = new AlchemistV3Position(address(alchemist));
+        alchemistNFT = new AlchemistV3Position(address(alchemist), alOwner);
+        alchemistNFT.setMetadataRenderer(address(new AlchemistV3PositionRenderer()));
         alchemist.setAlchemistPositionNFT(address(alchemistNFT));
 
         alchemistFeeVault = new AlchemistTokenVault(address(vault.asset()), address(alchemist), alOwner);
@@ -466,7 +471,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -620,6 +625,45 @@ contract AlchemistV3Test is Test {
         vm.stopPrank();
     }
 
+    function testSetLiquidationTargetCollateralization_Success() external {
+        // Set to a valid value between minimumCollateralization and 2x
+        uint256 newTarget = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 85e16; // ~117.6% (85% LTV)
+        vm.startPrank(alOwner);
+        alchemist.setLiquidationTargetCollateralization(newTarget);
+        assertEq(alchemist.liquidationTargetCollateralization(), newTarget);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_Below_MinimumCollateralization() external {
+        // Value below minimumCollateralization should revert
+        uint256 belowMinimum = minimumCollateralization - 1;
+        vm.startPrank(alOwner);
+        vm.expectRevert(IllegalArgument.selector);
+        alchemist.setLiquidationTargetCollateralization(belowMinimum);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_Below_One() external {
+        vm.startPrank(alOwner);
+        vm.expectRevert(IllegalArgument.selector);
+        alchemist.setLiquidationTargetCollateralization(FIXED_POINT_SCALAR);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_Above_Upper_Bound() external {
+        // Value above 2x should revert
+        uint256 aboveUpperBound = 2 * FIXED_POINT_SCALAR + 1;
+        vm.startPrank(alOwner);
+        vm.expectRevert(IllegalArgument.selector);
+        alchemist.setLiquidationTargetCollateralization(aboveUpperBound);
+        vm.stopPrank();
+    }
+
+    function testSetLiquidationTargetCollateralization_Revert_NotAdmin() external {
+        vm.expectRevert();
+        alchemist.setLiquidationTargetCollateralization(liquidationTargetCollateralization);
+    }
+
     function testSetNewAdmin() external {
         vm.prank(alOwner);
         alchemist.setPendingAdmin(address(0xbeef));
@@ -697,10 +741,10 @@ contract AlchemistV3Test is Test {
     }
 
     function testSetMinCollateralization_Variable_Collateralization(uint256 collateralization) external {
-        vm.assume(collateralization >= alchemist.minimumCollateralization());
-        vm.assume(collateralization < 20e18);
+        collateralization = bound(collateralization, alchemist.minimumCollateralization(), 2 * FIXED_POINT_SCALAR);
         vm.startPrank(address(0xdead));
         alchemist.setGlobalMinimumCollateralization(collateralization);
+        alchemist.setLiquidationTargetCollateralization(collateralization);
         alchemist.setMinimumCollateralization(collateralization);
         vm.assertApproxEqAbs(alchemist.minimumCollateralization(), collateralization, minimumDepositOrWithdrawalLoss);
         vm.stopPrank();
@@ -1193,7 +1237,7 @@ contract AlchemistV3Test is Test {
         // a single position nft would have been minted to address(0xbeef)
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
 
-        uint256 mintAmount = ((alchemist.totalValue(tokenId) * FIXED_POINT_SCALAR) / collateralization) + 1;
+        uint256 mintAmount = ((alchemist.totalValue(tokenId) * FIXED_POINT_SCALAR) / collateralization);
         alchemist.mint(tokenId, mintAmount, address(0xbeef));
         vm.stopPrank();
     }
@@ -1972,7 +2016,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2013,6 +2057,130 @@ contract AlchemistV3Test is Test {
             IERC20(address(vault)).balanceOf(address(transmuterLogic)),
             transmuterPreviousBalance + expectedLiquidationAmountInYield - expectedBaseFeeInYield,
             1e18
+        );
+    }
+
+    function testLiquidate_Restores_To_LiquidationTargetCollateralization() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global alchemist collateralization stays above the minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        // Manipulate yield token price to push account into liquidation zone (5.9% increase in yield token supply)
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 590 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Liquidate
+        vm.startPrank(externalUser);
+        alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // Verify post-liquidation collateralization ratio matches liquidationTargetCollateralization
+        (uint256 postCollateral, uint256 postDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        // This is a partial liquidation — debt must remain
+        assertGt(postDebt, 0, "Partial liquidation should leave remaining debt");
+        assertGt(postCollateral, 0, "Partial liquidation should leave remaining collateral");
+
+        uint256 postCollateralInUnderlying = alchemist.totalValue(tokenIdFor0xBeef);
+        uint256 postCollateralizationRatio = postCollateralInUnderlying * FIXED_POINT_SCALAR / postDebt;
+
+        // Post-liquidation CR should match liquidationTargetCollateralization (~113.63%), not minimumCollateralization (~111.11%)
+        vm.assertApproxEqAbs(
+            postCollateralizationRatio,
+            alchemist.liquidationTargetCollateralization(),
+            1e16, // 0.01 tolerance for rounding
+            "Post-liquidation CR should match liquidationTargetCollateralization"
+        );
+
+        // Explicitly verify it's higher than minimumCollateralization
+        assertGt(
+            postCollateralizationRatio,
+            alchemist.minimumCollateralization(),
+            "Post-liquidation CR should be above minimumCollateralization"
+        );
+    }
+
+    function testLiquidate_Aggressive_Target_60_Percent_LTV_Nearly_Full_Liquidation() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Set aggressive liquidation target: 60% LTV (~166.67% CR)
+        uint256 aggressiveTarget = uint256(FIXED_POINT_SCALAR * FIXED_POINT_SCALAR) / 60e16;
+        vm.prank(alOwner);
+        alchemist.setLiquidationTargetCollateralization(aggressiveTarget);
+        assertEq(alchemist.liquidationTargetCollateralization(), aggressiveTarget);
+
+        // Ensure global alchemist collateralization stays above the minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        (uint256 prevCollateral, uint256 prevDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        // Manipulate yield token price to push account into liquidation zone (5.9% increase in yield token supply)
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 590 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Liquidate
+        vm.startPrank(externalUser);
+        alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        (uint256 postCollateral, uint256 postDebt,) = alchemist.getCDP(tokenIdFor0xBeef);
+
+        // This is a partial liquidation — debt and collateral must remain
+        assertGt(postDebt, 0, "Partial liquidation should leave remaining debt");
+        assertGt(postCollateral, 0, "Partial liquidation should leave remaining collateral");
+
+        uint256 postCollateralInUnderlying = alchemist.totalValue(tokenIdFor0xBeef);
+        uint256 postCollateralizationRatio = postCollateralInUnderlying * FIXED_POINT_SCALAR / postDebt;
+
+        // Post-liquidation CR should match the aggressive target (~166.67%)
+        vm.assertApproxEqAbs(
+            postCollateralizationRatio,
+            aggressiveTarget,
+            1e16,
+            "Post-liquidation CR should match aggressive 60% LTV target"
+        );
+
+        // Verify the vast majority of the position was liquidated (>90% of debt burned)
+        assertGt(
+            prevDebt - postDebt,
+            prevDebt * 90 / 100,
+            "Aggressive target should liquidate >90% of debt"
+        );
+
+        // Verify the vast majority of collateral was seized
+        assertGt(
+            prevCollateral - postCollateral,
+            prevCollateral * 85 / 100,
+            "Aggressive target should seize >85% of collateral"
         );
     }
 
@@ -2057,7 +2225,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn,,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2125,7 +2293,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2167,6 +2335,48 @@ contract AlchemistV3Test is Test {
         );
     }
 
+    function testLiquidate_Bad_Debt_With_Unset_FeeVault_Returns_Zero_FeeInUnderlying() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global alchemist collateralization stays above minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        // Create bad debt: increase yield token supply by 12% while keeping underlying unchanged
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1200 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Unset the fee vault by writing address(0) to storage slot 1 (alchemistFeeVault)
+        vm.store(address(alchemist), bytes32(uint256(1)), bytes32(0));
+        assertEq(alchemist.alchemistFeeVault(), address(0));
+
+        // Liquidate with no fee vault set
+        vm.startPrank(externalUser);
+        uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        (, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // _payWithFeeVault should return 0 when alchemistFeeVault is address(0)
+        assertEq(feeInUnderlying, 0);
+        // feeInYield should be 0 in bad debt scenario (all collateral seized)
+        assertEq(feeInYield, 0);
+        // Liquidator should not have received any underlying tokens
+        assertEq(IERC20(vault.asset()).balanceOf(address(externalUser)), liquidatorPrevUnderlyingBalance);
+    }
+
     function testLiquidate_Full_Liquidation_Globally_Undercollateralized() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
@@ -2203,7 +2413,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn,,) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2429,7 +2639,7 @@ contract AlchemistV3Test is Test {
         assertTrue(size <= 24_576, "Contract too large");
     }
 
-    function testAlchemistV3TokenUri() public {
+    function testAlchemistV3PositionTokenUri() public {
         uint256 amount = 100e18;
         vm.startPrank(address(0xbeef));
         SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
@@ -2456,6 +2666,93 @@ contract AlchemistV3Test is Test {
         // revert if the token does not exist
         vm.expectRevert();
         alchemistNFT.tokenURI(2);
+    }
+
+    function testAlchemistV3PositionSetMetadataRenderer_PostDeployment() public {
+        uint256 amount = 100e18;
+
+        // Mint a position so we have a token to test tokenURI against
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        alchemist.deposit(amount, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        vm.stopPrank();
+
+        // Capture the original tokenURI
+        string memory originalUri = alchemistNFT.tokenURI(tokenId);
+
+        // Deploy a new renderer and swap it in
+        AlchemistV3PositionRenderer newRenderer = new AlchemistV3PositionRenderer();
+        address originalRenderer = alchemistNFT.metadataRenderer();
+
+        vm.prank(alOwner);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+
+        // Verify the renderer address was updated
+        assertEq(alchemistNFT.metadataRenderer(), address(newRenderer));
+        assertTrue(alchemistNFT.metadataRenderer() != originalRenderer, "Renderer address should have changed");
+
+        // Verify tokenURI still works after renderer swap
+        string memory newUri = alchemistNFT.tokenURI(tokenId);
+        assertEq(
+            AlchemistNFTHelper.slice(newUri, 0, 29),
+            "data:application/json;base64,",
+            "URI should start with data:application/json;base64, after renderer swap"
+        );
+
+        // Since both renderers use the same NFTMetadataGenerator, output should match
+        assertEq(keccak256(bytes(newUri)), keccak256(bytes(originalUri)), "URI content should match with same renderer logic");
+    }
+
+    function testAlchemistV3PositionSetMetadataRenderer_RevertsForNonAdmin() public {
+        AlchemistV3PositionRenderer newRenderer = new AlchemistV3PositionRenderer();
+
+        // Non-admin should revert
+        vm.prank(address(0xbeef));
+        vm.expectRevert(AlchemistV3Position.CallerNotAdmin.selector);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+    }
+
+    function testAlchemistV3PositionSetAdmin_RevertsForNonAdmin() public {
+        vm.prank(address(0xbeef));
+        vm.expectRevert(AlchemistV3Position.CallerNotAdmin.selector);
+        alchemistNFT.setAdmin(address(0xbeef));
+    }
+
+    function testAlchemistV3PositionSetAdmin_TransfersAdminRights() public {
+        address newAdmin = address(0xbeef02);
+
+        vm.prank(alOwner);
+        alchemistNFT.setAdmin(newAdmin);
+        assertEq(alchemistNFT.admin(), newAdmin);
+
+        // Old admin can no longer set renderer
+        AlchemistV3PositionRenderer newRenderer = new AlchemistV3PositionRenderer();
+        vm.prank(alOwner);
+        vm.expectRevert(AlchemistV3Position.CallerNotAdmin.selector);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+
+        // New admin can set renderer
+        vm.prank(newAdmin);
+        alchemistNFT.setMetadataRenderer(address(newRenderer));
+        assertEq(alchemistNFT.metadataRenderer(), address(newRenderer));
+    }
+
+    function testAlchemistV3PositionTokenURI_RevertsWhenRendererNotSet() public {
+        // Set the renderer to address(0) to simulate no renderer
+        vm.prank(alOwner);
+        alchemistNFT.setMetadataRenderer(address(0));
+
+        // Mint a token
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), 100e18);
+        alchemist.deposit(100e18, address(0xbeef), 0);
+        uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        vm.stopPrank();
+
+        // tokenURI should revert because no renderer is set
+        vm.expectRevert(AlchemistV3Position.MetadataRendererNotSet.selector);
+        alchemistNFT.tokenURI(tokenId);
     }
 
     function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment() external {
@@ -2691,7 +2988,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
             collateralInUnderlyingForLiquidation,
             debtAfterRepayment,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -2741,6 +3038,67 @@ contract AlchemistV3Test is Test {
         vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether - expectedFeeInUnderlying);
     }
 
+    /// @notice Regression test: repayment fee must not be stranded when forced repayment
+    ///         does not restore health and _doLiquidation proceeds.
+    function testLiquidate_Earmarked_Repayment_Fee_Not_Stranded_When_Liquidation_Continues() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global collateralization stays above the minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        // 0xbeef opens a position at max borrow
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        uint256 mintAmount = alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization;
+        alchemist.mint(tokenIdFor0xBeef, mintAmount, address(0xbeef));
+        vm.stopPrank();
+
+        // Create transmuter redemption to start earmarking debt
+        vm.startPrank(anotherExternalUser);
+        SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
+        transmuterLogic.createRedemption(mintAmount);
+        vm.stopPrank();
+
+        // Advance ~5% through the transmutation period so only a small portion is earmarked
+        vm.roll(block.number + (5_256_000 * 5 / 100));
+
+        // Verify earmarked debt exists
+        (, uint256 prevDebt, uint256 earmarked) = alchemist.getCDP(tokenIdFor0xBeef);
+        require(earmarked > 0, "Must have earmarked debt");
+
+        // Apply a large price drop (50%) so forced repayment does NOT restore health
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 5000 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Capture accounting state before liquidation
+        uint256 mytBalanceBefore = IERC20(address(vault)).balanceOf(address(alchemist));
+        uint256 accountedBefore = alchemist.getTotalDeposited();
+        uint256 driftBefore = mytBalanceBefore - accountedBefore;
+
+        // Liquidate (forced repayment insufficient → _doLiquidation runs)
+        vm.startPrank(externalUser);
+        (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        vm.stopPrank();
+
+        // Capture accounting state after liquidation
+        uint256 mytBalanceAfter = IERC20(address(vault)).balanceOf(address(alchemist));
+        uint256 accountedAfter = alchemist.getTotalDeposited();
+        uint256 driftAfter = mytBalanceAfter - accountedAfter;
+
+        // The delta between actual MYT balance and tracked _mytSharesDeposited must not increase.
+        // If it increased, the repayment fee was deducted from accounting but never transferred out.
+        assertEq(driftAfter, driftBefore, "Repayment fee shares must not be stranded in the contract");
+    }
+
     function testLiquidate_Debt_Exceeds_Collateral_Shortfall_Absorbed_By_Healthy_Account() external {
         vm.startPrank(someWhale);
         IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
@@ -2779,7 +3137,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount,,,) = alchemist.calculateLiquidation(
             badCollateralAfterDrop,
             badInitialDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemist.normalizeUnderlyingTokensToDebt(alchemist.getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / alchemist.totalDebt(),
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -3676,7 +4034,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 debtToBurn, uint256 baseFee, uint256 outSourcedFee) = alchemist.calculateLiquidation(
             alchemist.totalValue(position.tokenId),
             position.debt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
@@ -4176,7 +4534,7 @@ contract AlchemistV3Test is Test {
         (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee, uint256 outsourcedFee) = alchemist.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
-            alchemist.minimumCollateralization(),
+            alchemist.liquidationTargetCollateralization(),
             alchemistCurrentCollateralization,
             alchemist.globalMinimumCollateralization(),
             liquidatorFeeBPS
