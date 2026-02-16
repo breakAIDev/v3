@@ -504,6 +504,17 @@ contract TransmuterTest is Test {
         assertEq(result, 0);
     }
 
+    function test_queryStake_OutOfBoundsStartBeyondDoubleSize_ReturnsZero() public {
+        // Build a small tree and then query far beyond its right boundary.
+        // Without clamping the left prefix index, Fenwick traversal can miss the terminal node
+        // and return a non-zero historical amount for an empty range.
+        graph.addStake(100, 25, 3);
+        assertEq(graph.size, 32, "Graph size should be 32 after stake");
+
+        int256 result = graph.queryStake(70, 70);
+        assertEq(result, 0);
+    }
+
     function testStakingGraph_Bounds_AcceptsDeltaMax() public {
         int256 deltaMax = (int256(1) << 111) - 1;
 

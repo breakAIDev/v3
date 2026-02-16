@@ -3071,7 +3071,7 @@ contract AlchemistV3Test is Test {
         uint256 totalValue = alchemist.totalValue(tokenIdFor0xBeef);
         require(totalValue < 1, "Position should be insolvent");
 
-        // should revert based on zero amount returned, and not because of an underflow
+        // Share price is forced to zero in this setup, so liquidate should short-circuit and revert.
         vm.expectRevert(IAlchemistV3Errors.LiquidationError.selector);
         alchemist.liquidate(tokenIdFor0xBeef);
     }
@@ -4374,6 +4374,239 @@ contract AlchemistV3Test is Test {
         assertLe(sumEarmarked, sumDebt);
     }
 
+    struct ReplayState {
+        uint256 collateral;
+        uint256 debt;
+        uint256 earmarked;
+        uint256 totalDebt;
+        uint256 cumulativeEarmarked;
+    }
+
+    struct PrecisionAggregate {
+        uint256 sumCollateral;
+        uint256 sumDebt;
+        uint256 sumEarmarked;
+        uint256 totalDebt;
+        uint256 cumulativeEarmarked;
+    }
+
+    /// @dev Cross-check stale sync math across many epoch crossings:
+    ///      path A syncs the account every cycle; path B leaves it stale and syncs once at the end.
+    ///      Results should match up to tiny rounding noise.
+    function test_Regression_StaleAccountManyEpochsMatchesReplayModel() external {
+        uint256 root = vm.snapshotState();
+        _assertStaleEpochReplayEquivalence(5);
+        vm.revertTo(root);
+        _assertStaleEpochReplayEquivalence(20);
+        vm.revertTo(root);
+        _assertStaleEpochReplayEquivalence(100);
+    }
+
+    /// @dev Precision fairness check:
+    ///      Compare one large position vs many split positions under the same global
+    ///      earmark/redeem path. Aggregate outcomes should match up to dust.
+    function test_Regression_PrecisionFairness_SplitVsUnsplit() external {
+        uint256 root = vm.snapshotState();
+
+        uint256 comparedDeposit = 120_000e18;
+        uint256 comparedDebt = 30_000e18;
+        uint256 controlDeposit = 10_000e18;
+        uint256 controlDebt = 1_000e18;
+        uint256 steps = 180;
+        uint256 earmarkBps = 2_500; // 25% of live unearmarked each step
+        uint256 redeemBps = 2_000; // 20% of live earmarked each step
+
+        // Path A: one large position.
+        uint256[] memory unsplitIds = new uint256[](1);
+        unsplitIds[0] = _openPrecisionPosition(address(0xbeef), comparedDeposit, comparedDebt);
+        uint256 unsplitControlId = _openPrecisionPosition(anotherExternalUser, controlDeposit, controlDebt);
+
+        _runPrecisionFairnessStress(unsplitIds, unsplitControlId, steps, earmarkBps, redeemBps);
+        PrecisionAggregate memory unsplit = _capturePrecisionAggregate(unsplitIds);
+
+        vm.revertTo(root);
+
+        // Path B: split the same exposure across 4 accounts.
+        address[] memory splitUsers = new address[](4);
+        splitUsers[0] = address(0xbeef);
+        splitUsers[1] = address(0xdad);
+        splitUsers[2] = externalUser;
+        splitUsers[3] = yetAnotherExternalUser;
+
+        uint256[] memory splitIds = new uint256[](4);
+        uint256 perDeposit = comparedDeposit / splitUsers.length;
+        uint256 perDebt = comparedDebt / splitUsers.length;
+        for (uint256 i = 0; i < splitUsers.length; ++i) {
+            splitIds[i] = _openPrecisionPosition(splitUsers[i], perDeposit, perDebt);
+        }
+        uint256 splitControlId = _openPrecisionPosition(anotherExternalUser, controlDeposit, controlDebt);
+
+        _runPrecisionFairnessStress(splitIds, splitControlId, steps, earmarkBps, redeemBps);
+        PrecisionAggregate memory split = _capturePrecisionAggregate(splitIds);
+
+        // Global process should be identical between both paths.
+        assertEq(split.totalDebt, unsplit.totalDebt, "global totalDebt mismatch");
+        assertEq(split.cumulativeEarmarked, unsplit.cumulativeEarmarked, "global cumulativeEarmarked mismatch");
+
+        // Partitioning should not materially change aggregate outcomes.
+        uint256 tol = steps * 300 + 5_000;
+        assertApproxEqAbs(split.sumDebt, unsplit.sumDebt, tol, "split-vs-unsplit debt mismatch");
+        assertApproxEqAbs(split.sumEarmarked, unsplit.sumEarmarked, tol, "split-vs-unsplit earmarked mismatch");
+        assertApproxEqAbs(split.sumCollateral, unsplit.sumCollateral, tol, "split-vs-unsplit collateral mismatch");
+    }
+
+    function _assertStaleEpochReplayEquivalence(uint256 staleEpochs) internal {
+        // Base fixture: one target account (beef) + one control account (dad).
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xbeef), 0);
+        uint256 beefId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(beefId, 10_000e18, address(0xbeef));
+        vm.stopPrank();
+
+        vm.startPrank(address(0xdad));
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(100_000e18, address(0xdad), 0);
+        uint256 dadId = AlchemistNFTHelper.getFirstTokenId(address(0xdad), address(alchemistNFT));
+        alchemist.mint(dadId, 1_000e18, address(0xdad));
+        vm.stopPrank();
+
+        // Force full earmark in each _earmark() call, which drives epoch advancement aggressively.
+        vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(type(uint256).max));
+
+        // Keep transmuter balance baseline synced so redeemed transfers are not re-counted as cover.
+        address mytToken = alchemist.myt();
+        uint256 transmuterMytBalance = IERC20(mytToken).balanceOf(address(transmuterLogic));
+        vm.prank(address(transmuterLogic));
+        alchemist.setTransmuterTokenBalance(transmuterMytBalance);
+
+        uint256 snap = vm.snapshotState();
+
+        // Path A: replay model (sync beef each cycle).
+        for (uint256 i = 0; i < staleEpochs; ++i) {
+            if (!_stepEpochAndRedeemThenSync(beefId)) break;
+        }
+        ReplayState memory replay = _captureReplayState(beefId);
+
+        vm.revertTo(snap);
+
+        // Path B: stale model (sync dad each cycle, sync beef once at the end).
+        for (uint256 i = 0; i < staleEpochs; ++i) {
+            if (!_stepEpochAndRedeemThenSync(dadId)) break;
+        }
+        // Same block as the last step sync call => no extra _earmark window opened.
+        alchemist.poke(beefId);
+        ReplayState memory stale = _captureReplayState(beefId);
+
+        // Global state should be identical between paths.
+        assertEq(stale.totalDebt, replay.totalDebt, "global totalDebt mismatch");
+        assertEq(stale.cumulativeEarmarked, replay.cumulativeEarmarked, "global cumulativeEarmarked mismatch");
+
+        // Per-account state can differ by tiny rounding drift only.
+        uint256 tol = staleEpochs * 10 + 100;
+        assertApproxEqAbs(stale.debt, replay.debt, tol, "debt mismatch beyond rounding");
+        assertApproxEqAbs(stale.earmarked, replay.earmarked, tol, "earmarked mismatch beyond rounding");
+        assertApproxEqAbs(stale.collateral, replay.collateral, tol, "collateral mismatch beyond rounding");
+    }
+
+    function _stepEpochAndRedeemThenSync(uint256 syncTokenId) internal returns (bool) {
+        // Move to a new block so _earmark can process this window.
+        vm.roll(block.number + 1);
+
+        // Keep transmuter baseline aligned before the next _earmark().
+        address mytToken = alchemist.myt();
+        uint256 transmuterMytBalance = IERC20(mytToken).balanceOf(address(transmuterLogic));
+        vm.prank(address(transmuterLogic));
+        alchemist.setTransmuterTokenBalance(transmuterMytBalance);
+
+        uint256 totalDebtBefore = alchemist.totalDebt();
+        if (totalDebtBefore == 0) return false;
+
+        // Redeem a small deterministic fraction each cycle so debt survives many cycles.
+        uint256 redeemAmount = totalDebtBefore / 20;
+        if (redeemAmount == 0) redeemAmount = totalDebtBefore;
+
+        vm.prank(address(transmuterLogic));
+        alchemist.redeem(redeemAmount);
+
+        // Sync selected account in the SAME block; poke's _earmark is block-gated and no-ops.
+        alchemist.poke(syncTokenId);
+        return true;
+    }
+
+    function _captureReplayState(uint256 tokenId) internal view returns (ReplayState memory s) {
+        (s.collateral, s.debt, s.earmarked) = alchemist.getCDP(tokenId);
+        s.totalDebt = alchemist.totalDebt();
+        s.cumulativeEarmarked = alchemist.cumulativeEarmarked();
+    }
+
+    function _openPrecisionPosition(address user, uint256 depositAmount_, uint256 debtAmount_) internal returns (uint256 tokenId) {
+        vm.startPrank(user);
+        SafeERC20.safeApprove(address(vault), address(alchemist), type(uint256).max);
+        alchemist.deposit(depositAmount_, user, 0);
+        tokenId = AlchemistNFTHelper.getFirstTokenId(user, address(alchemistNFT));
+        if (debtAmount_ != 0) {
+            alchemist.mint(tokenId, debtAmount_, user);
+        }
+        vm.stopPrank();
+    }
+
+    function _runPrecisionFairnessStress(
+        uint256[] memory tokenIds,
+        uint256 controlTokenId,
+        uint256 steps,
+        uint256 earmarkBps,
+        uint256 redeemBps
+    ) internal {
+        for (uint256 i = 0; i < steps; ++i) {
+            uint256 totalDebtBefore = alchemist.totalDebt();
+            if (totalDebtBefore == 0) break;
+
+            vm.roll(block.number + 1);
+
+            // Keep transmuter balance baseline synced so redeemed transfers are not re-counted as cover.
+            address mytToken = alchemist.myt();
+            uint256 transmuterMytBalance = IERC20(mytToken).balanceOf(address(transmuterLogic));
+            vm.prank(address(transmuterLogic));
+            alchemist.setTransmuterTokenBalance(transmuterMytBalance);
+
+            uint256 liveUnearmarked = totalDebtBefore - alchemist.cumulativeEarmarked();
+            if (liveUnearmarked == 0) break;
+
+            uint256 earmarkAmount = liveUnearmarked * earmarkBps / BPS;
+            if (earmarkAmount == 0) earmarkAmount = 1;
+
+            vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(earmarkAmount));
+
+            // Commit this block's earmark using a dedicated control account.
+            alchemist.poke(controlTokenId);
+
+            uint256 liveEarmarked = alchemist.cumulativeEarmarked();
+            if (liveEarmarked != 0) {
+                uint256 redeemAmount = liveEarmarked * redeemBps / BPS;
+                if (redeemAmount == 0) redeemAmount = 1;
+
+                vm.prank(address(transmuterLogic));
+                alchemist.redeem(redeemAmount);
+            }
+
+            for (uint256 j = 0; j < tokenIds.length; ++j) {
+                alchemist.poke(tokenIds[j]);
+            }
+        }
+    }
+
+    function _capturePrecisionAggregate(uint256[] memory tokenIds) internal view returns (PrecisionAggregate memory s) {
+        for (uint256 i = 0; i < tokenIds.length; ++i) {
+            (uint256 collateral, uint256 debt, uint256 earmarked) = alchemist.getCDP(tokenIds[i]);
+            s.sumCollateral += collateral;
+            s.sumDebt += debt;
+            s.sumEarmarked += earmarked;
+        }
+        s.totalDebt = alchemist.totalDebt();
+        s.cumulativeEarmarked = alchemist.cumulativeEarmarked();
+    }
+
     function test_QueryGraphBug_ConsecutiveBlocksUnderearmarksCausesRedemptionLoss() external {
         uint256 depositAmount = 10_000_000e18;
         uint256 borrowAmount = 5_256_000e18;
@@ -4603,20 +4836,15 @@ contract AlchemistV3Test is Test {
         console.log(" Debt:", debtBefore);
         console.log(" Earmarked:", earmarkedBefore);
 
-        // Step 5: try to liquadate the account second time as it has zero colatteral to backd debt.
-        console.log("\nStep 5: liquidatiing the second time");
-        vm.expectRevert();
-        alchemist.liquidate(tokenIdAttacker);
-
-        vm.startPrank(address(0xbeef));
-
-        console.log("Try repay by burning also revert");
-        deal(address(alToken), address(0xbeef), debtBefore);
-        SafeERC20.safeApprove(address(alToken), address(alchemist), debtBefore);
-        vm.expectRevert();
-        alchemist.burn(debtBefore, tokenIdAttacker);
-
-        vm.stopPrank();
+        // Step 5: if any residual debt remains, a second liquidation must clear it;
+        // otherwise liquidation should revert because nothing is left to liquidate.
+        console.log("\nStep 5: liquidating the second time");
+        if (debtBefore > 0) {
+            alchemist.liquidate(tokenIdAttacker);
+        } else {
+            vm.expectRevert(IAlchemistV3Errors.LiquidationError.selector);
+            alchemist.liquidate(tokenIdAttacker);
+        }
 
         (collateralBefore, debtBefore, earmarkedBefore) = alchemist.getCDP(tokenIdAttacker);
         console.log("\nPosition after Second liquidation crash:");
@@ -4624,6 +4852,7 @@ contract AlchemistV3Test is Test {
         console.log(" Collateral value (underlying):", alchemist.totalValue(tokenIdAttacker));
         console.log(" Debt:", debtBefore);
         console.log(" Earmarked:", earmarkedBefore);
+        assertEq(debtBefore, 0);
     }
 
     function testSmallAmountsLiquidatedWithNoDustDebt() external {

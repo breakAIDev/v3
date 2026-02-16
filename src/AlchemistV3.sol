@@ -586,8 +586,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3Actions
     function liquidate(uint256 accountId) external override returns (uint256 yieldAmount, uint256 feeInYield, uint256 feeInUnderlying) {
         _checkForValidAccountId(accountId);
+        uint256 debtBefore = _accounts[accountId].debt;
         (yieldAmount, feeInYield, feeInUnderlying) = _liquidate(accountId);
-        if (yieldAmount > 0) {
+        if (yieldAmount > 0 || feeInYield > 0 || feeInUnderlying > 0 || _accounts[accountId].debt < debtBefore) {
             return (yieldAmount, feeInYield, feeInUnderlying);
         } else {
             // no liquidation amount returned, so no liquidation happened
@@ -604,18 +605,25 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             revert MissingInputData();
         }
 
+        bool anyProgress = false;
         for (uint256 i = 0; i < accountIds.length; i++) {
             uint256 accountId = accountIds[i];
             if (accountId == 0 || !_tokenExists(alchemistPositionNFT, accountId)) {
                 continue;
             }
+            uint256 debtBefore = _accounts[accountId].debt;
             (uint256 underlyingAmount, uint256 feeInYield, uint256 feeInUnderlying) = _liquidate(accountId);
             totalAmountLiquidated += underlyingAmount;
             totalFeesInYield += feeInYield;
             totalFeesInUnderlying += feeInUnderlying;
+            if (
+                underlyingAmount > 0 || feeInYield > 0 || feeInUnderlying > 0 || _accounts[accountId].debt < debtBefore
+            ) {
+                anyProgress = true;
+            }
         }
 
-        if (totalAmountLiquidated > 0) {
+        if (anyProgress) {
             return (totalAmountLiquidated, totalFeesInYield, totalFeesInUnderlying);
         } else {
             // no total liquidation amount returned, so no liquidations happened
@@ -944,7 +952,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked);
-            (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
             // Final safety check after all deductions
             if (account.collateralBalance == 0 && account.debt > 0) {
                 uint256 debtToClear = _clearableDebt(account.debt);
@@ -956,6 +963,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
         if (_isAccountHealthy(accountId, false)) {
+            // Repayment fee only applies when force-repay fully resolves liquidation.
+            if (repaidAmountInYield > 0) {
+                (feeInYield, feeInUnderlying) = _resolveRepaymentFee(accountId, repaidAmountInYield);
+            }
 
             if (feeInYield > 0) {
                 TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
@@ -1020,7 +1031,25 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             liquidatorFee
         );
 
-        if(liquidationAmount == 0) {
+        if (liquidationAmount == 0) {
+            // Debt-only closeout path: account can be insolvent with no remaining collateral to seize.
+            if (debtToBurn > 0) {
+                uint256 burnableDebt = _capDebtCredit(debtToBurn, account.debt);
+                if (burnableDebt > 0) {
+                    _subDebt(accountId, burnableDebt);
+                }
+            }
+
+            uint256 feeRequestInUnderlying = normalizeDebtTokensToUnderlying(outsourcedFee);
+            if (feeRequestInUnderlying > 0) {
+                feeInUnderlying = _payWithFeeVault(feeRequestInUnderlying);
+            }
+
+            if (account.debt < debt || feeInUnderlying > 0) {
+                emit Liquidated(accountId, msg.sender, 0, 0, feeInUnderlying);
+                return (0, 0, feeInUnderlying);
+            }
+
             return (0, 0, 0);
         }
 
@@ -1412,41 +1441,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             uint256 ratioWanted =
                 (amount == liveUnearmarked) ? 0 : FixedPointMath.divQ128(liveUnearmarked - amount, liveUnearmarked);
 
-            // Snapshot old packed
             uint256 packedOld = _earmarkWeight;
-            uint256 oldEpoch  = _earEpoch(packedOld);
-            uint256 oldIndex  = _earIndex(packedOld);
+            (uint256 packedNew, uint256 ratioApplied, uint256 oldIndex, uint256 newEpoch, bool epochAdvanced) =
+                _simulateEarmarkPackedUpdate(packedOld, ratioWanted);
 
-            // Normalize
-            if (packedOld == 0) {
-                oldEpoch = 0;
-                oldIndex = ONE_Q128;
-            }
-            if (oldIndex == 0) {
-                oldEpoch += 1;
-                oldIndex = ONE_Q128;
-            }
-
-            // Compute new packed
-            uint256 newEpoch = oldEpoch;
-            uint256 newIndex;
-
-            if (ratioWanted == 0) {
-                newEpoch += 1;
-                newIndex = ONE_Q128;
-            } else {
-                newIndex = FixedPointMath.mulQ128(oldIndex, ratioWanted);
-                if (newIndex == 0) {
-                    newEpoch += 1;
-                    newIndex = ONE_Q128;
-                }
-            }
-
-            bool epochAdvanced = newEpoch > oldEpoch;
-            _earmarkWeight = _packEar(newEpoch, newIndex);
-
-            // ratioApplied is what accounts actually see via _earmarkSurvivalRatio()
-            uint256 ratioApplied = (newEpoch > oldEpoch) ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
+            _earmarkWeight = packedNew;
 
             // Survival increment uses the APPLIED earmark fraction
             uint256 earmarkedFraction = ONE_Q128 - ratioApplied;
@@ -1481,75 +1480,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     {
         Account storage account = _accounts[tokenId];
 
-        // Local copy used to simulate an uncommitted earmark window.
-        uint256 earmarkWeightCopy = _earmarkWeight;
-
-        // Simulate earmark since lastEarmarkBlock
-        if (block.number > lastEarmarkBlock) {
-            // update pending cover shares based on transmuter balance delta
-            uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
-            uint256 pendingCoverSharesCopy = _pendingCoverShares;
-
-            if (transmuterBalance > lastTransmuterTokenBalance) {
-                pendingCoverSharesCopy += (transmuterBalance - lastTransmuterTokenBalance);
-            }
-
-            // how much to earmark this window
-            uint256 amount = ITransmuter(transmuter).queryGraph(lastEarmarkBlock + 1, block.number);
-
-            // apply cover 
-            uint256 coverInDebt = convertYieldTokensToDebt(pendingCoverSharesCopy);
-            if (amount != 0 && coverInDebt != 0) {
-                uint256 usedDebt = amount > coverInDebt ? coverInDebt : amount;
-                amount -= usedDebt;
-
-                // consume the corresponding portion of pending cover shares so we can't reuse it
-                uint256 sharesUsed = FixedPointMath.mulDivUp(pendingCoverSharesCopy, usedDebt, coverInDebt);
-                if (sharesUsed > pendingCoverSharesCopy) sharesUsed = pendingCoverSharesCopy;
-                pendingCoverSharesCopy -= sharesUsed;
-            }
-
-            uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
-            if (amount > liveUnearmarked) amount = liveUnearmarked;
-
-            if (amount > 0 && liveUnearmarked != 0) {
-                // ratioWanted = (liveUnearmarked - amount) / liveUnearmarked
-                uint256 ratioWanted =
-                    (amount == liveUnearmarked) ? 0 : FixedPointMath.divQ128(liveUnearmarked - amount, liveUnearmarked);
-
-                // Snapshot old packed from earmarkWeightCopy
-                uint256 packedOld = earmarkWeightCopy;
-                uint256 oldEpoch  = packedOld >> _EARMARK_INDEX_BITS;
-                uint256 oldIndex  = packedOld & _EARMARK_INDEX_MASK;
-
-                if (packedOld == 0) {
-                    oldEpoch = 0;
-                    oldIndex = ONE_Q128;
-                }
-                if (oldIndex == 0) {
-                    oldEpoch += 1;
-                    oldIndex = ONE_Q128;
-                }
-
-                // Compute new packed
-                uint256 newEpoch = oldEpoch;
-                uint256 newIndex;
-
-                if (ratioWanted == 0) {
-                    newEpoch += 1;
-                    newIndex = ONE_Q128;
-                } else {
-                    newIndex = FixedPointMath.mulQ128(oldIndex, ratioWanted);
-                    if (newIndex == 0) {
-                        newEpoch += 1;
-                        newIndex = ONE_Q128;
-                    }
-                }
-
-                // Update simulated packed
-                earmarkWeightCopy = (newEpoch << _EARMARK_INDEX_BITS) | newIndex;
-            }
-        }
+        // Simulate one uncommitted earmark window and use its simulated weight.
+        (uint256 earmarkWeightCopy,) = _simulateUnrealizedEarmark();
 
         // First, compute account state against committed globals only.
         (uint256 newDebt, uint256 newEarmarked, uint256 redeemedTotalSim) =
@@ -1720,6 +1652,50 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return (epoch << _EARMARK_INDEX_BITS) | index;
     }
 
+    /// @dev Simulates the packed earmark update and returns the applied survival ratio.
+    /// @param packedOld Existing packed earmark weight.
+    /// @param ratioWanted Wanted survival ratio for unearmarked debt in this step.
+    /// @return packedNew The new packed earmark weight.
+    /// @return ratioApplied The effective survival ratio that will be observed by accounts.
+    /// @return oldIndex The normalized previous index.
+    /// @return newEpoch The resulting epoch after this step.
+    /// @return epochAdvanced Whether the update crossed an epoch boundary.
+    function _simulateEarmarkPackedUpdate(uint256 packedOld, uint256 ratioWanted)
+        internal
+        pure
+        returns (uint256 packedNew, uint256 ratioApplied, uint256 oldIndex, uint256 newEpoch, bool epochAdvanced)
+    {
+        uint256 oldEpoch = packedOld >> _EARMARK_INDEX_BITS;
+        oldIndex = packedOld & _EARMARK_INDEX_MASK;
+
+        if (packedOld == 0) {
+            oldEpoch = 0;
+            oldIndex = ONE_Q128;
+        }
+        if (oldIndex == 0) {
+            oldEpoch += 1;
+            oldIndex = ONE_Q128;
+        }
+
+        newEpoch = oldEpoch;
+        uint256 newIndex;
+
+        if (ratioWanted == 0) {
+            newEpoch += 1;
+            newIndex = ONE_Q128;
+        } else {
+            newIndex = FixedPointMath.mulQ128(oldIndex, ratioWanted);
+            if (newIndex == 0) {
+                newEpoch += 1;
+                newIndex = ONE_Q128;
+            }
+        }
+
+        epochAdvanced = newEpoch > oldEpoch;
+        packedNew = _packEar(newEpoch, newIndex);
+        ratioApplied = epochAdvanced ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
+    }
+
     // Survival ratio of *unearmarked* exposure between two packed earmark states.
     function _earmarkSurvivalRatio(uint256 oldPacked, uint256 newPacked) internal pure returns (uint256) {
         if (newPacked == oldPacked) return ONE_Q128;
@@ -1741,7 +1717,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     function getUnrealizedCumulativeEarmarked() external view returns (uint256) {
         if (totalDebt == 0) return 0;
-        if (block.number <= lastEarmarkBlock) return cumulativeEarmarked;
+        (, uint256 effectiveEarmarked) = _simulateUnrealizedEarmark();
+        return cumulativeEarmarked + effectiveEarmarked;
+    }
+
+    /// @dev Simulates one uncommitted earmark window using current on-chain state.
+    /// @return earmarkWeightCopy Simulated earmark packed weight after the window.
+    /// @return effectiveEarmarked The additional earmarked debt from this simulated window.
+    function _simulateUnrealizedEarmark() internal view returns (uint256 earmarkWeightCopy, uint256 effectiveEarmarked) {
+        earmarkWeightCopy = _earmarkWeight;
+        if (block.number <= lastEarmarkBlock || totalDebt == 0) return (earmarkWeightCopy, 0);
 
         uint256 transmuterBalance = TokenUtils.safeBalanceOf(myt, address(transmuter));
 
@@ -1763,47 +1748,16 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 liveUnearmarked = totalDebt - cumulativeEarmarked;
         if (amount > liveUnearmarked) amount = liveUnearmarked;
+        if (amount == 0 || liveUnearmarked == 0) return (earmarkWeightCopy, 0);
 
-        if (amount == 0 || liveUnearmarked == 0) return cumulativeEarmarked;
-
-        // ratioWanted (FLOOR)
+        // ratioWanted = (liveUnearmarked - amount) / liveUnearmarked
         uint256 ratioWanted =
             (amount == liveUnearmarked) ? 0 : FixedPointMath.divQ128(liveUnearmarked - amount, liveUnearmarked);
 
-        // simulate packed update to get ratioApplied
-        uint256 packedOld = _earmarkWeight;
-        uint256 oldEpoch  = _earEpoch(packedOld);
-        uint256 oldIndex  = _earIndex(packedOld);
-
-        if (packedOld == 0) {
-            oldEpoch = 0;
-            oldIndex = ONE_Q128;
-        }
-        if (oldIndex == 0) {
-            oldEpoch += 1;
-            oldIndex = ONE_Q128;
-        }
-
-        uint256 newEpoch = oldEpoch;
-        uint256 newIndex;
-
-        if (ratioWanted == 0) {
-            newEpoch += 1;
-            newIndex = ONE_Q128;
-        } else {
-            newIndex = FixedPointMath.mulQ128(oldIndex, ratioWanted);
-            if (newIndex == 0) {
-                newEpoch += 1;
-                newIndex = ONE_Q128;
-            }
-        }
-
-        uint256 ratioApplied = (newEpoch > oldEpoch) ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
+        (uint256 packedNew, uint256 ratioApplied,,,) = _simulateEarmarkPackedUpdate(earmarkWeightCopy, ratioWanted);
+        earmarkWeightCopy = packedNew;
 
         uint256 newUnearmarked = FixedPointMath.mulQ128(liveUnearmarked, ratioApplied);
-        uint256 effectiveEarmarked = liveUnearmarked - newUnearmarked;
-
-        return cumulativeEarmarked + effectiveEarmarked;
+        effectiveEarmarked = liveUnearmarked - newUnearmarked;
     }
-
 }

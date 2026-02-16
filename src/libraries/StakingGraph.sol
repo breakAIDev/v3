@@ -113,13 +113,20 @@ library StakingGraph {
         int256 begProd;
         int256 endDelta;
         int256 endProd;
+        uint256 graphSize;
         unchecked {
             require (end <= GRAPH_MAX); //catch overflow
 
             start--;
             require (start <= GRAPH_MAX); //catch overflow and underflow
 
-            end = end > g.size ? g.size : end;
+            graphSize = g.size;
+            if (graphSize == 0) return 0;
+
+            // Clamp both prefix query indices to the tree domain.
+            start = start > graphSize ? graphSize : start;
+            end = end > graphSize ? graphSize : end;
+            if (end <= start) return 0;
 
             (begDelta,begProd) = query(g.g, start);
             (endDelta,endProd) = query(g.g, end);
