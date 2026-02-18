@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity 0.8.28;
 
-import "../../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "../../lib/openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import "lib/openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import "../libraries/SafeCast.sol";
-import "../../lib/forge-std/src/Test.sol";
+import "lib/forge-std/src/Test.sol";
 import {SafeERC20} from "../libraries/SafeERC20.sol";
-import {console} from "../../lib/forge-std/src/console.sol";
+import {console} from "lib/forge-std/src/console.sol";
 import {AlchemistV3} from "../AlchemistV3.sol";
-import {AlchemicTokenV3} from "../test/mocks/AlchemicTokenV3.sol";
+import {AlchemicTokenV3} from "./mocks/AlchemicTokenV3.sol";
 import {EulerUSDCAdapter} from "../adapters/EulerUSDCAdapter.sol";
 import {Transmuter} from "../Transmuter.sol";
 import {Whitelist} from "../utils/Whitelist.sol";
@@ -26,13 +26,14 @@ import {AlchemistV3Position} from "../AlchemistV3Position.sol";
 import {AlchemistV3PositionRenderer} from "../AlchemistV3PositionRenderer.sol";
 import {AlchemistETHVault} from "../AlchemistETHVault.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
-import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
+import {VaultV2} from "lib/vault-v2/src/VaultV2.sol";
 import {MYTTestHelper} from "./libraries/MYTTestHelper.sol";
 import {MockAlchemistAllocator} from "./mocks/MockAlchemistAllocator.sol";
 import {MockMYTStrategy} from "./mocks/MockMYTStrategy.sol";
-import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {MockYieldToken} from "./mocks/MockYieldToken.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
+import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 
 // Tests for integration with Euler V2 Earn Vault
 contract IntegrationTest is Test {
@@ -196,7 +197,7 @@ contract IntegrationTest is Test {
         mockStrategyYieldToken = address(new MockYieldToken(mockVaultCollateral));
         vault = MYTTestHelper._setupVault(mockVaultCollateral, admin, curator);
         mytStrategy = MYTTestHelper._setupStrategy(address(vault), mockStrategyYieldToken, admin, "MockToken", "MockTokenProtocol", IMYTStrategy.RiskClass.LOW);
-        allocator = new MockAlchemistAllocator(address(vault), admin, operator);
+        allocator = new MockAlchemistAllocator(address(vault), admin, operator, address(new AlchemistStrategyClassifier(admin)));
         vm.stopPrank();
         vm.startPrank(curator);
         _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.setIsAllocator, (address(allocator), true)));

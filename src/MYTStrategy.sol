@@ -2,27 +2,13 @@
 
 pragma solidity 0.8.28;
 
-import {IVaultV2} from "../lib/vault-v2/src/interfaces/IVaultV2.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {IVaultV2} from "vault-v2/interfaces/IVaultV2.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IMYTStrategy} from "./interfaces/IMYTStrategy.sol";
-import "forge-std/console.sol";
-import {ISettlerActions} from "./external/interfaces/ISettlerActions.sol";
-import {IVelodromePair} from "./external/interfaces/IVelodromePair.sol";
-import {ISignatureTransfer} from "../lib/permit2/src/interfaces/ISignatureTransfer.sol";
-import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {ZeroXSwapVerifier} from "./utils/ZeroXSwapVerifier.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IERC721Tiny {
     function ownerOf(uint256 tokenId) external view returns (address);
-}
-
-interface IDeployerTiny is IERC721Tiny {
-    function prev(uint128 featureId) external view returns (address);
-}
-
-// Interface for Permit2 to support ERC-1271 signature verification
-interface IPermit2 {
-    function isValidSignature(bytes32 hash, bytes memory signature) external view returns (bytes4);
 }
 
 /**
@@ -32,11 +18,13 @@ interface IPermit2 {
  */
 contract MYTStrategy is IMYTStrategy, Ownable {
     IVaultV2 public immutable MYT;
-    address public immutable receiptToken;
+   // address public immutable receiptToken;
+    address public allowanceHolder; // 0x Allowance holder
     uint256 public constant SECONDS_PER_YEAR = 365 days;
     uint256 public constant FIXED_POINT_SCALAR = 1e18;
     uint256 public constant MIN_SNAPSHOT_INTERVAL = 1 days;
-
+    bytes4 public constant FORCE_DEALLOCATE_SELECTOR = 0xe4d38cd8;
+    
     IMYTStrategy.StrategyParams public params;
     bytes32 public immutable adapterId;
     uint256 public lastSnapshotTime;
@@ -51,18 +39,6 @@ contract MYTStrategy is IMYTStrategy, Ownable {
 
     mapping(address => bool) public whitelistedAllocators;
 
-    // Permit2 configuration
-    address public permit2Address;
-
-    // recommended slippage for the strategy. should include this in any call to MorphoVaultV2.deallocate
-    uint256 public slippageBPS;
-    IDeployerTiny constant ZERO_EX_DEPLOYER = IDeployerTiny(0x00000000000004533Fe15556B1E086BB1A72cEae);
-
-    error CounterfeitSettler(address);
-
-    event StrategyDeallocationLoss(string message, uint256 amountRequested, uint256 actualAmountSent);
-    event StrategyAllocationLoss(string message, uint256 amountRequested, uint256 actualAmountReceived);
-
     /// @notice Modifier to restrict access to the vault **managed** by the MYT contract
     modifier onlyVault() {
         require(msg.sender == address(MYT), "PD");
@@ -73,44 +49,41 @@ contract MYTStrategy is IMYTStrategy, Ownable {
      * @notice Constructor for the MYTStrategy contract
      * @param _myt The address of the MYT vault
      * @param _params The parameters for the strategy
-     * @param _permit2Address The address of the Permit2 contract
-     * @param _receiptToken The address of the receipt token
      */
-    constructor(address _myt, StrategyParams memory _params, address _permit2Address, address _receiptToken) Ownable(_params.owner) {
+    constructor(address _myt, StrategyParams memory _params) Ownable(_params.owner) {
         require(_params.owner != address(0));
         require(_myt != address(0));
-        require(_permit2Address != address(0), "Zero Permit2 address");
-        require(_receiptToken != address(0), "Zero receipt token address");
+        require(_params.slippageBPS < 1000);
         MYT = IVaultV2(_myt);
-        receiptToken = _receiptToken;
         params = _params;
-        adapterId = keccak256(abi.encode(_params.protocol));
-        slippageBPS = _params.slippageBPS;
-
-        permit2Address = _permit2Address;
-
-        // IERC20 vaultAsset = IERC20(address(MYT.asset()));
-        // vaultAsset.approve(permit2Address, type(uint256).max);
-        IERC20 receiptTokenContract = IERC20(receiptToken);
-        receiptTokenContract.approve(permit2Address, type(uint256).max);
-
-        // TODO add the strategy to the perpetual gauge in an authenticated manner
-        // TODO perhap take initial snapshot now to set up start block
+        adapterId = keccak256(abi.encode("this", address(this)));
+        allowanceHolder = 0x0000000000001fF3684f28c67538d4D072C22734;
     }
-
+    
     /// @notice See Morpho V2 vault spec
     function allocate(bytes memory data, uint256 assets, bytes4 selector, address sender)
         external
         onlyVault
         returns (bytes32[] memory strategyIds, int256 change)
     {
-        if (killSwitch) {
-            return (ids(), int256(0));
-        }
+        require(!killSwitch, StrategyAllocationPaused(address(this)));
         require(assets > 0, "Zero amount");
-        uint256 oldAllocation = abi.decode(data, (uint256));
-        uint256 amountAllocated = _allocate(assets);
-        uint256 newAllocation = oldAllocation + amountAllocated;
+        uint256 amountAllocated;        
+
+        VaultAdapterParams memory adapterParams = abi.decode(data, (VaultAdapterParams));
+        ActionType action = adapterParams.action;
+        if (action == ActionType.direct) {
+            // Direct allocation (e.g., wrap WETH)
+            amountAllocated = _allocate(assets);
+        } else if (action == ActionType.swap) {
+            // Direct swap (e.g., token -> swap -> WETH)
+            amountAllocated = _allocate(assets, adapterParams.swapParams.txData);
+        } else {
+            revert("Invalid action");
+        }
+        
+        uint256 oldAllocation = allocation();
+        uint256 newAllocation = _totalValue();
         emit Allocate(amountAllocated, address(this));
         return (ids(), int256(newAllocation) - int256(oldAllocation));
     }
@@ -121,15 +94,37 @@ contract MYTStrategy is IMYTStrategy, Ownable {
         onlyVault
         returns (bytes32[] memory strategyIds, int256 change)
     {
-        if (killSwitch) {
-            return (ids(), int256(0));
-        }
         require(assets > 0, "Zero amount");
-        uint256 oldAllocation = abi.decode(data, (uint256));
-        uint256 amountDeallocated = _deallocate(assets);
-        uint256 newAllocation = oldAllocation - amountDeallocated;
+        uint256 amountDeallocated;
+        VaultAdapterParams memory adapterParams = abi.decode(data, (VaultAdapterParams));
+        ActionType action = adapterParams.action;
+        if (action == ActionType.direct) {
+            amountDeallocated = _deallocate(assets);
+        } else if (action == ActionType.swap && selector != FORCE_DEALLOCATE_SELECTOR) {
+            // Direct swap (e.g., token → swap → WETH)
+            amountDeallocated = _deallocate(assets, adapterParams.swapParams.txData);
+        } else if (action == ActionType.unwrapAndSwap && selector != FORCE_DEALLOCATE_SELECTOR) {
+            // Has intermediate step (e.g., unwrap wstETH → stETH → swap → WETH)
+            amountDeallocated = _deallocate(assets, adapterParams.swapParams.txData, adapterParams.swapParams.minIntermediateOut);
+        } else {
+            revert("Invalid action");
+        }
+        uint256 oldAllocation = allocation();
+        uint256 newAllocation = _totalValue();
         emit Deallocate(amountDeallocated, address(this));
         return (ids(), int256(newAllocation) - int256(oldAllocation));
+    }
+
+    function dexSwap(address to, address from, uint256 amount, uint256 minAmountOut, bytes memory callData) internal returns (uint256) {
+        IERC20(from).approve(allowanceHolder, amount);
+        uint256 targetBalanceBefore = IERC20(to).balanceOf(address(this));
+        (bool success, ) = allowanceHolder.call(callData);
+        require(success, "0x exception");
+        uint256 targetBalanceAfter = IERC20(to).balanceOf(address(this));
+        IERC20(from).approve(allowanceHolder, 0);
+        uint256 amountReceived = targetBalanceAfter > targetBalanceBefore ? targetBalanceAfter - targetBalanceBefore : 0;
+        if (amountReceived < minAmountOut) revert InvalidAmount(minAmountOut, amountReceived);
+        return amountReceived;
     }
 
     /// @notice helper function to estimate the correct amount that can be fully
@@ -143,21 +138,40 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     /// @notice call this function to handle strategies with withdrawal queue NFT
     function claimWithdrawalQueue(uint256 positionId) public virtual returns (uint256 ret) {
         require(whitelistedAllocators[msg.sender], "PD");
-        require(!killSwitch, "emergency");
-        _claimWithdrawalQueue(positionId);
+        return _claimWithdrawalQueue(positionId);
     }
 
     /// @notice call this function to claim all available rewards from the respective
     /// protocol of this strategy
-    function claimRewards() public virtual returns (uint256) {
+    function claimRewards(address token, bytes memory quote, uint256 minAmountOut) public onlyOwner virtual returns (uint256) {
         require(!killSwitch, "emergency");
-        _claimRewards();
+        return _claimRewards(token, quote, minAmountOut);
+    }
+
+    /// @notice withdraw any leftover assets back to the vault
+    function withdrawToVault() public virtual onlyOwner returns (uint256) {
+        //Withdraw any leftover assets back to the vault
+        uint256 leftover = IERC20(MYT.asset()).balanceOf(address(this));
+        IERC20(MYT.asset()).transfer(address(MYT), leftover);
+        emit WithdrawToVault(leftover);
+        return leftover;
     }
 
     /// @dev override this function to handle wrapping/allocation/moving funds to
     /// the respective protocol of this strategy
-    /// @notice uint56 amount returned must be equal to the amount parameter passed in
-    function _allocate(uint256 amount) internal virtual returns (uint256) {}
+    /// @notice uint56 amount returned should be equal to the amount parameter passed in
+    /// @notice should attempt to log any loss due to rounding
+    function _allocate(uint256 amount) internal virtual returns (uint256) {
+        revert ActionNotSupported();
+    }
+
+    /// @dev override this function to handle wrapping/allocation/moving funds to
+    /// the respective protocol of this strategy
+    /// @notice uint56 amount returned should be equal to the amount parameter passed in
+    /// @notice should attempt to log any loss due to rounding
+    function _allocate(uint256 amount, bytes memory callData) internal virtual returns (uint256) {
+        revert ActionNotSupported();
+    }
 
     /// @dev override this function to handle unwrapping/deallocation/moving funds from
     /// the respective protocol of this strategy
@@ -166,7 +180,30 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     /// strategies must have atleast >= amount available at the end of this function call
     /// if not, the strategy will revert
     /// @notice amount of asset must be approved to the vault (i.e. msg.sender)
-    function _deallocate(uint256 amount) internal virtual returns (uint256) {}
+    function _deallocate(uint256 amount) internal virtual returns (uint256) {
+        revert ActionNotSupported();
+    }
+
+
+    /// @dev override this function to handle unwrapping/deallocation/moving funds from
+    /// the respective protocol of this strategy
+    /// @notice uint56 amount returned must be equal to the amount parameter passed in
+    /// @notice due to how MorphoVaultV2 internally handles deallocations,
+    /// strategies must have atleast >= amount available at the end of this function call
+    /// if not, the strategy will revert
+    /// @notice amount of asset must be approved to the vault (i.e. msg.sender)
+    function _deallocate(uint256 amount, bytes memory callData) internal virtual returns (uint256) {
+        revert ActionNotSupported();
+    }
+
+    /// @dev override this function to handle unwrapping/deallocation/moving funds from
+    /// the strategy to the vault using a swap with specified in calldata 
+    /// @param amount the WETH amount expected to be returned to the vault
+    /// @param callData the 0x swap calldata
+    /// @param minIntermediateOutAmount the minimum amount of intermediate token expected to be received from the unwrap
+    function _deallocate(uint256 amount, bytes memory callData, uint256 minIntermediateOutAmount) internal virtual returns (uint256) {
+        revert ActionNotSupported();
+    }
 
     /// @dev override this function to handle preview withdraw with slippage
     /// @notice this function should be used to estimate the correct amount that can be fully withdrawn, accounting for losses
@@ -177,60 +214,15 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     function _claimWithdrawalQueue(uint256 positionId) internal virtual returns (uint256) {}
 
     /// @dev override this function to claim all available rewards from the respective
-    /// protocol of this strategy
-    function _claimRewards() internal virtual returns (uint256) {}
-
-    /// @notice can be called by anyone to recalculate the
-    /// estimated yields of this strategy based on external price
-    /// oracles and protocol heuristics.
-    function snapshotYield() public virtual returns (uint256) {
-        uint256 currentTime = block.timestamp;
-
-        if (lastSnapshotTime != 0 && currentTime - lastSnapshotTime < MIN_SNAPSHOT_INTERVAL) {
-            return estApy;
-        }
-
-        // Base rate of strategy
-        (uint256 baseRatePerSec, uint256 newIndex) = _computeBaseRatePerSecond();
-
-        // Add incentives to calculation if applicable
-        uint256 rewardsRatePerSec;
-        if (params.additionalIncentives == true) rewardsRatePerSec = _computeRewardsRatePerSecond();
-
-        // Combine rates
-        uint256 totalRatePerSec = baseRatePerSec + rewardsRatePerSec;
-        uint256 apr = totalRatePerSec * SECONDS_PER_YEAR; // simple annualization (APR)
-        uint256 apy = _approxAPY(totalRatePerSec);
-
-        // Smoothing factor
-        // TODO need to figure out how to ramp this up
-        // Since first call is 0 the second call will be skewed
-        // perhaps no smoothing on second pass
-        uint256 alpha = 7e17; // 0.7
-        estApr = _lerp(estApr, apr, alpha);
-        estApy = _lerp(estApy, apy, alpha);
-
-        lastSnapshotTime = uint64(currentTime);
-        lastIndex = newIndex;
-
-        emit YieldUpdated(estApy);
-
-        return estApy;
-    }
-
-    /// @dev override this function to handle strategy specific base rate calculation
-    // TODO this one is only different by how we get the asset price
-    // may be good to move this logic here and host only the price in the adapter
-    function _computeBaseRatePerSecond() internal virtual returns (uint256 ratePerSec, uint256 newIndex) {}
-
-    /// @dev override this function to handle strategy specific reward rate calculation
-    function _computeRewardsRatePerSecond() internal virtual returns (uint256) {}
+    /// protocol of this strategy in the form of a specific token
+    /// this ERC20 reward must then be converted to the MYT's asset
+    function _claimRewards(address token, bytes memory quote, uint256 minAmountOut) internal virtual returns (uint256) {}
 
     // Helper for yield snapshot calculation
     function _approxAPY(uint256 ratePerSecWad) internal pure returns (uint256) {
         uint256 apr = ratePerSecWad * SECONDS_PER_YEAR;
         uint256 aprSq = apr * apr / FIXED_POINT_SCALAR;
-        return apr + aprSq / (2 * SECONDS_PER_YEAR);
+        return apr + aprSq / 2;
     }
 
     // Helper for yield snapshot calculation
@@ -262,22 +254,17 @@ contract MYTStrategy is IMYTStrategy, Ownable {
         emit Emergency(val);
     }
 
-    /// @notice update Permit2 address and approvals
-    function setPermit2Address(address newAddress) public onlyOwner {
-        require(newAddress != address(0), "Zero address");
-
-        // Revoke old approvals
-        // IERC20 vaultAsset = IERC20(address(MYT.asset()));
-        // vaultAsset.approve(permit2Address, 0);
-        IERC20 receiptTokenContract = IERC20(receiptToken);
-        receiptTokenContract.approve(permit2Address, 0);
-
-        // Set new approvals
-        //vaultAsset.approve(newAddress, type(uint256).max);
-        receiptTokenContract.approve(newAddress, type(uint256).max);
-        permit2Address = newAddress;
+    function setAllowanceHolder(address _new) public onlyOwner {
+        require(_new != address(0));
+        allowanceHolder = _new;
     }
 
+    /// @notice Update the slippage tolerance for this strategy
+    function setSlippageBPS(uint256 newSlippageBPS) public onlyOwner {
+        require(newSlippageBPS < 1000, "Slippage too high");
+        params.slippageBPS = newSlippageBPS;
+        emit SlippageBPSUpdated(newSlippageBPS);
+    }
     /// @notice get the current snapshotted estimated yield for this strategy.
     /// This call does not guarantee the latest up-to-date yield and there might
     /// be discrepancies from the respective protocols numbers.
@@ -299,16 +286,22 @@ contract MYTStrategy is IMYTStrategy, Ownable {
         return ids_;
     }
 
+    /// @notice Returns the vault's current allocation tracking for this adapter
+    function allocation() public view returns (uint256) {
+        return MYT.allocation(adapterId);
+    }
+
     function getIdData() external view returns (bytes memory) {
-        return abi.encode(params.protocol);
+        return abi.encode("this", address(this));
     }
 
     /// @dev override this function to return the total underlying value of the strategy
     /// @dev must return the total underling value of the strategy's position (i.e. in vault asset e.g. USDC or WETH)
-    function realAssets() external view virtual returns (uint256) {}
+    function _totalValue() internal view virtual returns (uint256) {}
 
-    /// @notice ERC-1271 interface for Permit2 signature verification
-    function isValidSignature(bytes32 _hash, bytes memory _signature) public view returns (bytes4) {
-        return IPermit2(permit2Address).isValidSignature(_hash, _signature);
+    /// @notice External function per IAdapter spec - returns total underlying value
+    function realAssets() external view virtual returns (uint256) {
+        return _totalValue();
     }
+
 }

@@ -2,8 +2,8 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
-import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {VaultV2} from "lib/vault-v2/src/VaultV2.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {TestYieldToken} from "./mocks/TestYieldToken.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
@@ -12,17 +12,19 @@ import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
 import {MYTTestHelper} from "./libraries/MYTTestHelper.sol";
 import {MockMYTStrategy} from "./mocks/MockMYTStrategy.sol";
 import {AlchemistAllocator} from "../AlchemistAllocator.sol";
-import {IAllocator} from "../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 
 contract MockAlchemistAllocator is AlchemistAllocator {
-    constructor(address _myt, address _admin, address _operator) AlchemistAllocator(_myt, _admin, _operator) {}
+    constructor(address _myt, address _admin, address _operator, address _classifier) AlchemistAllocator(_myt, _admin, _operator, _classifier) {}
 }
 
 contract AlchemistAllocatorTest is Test {
     using MYTTestHelper for *;
 
     MockAlchemistAllocator public allocator;
+    AlchemistStrategyClassifier public classifier;
     VaultV2 public vault;
     address public admin = address(0x2222222222222222222222222222222222222222);
     address public operator = address(0x3333333333333333333333333333333333333333);
@@ -31,14 +33,22 @@ contract AlchemistAllocatorTest is Test {
     address public mockVaultCollateral = address(new TestERC20(100e18, uint8(18)));
     address public mockStrategyYieldToken = address(new MockYieldToken(mockVaultCollateral));
     uint256 public defaultStrategyAbsoluteCap = 200 ether;
-    uint256 public defaultStrategyRelativeCap = 1e18; // 100%
+    uint256 public defaultStrategyRelativeCap = 0.8e18; // 80%
     MockMYTStrategy public mytStrategy;
 
     function setUp() public {
         vm.startPrank(admin);
         vault = MYTTestHelper._setupVault(mockVaultCollateral, admin, curator);
         mytStrategy = MYTTestHelper._setupStrategy(address(vault), mockStrategyYieldToken, admin, "MockToken", "MockTokenProtocol", IMYTStrategy.RiskClass.LOW);
-        allocator = new MockAlchemistAllocator(address(vault), admin, operator);
+        classifier = new AlchemistStrategyClassifier(admin);
+        // Set up risk classes with reasonable caps
+        classifier.setRiskClass(0, 10_000_000 ether, 5_000_000 ether); // LOW risk
+        classifier.setRiskClass(1, 7_500_000 ether, 3_750_000 ether); // MEDIUM risk
+        classifier.setRiskClass(2, 5_000_000 ether, 2_500_000 ether); // HIGH risk
+        // Assign risk level to the mock strategy
+        bytes32 strategyId = mytStrategy.adapterId();
+        classifier.assignStrategyRiskLevel(uint256(strategyId), uint8(IMYTStrategy.RiskClass.LOW));
+        allocator = new MockAlchemistAllocator(address(vault), admin, operator, address(classifier));
         vm.stopPrank();
         vm.startPrank(curator);
         _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.setIsAllocator, (address(allocator), true)));
@@ -64,10 +74,66 @@ contract AlchemistAllocatorTest is Test {
         allocator.deallocate(address(0x4444444444444444444444444444444444444444), 0);
     }
 
-    function testAllocateRevertIfInssufficientVaultBalance() public {
+    function testAllocateRevertIfAboveAbsoluteCap() public {
+        _magicDepositToVault(address(vault), user1, 1000 ether);
+        
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 absoluteCap = vault.absoluteCap(strategyId);
+        
         vm.startPrank(admin);
-        vm.expectRevert(abi.encode("TransferReverted()"));
-        allocator.allocate(address(mytStrategy), 100);
+
+        vm.expectRevert(abi.encode("RL"));
+        allocator.allocate(address(mytStrategy), absoluteCap + 1);
+        vm.stopPrank();
+    }
+
+    function testAllocateRevertIfAboveRelativeCap() public {
+        _magicDepositToVault(address(vault), user1, 1000 ether);
+        
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 relativeCap = vault.relativeCap(strategyId);
+        
+        // Max allocation = totalAssets * relativeCap / 1e18
+        uint256 totalAssets = vault.totalAssets();
+        uint256 maxAllocation = (totalAssets * relativeCap) / 1e18;
+        
+        vm.startPrank(admin);
+        vm.expectRevert(abi.encode("RL"));
+        allocator.allocate(address(mytStrategy), maxAllocation + 1);
+        vm.stopPrank();
+    }
+
+    function testAllocateRevertIfAboveRiskGlobalCap() public {
+        _magicDepositToVault(address(vault), user1, 1000 ether);
+
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 globalCap = 100 ether;
+
+        vm.startPrank(admin);
+        classifier.setRiskClass(0, globalCap, 5_000_000 ether);
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        vm.expectRevert(abi.encode("RL"));
+        allocator.allocate(address(mytStrategy), globalCap + 1);
+        vm.stopPrank();
+    }
+
+    function testAllocateRevertIfAboveRiskIndividualCap() public {
+        _magicDepositToVault(address(vault), user1, 1000 ether);
+        
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 individualCap = 50 ether;
+        
+        vm.startPrank(admin);
+        // Set individual risk cap for LOW risk class to 50 ether
+        classifier.setRiskClass(0, 10_000_000 ether, individualCap);
+        
+        vm.stopPrank();
+        vm.startPrank(operator);
+
+        vm.expectRevert(abi.encode("RL"));
+        allocator.allocate(address(mytStrategy), individualCap + 1);
         vm.stopPrank();
     }
 
@@ -118,6 +184,61 @@ contract AlchemistAllocatorTest is Test {
         vm.stopPrank();
     }
 
+
+    function testDeallocateWithYield() public {
+
+        _seedYieldToken(1_000_000 ether);
+        uint256 initialYieldTokenSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+
+        require(initialYieldTokenSupply == 1_000_000 ether, "initial yield token supply is not 1_000_000 ether"); 
+        _magicDepositToVault(address(vault), user1, 400 ether);
+        vm.startPrank(admin);
+
+        // allocate 200 vault tokens to the strategy
+        allocator.allocate(address(mytStrategy), 200 ether);
+        bytes32 allocationId = mytStrategy.adapterId();
+        uint256 allocation = vault.allocation(allocationId);
+        require(allocation == 200 ether, "allocation is not 200 ether");
+
+        // Baseline price before simulating yield
+        uint256 initialYieldTokenPrice = IMockYieldToken(mockStrategyYieldToken).price();
+
+        // now mock update supply of yield token to increase price (via reducing supply)
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        // Small price increase (50%): reduce mocked supply, keeping underlying constant
+        uint256 modifiedVaultSupply = initialVaultSupply - (initialVaultSupply * 5000 / 10_000);
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // get current real assets of the strategy
+        uint256 currentRealAssets = mytStrategy.realAssets();
+        require(IMockYieldToken(mockStrategyYieldToken).price() > initialYieldTokenPrice, "price is not greater than initial yield token price");
+        require(currentRealAssets > allocation, "current real assets is not greater than allocation");
+        // ensure requested amount > previous allocation. e.g. amount is the allocation + 20% of the allocation
+        uint256 deallocateAmount = allocation + (allocation * 2000 / 10_000);
+        require(deallocateAmount > allocation, "deallocate amount is not greater than allocation");
+
+        // deallocate the amount from the strategy
+        allocator.deallocate(address(mytStrategy), deallocateAmount);
+        allocation = vault.allocation(allocationId);
+        (uint256 newTotalAssets, uint256 performanceFeeShares, uint256 managementFeeShares) = vault.accrueInterestView();
+        uint256 mytStrategyYieldTokenBalance = IMockYieldToken(mockStrategyYieldToken).balanceOf(address(mytStrategy));
+        uint256 mytStrategyYieldTokenRealAssets = mytStrategy.realAssets();
+
+        // verify all state state changes that happen after a deallocation
+        // Expected remaining real assets are determined by remaining shares * post-deallocation price.
+        uint256 priceAfter = IMockYieldToken(mockStrategyYieldToken).price();
+        uint256 expectedRemainingRealAssets = (mytStrategyYieldTokenBalance * priceAfter) / 1e18;
+
+        assertApproxEqAbs(mytStrategyYieldTokenRealAssets, expectedRemainingRealAssets, 1);
+        assertEq(newTotalAssets, 400 ether);
+        assertEq(performanceFeeShares, 0);
+        assertEq(managementFeeShares, 0);
+        assertEq(vault._totalAssets(), 400 ether);
+        assertEq(vault.firstTotalAssets(), 400 ether);
+        assertApproxEqAbs(allocation, expectedRemainingRealAssets, 1);
+        vm.stopPrank();
+    }
+
     function _magicDepositToVault(address _vault, address depositor, uint256 amount) internal {
         deal(address(mockVaultCollateral), address(depositor), amount);
         vm.startPrank(depositor);
@@ -130,5 +251,16 @@ contract AlchemistAllocatorTest is Test {
         vault.submit(data);
         bytes4 selector = bytes4(data);
         vm.warp(block.timestamp + vault.timelock(selector));
+    }
+
+    function _seedYieldToken(uint256 seedUnderlying) internal {
+        address yieldWhale = address(0x7777);
+
+        // Give whale underlying and have it mint yield shares to itself
+        deal(mockVaultCollateral, yieldWhale, seedUnderlying);
+        vm.startPrank(yieldWhale);
+        TokenUtils.safeApprove(mockVaultCollateral, mockStrategyYieldToken, seedUnderlying);
+        IMockYieldToken(mockStrategyYieldToken).mint(seedUnderlying, yieldWhale);
+        vm.stopPrank();
     }
 }

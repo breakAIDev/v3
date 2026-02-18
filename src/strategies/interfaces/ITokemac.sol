@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 pragma solidity 0.8.28;
-import {IERC4626} from "../../../lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 interface IBaseRewarder {
     // actions
@@ -17,7 +17,8 @@ interface IBaseRewarder {
     function totalSupply() external view returns (uint256);     // total staked
     function balanceOf(address account) external view returns (uint256);
     function rewardToken() external view returns (address);     // e.g., TOKE
-
+    function allowExtraRewards() external view returns (bool);
+    
     // admin/ops (usually not needed by integrators, left for completeness)
     function queueNewRewards(uint256 newRewards) external;
     function addToWhitelist(address wallet) external;
@@ -49,6 +50,7 @@ interface IMainRewarder is IBaseRewarder {
 
 interface IAutopilotRouter {
     function depositMax(IERC4626 vault, address to, uint256 minSharesOut) external payable returns (uint256 sharesOut);
+    function depositBalance(IERC4626 vault, address to, uint256 minSharesOut) external payable returns (uint256 sharesOut);
     function stakeVaultToken(IERC4626 vault, uint256 maxAmount) external payable returns (uint256 staked);
     function withdrawVaultToken(IERC4626 vault, IMainRewarder rewarder, uint256 maxAmount, bool claim) external payable returns (uint256 withdrawn);
 }

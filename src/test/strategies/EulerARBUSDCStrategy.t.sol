@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import "../libraries/BaseStrategyTest.sol";
+import "../BaseStrategyTest.sol";
 import {EulerARBUSDCStrategy} from "../../strategies/arbitrum/EulerARBUSDCStrategy.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 contract MockEulerARBUSDCStrategy is EulerARBUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _usdc, address _vault, address _permit2Address)
-        EulerARBUSDCStrategy(_myt, _params, _usdc, _vault, _permit2Address)
+    constructor(address _myt, StrategyParams memory _params, address _usdc, address _vault)
+        EulerARBUSDCStrategy(_myt, _params, _usdc, _vault)
     {}
 }
 
 contract EulerARBUSDCStrategyTest is BaseStrategyTest {
     address public constant EULER_USDC_VAULT = 0x0a1eCC5Fe8C9be3C809844fcBe615B46A869b899;
     address public constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
-    address public constant ARBITRUM_PERMIT2 = 0x000000000022d473030f1dF7Fa9381e04776c7c5;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -34,7 +34,7 @@ contract EulerARBUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockEulerARBUSDCStrategy(vault, params, USDC, EULER_USDC_VAULT, ARBITRUM_PERMIT2));
+        return address(new MockEulerARBUSDCStrategy(vault, params, USDC, EULER_USDC_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {
@@ -49,15 +49,14 @@ contract EulerARBUSDCStrategyTest is BaseStrategyTest {
     function test_strategy_deallocate_reverts_due_to_slippage(uint256 amountToAllocate, uint256 amountToDeallocate) public {
         amountToAllocate = bound(amountToAllocate, 1 * 10 ** testConfig.decimals, testConfig.vaultInitialDeposit);
         amountToDeallocate = amountToAllocate;
+        bytes memory params = getVaultParams();
         vm.startPrank(vault);
         deal(testConfig.vaultAsset, strategy, amountToAllocate);
-        bytes memory prevAllocationAmount = abi.encode(0);
-        IMYTStrategy(strategy).allocate(prevAllocationAmount, amountToAllocate, "", address(vault));
+        IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
         require(initialRealAssets > 0, "Initial real assets is 0");
-        bytes memory prevAllocationAmount2 = abi.encode(amountToAllocate);
         vm.expectRevert();
-        IMYTStrategy(strategy).deallocate(prevAllocationAmount2, amountToDeallocate, "", address(vault));
+        IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
         vm.stopPrank();
     }
 }

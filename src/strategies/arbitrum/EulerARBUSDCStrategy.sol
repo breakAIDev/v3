@@ -1,6 +1,6 @@
-pragma solidity ^0.8.21;
+pragma solidity 0.8.28;
 
-import {IERC4626} from "../../../lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 
@@ -17,40 +17,37 @@ contract EulerARBUSDCStrategy is MYTStrategy {
     IERC20 public immutable usdc;
     IERC4626 public immutable vault;
 
-    constructor(address _myt, StrategyParams memory _params, address _usdc, address _eulerVault, address _permit2Address)
-        MYTStrategy(_myt, _params, _permit2Address, _usdc)
+    constructor(address _myt, StrategyParams memory _params, address _usdc, address _eulerVault)
+        MYTStrategy(_myt, _params)
     {
         usdc = IERC20(_usdc);
         vault = IERC4626(_eulerVault);
     }
 
-    function _allocate(uint256 amount) internal override returns (uint256 depositReturn) {
+    function _allocate(uint256 amount) internal override returns (uint256) {
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than amount");
-        depositReturn = amount;
         TokenUtils.safeApprove(address(usdc), address(vault), amount);
         vault.deposit(amount, address(this));
+        return amount;
     }
 
-    function _deallocate(uint256 amount) internal override returns (uint256 withdrawReturn) {
-        uint256 usdcBalanceBefore = TokenUtils.safeBalanceOf(address(usdc), address(this));
+    function _deallocate(uint256 amount) internal override returns (uint256) {
         vault.withdraw(amount, address(this), address(this));
-        withdrawReturn = amount;
-        uint256 usdcBalanceAfter = TokenUtils.safeBalanceOf(address(usdc), address(this));
-        uint256 usdcRedeemed = usdcBalanceAfter - usdcBalanceBefore;
-        if (usdcRedeemed < amount) {
-            emit StrategyDeallocationLoss("Strategy deallocation loss.", amount, usdcRedeemed);
-        }
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than the amount needed");
         TokenUtils.safeApprove(address(usdc), msg.sender, amount);
+        return amount;
     }
 
-    function realAssets() external view override returns (uint256) {
+    function _totalValue() internal view override returns (uint256) {
         return vault.convertToAssets(vault.balanceOf(address(this)));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
-        uint256 shares = vault.previewWithdraw(amount);
-        uint256 assets = vault.convertToAssets(shares);
-        return assets - (assets * slippageBPS / 10_000);
+        uint256 sharesNoFee = vault.convertToShares(amount);
+        uint256 sharesWithFee = vault.previewWithdraw(amount);
+        uint256 feeShares = sharesWithFee > sharesNoFee ? sharesWithFee - sharesNoFee : 0;
+        uint256 feeAssets = vault.convertToAssets(feeShares);
+        uint256 netAssets = amount - feeAssets;
+        return netAssets - (netAssets * params.slippageBPS / 10_000);
     }
 }

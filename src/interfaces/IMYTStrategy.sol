@@ -22,6 +22,26 @@ interface IMYTStrategy {
         uint256 slippageBPS;
     }
 
+
+
+    enum ActionType {
+        direct,       // for wrap/unwrap
+        swap,         // for dex swap
+        unwrapAndSwap // for unwrap -> dex swap
+    }
+
+    struct VaultAdapterParams {
+        ActionType action;
+        SwapParams swapParams;
+    }
+
+    struct SwapParams {
+        bytes txData;               // 0x swap calldata
+        uint256 minIntermediateOut; // Minimum intermediate token out (e.g., stETH from unwrap)
+    }                              // Only used for ActionType.unwrapAndSwap
+
+
+
     // Events
     event Allocate(uint256 indexed amount, address indexed strategy);
     event Deallocate(uint256 indexed amount, address indexed strategy);
@@ -29,29 +49,37 @@ interface IMYTStrategy {
     event YieldUpdated(uint256 indexed yield);
     event RiskClassUpdated(RiskClass indexed class);
     event IncentivesUpdated(bool indexed enabled);
+    event SlippageBPSUpdated(uint256 indexed newSlippageBPS);
     event Emergency(bool indexed isEmergency);
+    event StrategyAllocationLoss(string message, uint256 amountRequested, uint256 actualAmountAllocated);
+    event WithdrawToVault(uint256 indexed amount);
+    event RewardsClaimed(address indexed token, uint256 indexed amount);
+    // Errors
+    error StrategyAllocationPaused(address strategy);
+    error CounterfeitSettler(address);
+    error ActionNotSupported();
+    error InvalidAmount(uint256 min, uint256 received);
+
 
     // Functions
-
-    /// @dev override this function to handle wrapping/allocation/moving funds to
-    /// the respective protocol of this strategy
+    /// @dev wrapper function for the customizable _allocate counterpart
     function allocate(bytes memory data, uint256 assets, bytes4 selector, address sender) external returns (bytes32[] memory strategyIds, int256 change);
 
-    /// @dev override this function to handle unwrapping/deallocation/moving funds from
-    /// the respective protocol of this strategy
+    /// @dev wrapper function for the customizable _deallocate counterpart
     function deallocate(bytes memory data, uint256 assets, bytes4 selector, address sender) external returns (bytes32[] memory strategyIds, int256 change);
+
+    /// @dev alternative withdraw/deallocate route using a 0x quote
+    //function deallocateDex(bytes memory data, uint256 amount) external returns (bytes32[] memory strategyIds, int256 change);
 
     /// @dev override this function to handle strategies with withdrawal queue NFT
     function claimWithdrawalQueue(uint256 positionId) external returns (uint256);
 
+    /// @notice withdraw any leftover assets back to the vault
+    function withdrawToVault() external returns (uint256);
+
     /// @dev override this function to claim all available rewards from the respective
     /// protocol of this strategy
-    function claimRewards() external returns (uint256);
-
-    /// @notice can be called by anyone to recalculate the
-    /// estimated yields of this strategy based on external price
-    /// oracles and protocol heuristics.
-    function snapshotYield() external returns (uint256);
+    function claimRewards(address token, bytes memory quote, uint256 minAmountOut) external returns (uint256);
 
     /// @notice recategorize this strategy to a different risk class
     function setRiskClass(RiskClass newClass) external;

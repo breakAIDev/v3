@@ -4,16 +4,17 @@ pragma solidity 0.8.28;
 import {IERC20} from "../../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
-import {TransparentUpgradeableProxy} from "../../lib/openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {TransparentUpgradeableProxy} from "lib/openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {SafeCast} from "../libraries/SafeCast.sol";
-import {Test} from "../../lib/forge-std/src/Test.sol";
+import {Test} from "lib/forge-std/src/Test.sol";
 import {SafeERC20} from "../libraries/SafeERC20.sol";
-import {console} from "../../lib/forge-std/src/console.sol";
+import {console} from "lib/forge-std/src/console.sol";
 import {AlchemistV3} from "../AlchemistV3.sol";
-import {AlchemicTokenV3} from "../test/mocks/AlchemicTokenV3.sol";
+import {AlchemicTokenV3} from "./mocks/AlchemicTokenV3.sol";
 import {Transmuter} from "../Transmuter.sol";
 import {AlchemistV3Position} from "../AlchemistV3Position.sol";
 import {AlchemistV3PositionRenderer} from "../AlchemistV3PositionRenderer.sol";
+import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 
 import {Whitelist} from "../utils/Whitelist.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
@@ -26,7 +27,7 @@ import {InsufficientAllowance} from "../base/Errors.sol";
 import {Unauthorized, IllegalArgument, IllegalState, MissingInputData} from "../base/Errors.sol";
 import {AlchemistNFTHelper} from "./libraries/AlchemistNFTHelper.sol";
 import {IAlchemistV3Position} from "../interfaces/IAlchemistV3Position.sol";
-import {AggregatorV3Interface} from "../../lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {AlchemistTokenVault} from "../AlchemistTokenVault.sol";
 import {MockMYTStrategy} from "./mocks/MockMYTStrategy.sol";
@@ -34,8 +35,8 @@ import {MYTTestHelper} from "./libraries/MYTTestHelper.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {MockAlchemistAllocator} from "./mocks/MockAlchemistAllocator.sol";
 import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
-import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
-import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {VaultV2} from "lib/vault-v2/src/VaultV2.sol";
 import {MockYieldToken} from "./mocks/MockYieldToken.sol";
 
 contract AlchemistV3Test is Test {
@@ -161,7 +162,7 @@ contract AlchemistV3Test is Test {
         mockStrategyYieldToken = address(new MockYieldToken(mockVaultCollateral));
         vault = MYTTestHelper._setupVault(mockVaultCollateral, admin, curator);
         mytStrategy = MYTTestHelper._setupStrategy(address(vault), mockStrategyYieldToken, admin, "MockToken", "MockTokenProtocol", IMYTStrategy.RiskClass.LOW);
-        allocator = new MockAlchemistAllocator(address(vault), admin, operator);
+        allocator = new MockAlchemistAllocator(address(vault), admin, operator, address(new AlchemistStrategyClassifier(admin)));
         vm.stopPrank();
         vm.startPrank(curator);
         _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.setIsAllocator, (address(allocator), true)));

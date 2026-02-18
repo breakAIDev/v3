@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {MockMYTStrategy} from "../mocks/MockMYTStrategy.sol";
-import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
+import {MockMYTStrategy} from "../mocks/MockMYTStrategy.sol";
 import {MockMYTVault} from "../mocks/MockMYTVault.sol";
 
 library MYTTestHelper {
@@ -35,7 +35,6 @@ library MYTTestHelper {
             additionalIncentives: false,
             slippageBPS: 1
         });
-        address permit2Address = 0x000000000022d473030f1dF7Fa9381e04776c7c5; // Mainnet Permit2
-        return new MockMYTStrategy(myt, yieldToken, params, permit2Address);
+        return new MockMYTStrategy(myt, yieldToken, params);
     }
 }

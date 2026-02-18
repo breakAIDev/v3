@@ -9,8 +9,8 @@ import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 contract MockMYTStrategy is MYTStrategy {
     IMockYieldToken public immutable token;
 
-    constructor(address _myt, address _token, IMYTStrategy.StrategyParams memory _params, address _permit2Address)
-        MYTStrategy(_myt, _params, _permit2Address, _token)
+    constructor(address _myt, address _token, IMYTStrategy.StrategyParams memory _params)
+        MYTStrategy(_myt, _params)
     {
         token = IMockYieldToken(_token);
     }
@@ -23,18 +23,31 @@ contract MockMYTStrategy is MYTStrategy {
         require(depositReturn == amount);
     }
 
-    function _deallocate(uint256 amount) internal override returns (uint256 amountRequested) {
-        amountRequested = token.requestWithdraw(address(this), amount);
-        TokenUtils.safeApprove(token.underlyingToken(), msg.sender, amount);
-        require(amountRequested != 0);
+    function _deallocate(uint256 assets) internal override returns (uint256 amountReturned) {
+        // `assets` is in underlying units requested by the vault.
+        uint256 price = token.price(); // WAD, underlying value of 10**dec shares
+        uint8 dec = token.decimals();
+
+        // sharesToBurn = assets * 10**dec / price
+        uint256 sharesToBurn = (assets * (10 ** uint256(dec))) / price;
+
+        uint256 shareBal = token.balanceOf(address(this));
+        require(sharesToBurn <= shareBal, "insufficient shares");
+
+        // Burn shares and receive underlying back to this strategy.
+        amountReturned = token.requestWithdraw(address(this), sharesToBurn);
+
+        // Approve the actual amount of underlying returned for the vault to pull.
+        TokenUtils.safeApprove(token.underlyingToken(), msg.sender, amountReturned);
+        require(amountReturned != 0, "zero withdraw");
     }
 
     function realAssets() external view override returns (uint256) {
-        return (token.balanceOf(address(this)) * token.price()) / 10 ** token.decimals();
+        return _totalValue();
     }
 
-    function _computeBaseRatePerSecond() internal override returns (uint256 ratePerSec, uint256 newIndex) {
-        return (0, 0);
+    function _totalValue() internal view override returns (uint256) {
+        return (token.balanceOf(address(this)) * token.price()) / 10 ** token.decimals();
     }
 
     function mockUpdateWhitelistedAllocators(address allocator, bool value) public {}

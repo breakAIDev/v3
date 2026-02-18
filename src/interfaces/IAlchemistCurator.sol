@@ -11,20 +11,20 @@ interface IAlchemistCurator {
     event SubmitIncreaseAbsoluteCap(address indexed strategy, uint256 amount, bytes indexed id);
     event IncreaseRelativeCap(address indexed strategy, uint256 amount, bytes indexed id);
     event SubmitIncreaseRelativeCap(address indexed strategy, uint256 amount, bytes indexed id);
-    event OperatorChanged(address indexed operator);
-    event AdminChanged(address indexed admin);
 
     function decreaseAbsoluteCap(address adapter, uint256 amount) external;
-    function submitDecreaseAbsoluteCap(address adapter, uint256 amount) external;
 
     event DecreaseAbsoluteCap(address indexed strategy, uint256 amount, bytes indexed id);
     event SubmitDecreaseAbsoluteCap(address indexed strategy, uint256 amount, bytes indexed id);
 
     function decreaseRelativeCap(address adapter, uint256 amount) external;
-    function submitDecreaseRelativeCap(address adapter, uint256 amount) external;
 
+    function submitSetAllocator(address myt, address allocator, bool v) external;
+    event SubmitSetAllocator(address indexed allocator, bool indexed v);
     event DecreaseRelativeCap(address indexed strategy, uint256 amount, bytes indexed id);
     event SubmitDecreaseRelativeCap(address indexed strategy, uint256 amount, bytes indexed id);
-    event StrategySet(address indexed strategy, address indexed myt);
+    event StrategyAdded(address indexed strategy, address indexed myt);
+    event StrategyRemoved(address indexed strategy, address indexed myt);
     event SubmitSetStrategy(address indexed strategy, address indexed myt);
+    event SubmitRemoveStrategy(address indexed strategy, address indexed myt);
 }

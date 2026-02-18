@@ -6,6 +6,7 @@ contract PermissionedProxy {
     address admin;
     mapping (address => bool) operators;
     mapping (bytes4 => bool) permissionedCalls;
+    address public pendingAdmin;
 
     constructor(address _admin, address _operator) {
         require(_admin != address(0), "zero");
@@ -15,23 +16,36 @@ contract PermissionedProxy {
     }
 
     modifier onlyAdmin() {
-        require(msg.sender == admin, "PD");
+        _onlyAdmin();
         _;
     }
 
+    function _onlyAdmin() internal view {
+        require(msg.sender == admin, "PD");
+    }
+
     modifier onlyOperator() {
-        require(operators[msg.sender], "PD");
+        _onlyOperator();
         _;
+    }
+
+    function _onlyOperator() internal view {
+        require(operators[msg.sender], "PD");
     }
 
     event AdminUpdated(address indexed admin);
     event OperatorUpdated(address indexed operator);
     event AddedPermissionedCall(bytes4 indexed sig);
 
-    function setAdmin(address _admin) external onlyAdmin {
-        require(_admin != address(0), "zero");
-        admin = _admin;
-        emit AdminUpdated(_admin);
+    function transferAdminOwnerShip(address _newAdmin) external onlyAdmin {
+        pendingAdmin = _newAdmin;
+    }
+
+    function acceptAdminOwnership() external {
+        require(msg.sender == pendingAdmin, "PD");
+        admin = pendingAdmin;
+        pendingAdmin = address(0);
+        emit AdminUpdated(admin);
     }
 
     function setOperator(address _operator, bool value) external onlyAdmin {
@@ -45,7 +59,7 @@ contract PermissionedProxy {
         emit AddedPermissionedCall(sig);
     }
 
-    function proxy(address vault, bytes memory data) external payable onlyAdmin {
+    function proxy(address vault, bytes memory data) external payable onlyOperator {
         bytes4 selector;
         require(data.length >= 4, "SEL");
         assembly {

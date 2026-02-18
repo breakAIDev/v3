@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.21;
+pragma solidity 0.8.28;
 
-import {IERC4626} from "../../../lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 
@@ -13,10 +13,15 @@ interface IERC20 {
 interface IMToken {
     function mint(uint256 mintAmount) external returns (uint256);
     function redeemUnderlying(uint256 redeemAmount) external returns (uint256);
+    function redeem(uint256 redeemTokens) external returns (uint256);
     function balanceOfUnderlying(address owner) external returns (uint256); // Note: not view, changes state.
     function balanceOf(address owner) external view returns (uint256);
     function exchangeRateStored() external view returns (uint256);
     function exchangeRateCurrent() external returns (uint256);
+}
+
+interface IComptroller {
+ function claimReward() external;    
 }
 
 library MathExtra {
@@ -35,39 +40,50 @@ contract MoonwellUSDCStrategy is MYTStrategy {
 
     IMToken public immutable mUSDC; // Moonwell market mUSDC (mToken) 0xd0670AEe3698F66e2D4dAf071EB9c690d978BFA8
     IERC20 public immutable usdc; // 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+    IERC20 public constant WELL = IERC20(0xA88594D404727625A9437C3f886C7643872296AE);
+    IComptroller public immutable comptroller;
+    
+    error MoonwellUSDCStrategyMintFailed(uint256 errorCode);
+    error MoonwellUSDCStrategyRedeemUnderlyingFailed(uint256 errorCode);
 
-    event MoonwellUSDCStrategyDebugLog(string message, uint256 value);
-
-    constructor(address _myt, StrategyParams memory _params, address _mUSDC, address _usdc, address _permit2Address)
-        MYTStrategy(_myt, _params, _permit2Address, _usdc)
+    constructor(address _myt, StrategyParams memory _params, address _mUSDC, address _usdc)
+        MYTStrategy(_myt, _params)
     {
         mUSDC = IMToken(_mUSDC);
         usdc = IERC20(_usdc);
+        comptroller = IComptroller(0xCa889f40aae37FFf165BccF69aeF1E82b5C511B9);
     }
 
     function _allocate(uint256 amount) internal override returns (uint256) {
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than amount");
         TokenUtils.safeApprove(address(usdc), address(mUSDC), amount);
         // Mint mUSDC with underlying USDC
-        mUSDC.mint(amount);
-        return amount;
+        uint256 errorCode = mUSDC.mint(amount);
+        if (errorCode != 0) {
+            revert MoonwellUSDCStrategyMintFailed(errorCode);
+        }
+        // Return actual assets received (mToken balance converted to underlying units)
+        uint256 mTokenBalance = mUSDC.balanceOf(address(this));
+        uint256 exchangeRate = mUSDC.exchangeRateStored();
+        return (mTokenBalance * exchangeRate) / 1e18;
     }
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
-        uint256 usdcBalanceBefore = TokenUtils.safeBalanceOf(address(usdc), address(this));
-        // Pull exact amount of underlying USDC out
-        mUSDC.redeemUnderlying(amount);
-        uint256 usdcBalanceAfter = TokenUtils.safeBalanceOf(address(usdc), address(this));
-        uint256 usdcRedeemed = usdcBalanceAfter - usdcBalanceBefore;
-        if (usdcRedeemed < amount) {
-            emit StrategyDeallocationLoss("Strategy deallocation loss.", amount, usdcRedeemed);
+        // Calculate mTokens needed: ceil(amount * 1e18 / exchangeRate)
+        uint256 mTokensNeeded = (amount * 1e18).ceilDiv(mUSDC.exchangeRateStored());
+        
+        // Redeem mTokens for underlying USDC
+        uint256 errorCode = mUSDC.redeem(mTokensNeeded);
+        if (errorCode != 0) {
+            revert MoonwellUSDCStrategyRedeemUnderlyingFailed(errorCode);
         }
+        
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than the amount needed");
         TokenUtils.safeApprove(address(usdc), msg.sender, amount);
         return amount;
     }
 
-    function realAssets() external view override returns (uint256) {
+    function _totalValue() internal view override returns (uint256) {
         // Use stored exchange rate and mToken balance to avoid state changes during static calls
         uint256 mTokenBalance = mUSDC.balanceOf(address(this));
         if (mTokenBalance == 0) return 0;
@@ -77,9 +93,14 @@ contract MoonwellUSDCStrategy is MYTStrategy {
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
-        uint256 mtokensNeeded = _previewMTokensForUnderlying(amount, false);
-        uint256 usdcOut = _previewUnderlyingForMTokens(mtokensNeeded, false);
-        return usdcOut - (usdcOut * slippageBPS / 10_000);
+        uint256 sharesNoFee = (amount * 1e18) / _rate();
+        uint256 sharesWithFee = _previewMTokensForUnderlying(amount, false);
+        uint256 feeShares = sharesWithFee > sharesNoFee ? sharesWithFee - sharesNoFee : 0;
+        uint256 feeAssets = (feeShares * _rate()) / 1e18;
+        uint256 netAssets = amount > feeAssets ? amount - feeAssets : 0;
+        // Apply slippage using ceilDiv to avoid returning 0 for small amounts
+        uint256 slippage = (netAssets * params.slippageBPS).ceilDiv(10_000);
+        return netAssets > slippage ? netAssets - slippage : 0;
     }
 
     /// Preview mTokens required to withdraw a target amount of USDC
@@ -102,5 +123,19 @@ contract MoonwellUSDCStrategy is MYTStrategy {
     /// exchangeRateStored -> pure view, no state change (may slightly UNDERestimate since it doesn't accrue)
     function _rate() internal view returns (uint256) {
         return mUSDC.exchangeRateStored();
+    }
+
+    // moonwell extra rewards only arrive in WELL token
+    function _claimRewards(address token, bytes memory quote, uint256 minAmountOut) internal override returns (uint256) {
+        require(token == address(WELL), "Invalid Token");
+        uint256 wellBefore = WELL.balanceOf(address(this));
+        comptroller.claimReward();
+        uint256 wellAfter = WELL.balanceOf(address(this));
+        uint256 wellReceived = wellAfter - wellBefore;
+        if (wellReceived == 0) return 0;
+        emit RewardsClaimed(address(WELL), wellReceived);
+        uint256 usdcReceived = dexSwap(address(MYT.asset()), address(WELL), wellReceived, minAmountOut, quote);
+        TokenUtils.safeTransfer(address(MYT.asset()), address(MYT), usdcReceived);
+        return usdcReceived;
     }
 }

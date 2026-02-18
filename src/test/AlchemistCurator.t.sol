@@ -3,22 +3,22 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {VaultV2} from "../../lib/vault-v2/src/VaultV2.sol";
-import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {VaultV2} from "lib/vault-v2/src/VaultV2.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {TestYieldToken} from "./mocks/TestYieldToken.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {MockYieldToken} from "./mocks/MockYieldToken.sol";
 import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
 import {MockMYTStrategy} from "./mocks/MockMYTStrategy.sol";
-import {MockAlchemistCurator} from "./mocks/MockAlchemistCurator.sol";
+import {AlchemistCurator} from "../AlchemistCurator.sol";
 import {MYTTestHelper} from "./libraries/MYTTestHelper.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 
 contract AlchemistCuratorTest is Test {
     using MYTTestHelper for *;
 
-    MockAlchemistCurator public mytCuratorProxy;
+    AlchemistCurator public mytCuratorProxy;
     VaultV2 public vault;
     address public operator = address(0x2222222222222222222222222222222222222222); // default operator
     address public admin = address(0x4444444444444444444444444444444444444444); // DAO OSX
@@ -30,7 +30,7 @@ contract AlchemistCuratorTest is Test {
 
     function setUp() public {
         vm.startPrank(admin);
-        mytCuratorProxy = new MockAlchemistCurator(admin, operator);
+        mytCuratorProxy = new AlchemistCurator(admin, operator);
         vault = MYTTestHelper._setupVault(mockVaultCollateral, admin, address(mytCuratorProxy));
         mytStrategy = MYTTestHelper._setupStrategy(address(vault), mockStrategyYieldToken, admin, "MockToken", "MockTokenProtocol", IMYTStrategy.RiskClass.LOW);
         vm.stopPrank();
@@ -52,32 +52,16 @@ contract AlchemistCuratorTest is Test {
         vm.stopPrank();
     }
 
-    function testSubmitDecreaseAbsoluteCap() public {
-        _submitAndSetStrategy(address(mytStrategy), address(vault));
-        vm.startPrank(admin);
-        mytCuratorProxy.submitDecreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap);
-        vm.stopPrank();
-    }
-
-    function testSubmitDecreaseRelativeCap() public {
-        _submitAndSetStrategy(address(mytStrategy), address(vault));
-        vm.startPrank(admin);
-        mytCuratorProxy.submitDecreaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap);
-        vm.stopPrank();
-    }
-
     function testDecreaseAbsoluteCap() public {
         _submitAndSetStrategy(address(mytStrategy), address(vault));
         vm.startPrank(admin);
         mytCuratorProxy.submitIncreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap);
         _vaultFastForward(abi.encodeCall(IVaultV2.increaseAbsoluteCap, (mytStrategy.getIdData(), defaultStrategyAbsoluteCap)));
         mytCuratorProxy.increaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap);
-        mytCuratorProxy.submitDecreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap / 2);
-        _vaultFastForward(abi.encodeCall(IVaultV2.decreaseAbsoluteCap, (mytStrategy.getIdData(), defaultStrategyAbsoluteCap / 2)));
         mytCuratorProxy.decreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap / 2);
 
         // verify absolute cap has decreased
-        assertEq(vault.absoluteCap(IMYTStrategy(address(mytStrategy)).adapterId()), defaultStrategyAbsoluteCap / 2);
+        assertEq(vault.absoluteCap(IMYTStrategy(address(mytStrategy)).adapterId()), defaultStrategyAbsoluteCap - (defaultStrategyAbsoluteCap / 2));
         vm.stopPrank();
     }
 
@@ -87,11 +71,7 @@ contract AlchemistCuratorTest is Test {
         mytCuratorProxy.submitIncreaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap);
         _vaultFastForward(abi.encodeCall(IVaultV2.increaseRelativeCap, (mytStrategy.getIdData(), defaultStrategyRelativeCap)));
         mytCuratorProxy.increaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap);
-
-        mytCuratorProxy.submitDecreaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap / 2);
-        _vaultFastForward(abi.encodeCall(IVaultV2.decreaseRelativeCap, (mytStrategy.getIdData(), defaultStrategyRelativeCap / 2)));
         mytCuratorProxy.decreaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap / 2);
-
         // verify relative cap has decreased
         assertEq(vault.relativeCap(IMYTStrategy(address(mytStrategy)).adapterId()), defaultStrategyRelativeCap / 2);
         vm.stopPrank();
@@ -137,21 +117,9 @@ contract AlchemistCuratorTest is Test {
 
     /// access control tests
 
-    function testSubmitDecreaseRelativeCapRevertUnauthorizedAccess() public {
-        vm.expectRevert(abi.encode("PD"));
-        mytCuratorProxy.submitDecreaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap);
-        vm.stopPrank();
-    }
-
     function testDecreaseRelativeCapUnauthorizedAccessRevert() public {
         vm.expectRevert(abi.encode("PD"));
         mytCuratorProxy.decreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap);
-        vm.stopPrank();
-    }
-
-    function testSubmitDecreaseAbsoluteCapRevertUnauthorizedAccess() public {
-        vm.expectRevert(abi.encode("PD"));
-        mytCuratorProxy.submitDecreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap);
         vm.stopPrank();
     }
 
@@ -234,24 +202,10 @@ contract AlchemistCuratorTest is Test {
         vm.stopPrank();
     }
 
-    function testSubmitDecreaseAbsoluteCapReverOnInvalidAdapter() public {
-        vm.startPrank(admin);
-        vm.expectRevert(abi.encode("INVALID_ADDRESS"));
-        mytCuratorProxy.submitDecreaseAbsoluteCap(address(mytStrategy), defaultStrategyAbsoluteCap);
-        vm.stopPrank();
-    }
-
     function testIncreaseRelativeCapReverOnInvalidAdapter() public {
         vm.startPrank(admin);
         vm.expectRevert(abi.encode("INVALID_ADDRESS"));
         mytCuratorProxy.increaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap);
-        vm.stopPrank();
-    }
-
-    function testSubmitDecreaseRelativeCapReverOnInvalidAdapter() public {
-        vm.startPrank(admin);
-        vm.expectRevert(abi.encode("INVALID_ADDRESS"));
-        mytCuratorProxy.submitDecreaseRelativeCap(address(mytStrategy), defaultStrategyRelativeCap);
         vm.stopPrank();
     }
 
