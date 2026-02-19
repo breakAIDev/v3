@@ -160,7 +160,10 @@ contract MultiStrategyUSDCHandler is Test {
         address strategy = strategies[strategyIndex];
         
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
-        uint256 currentAllocation = vault.allocation(allocationId);
+        
+        // Use realAssets() to account for accrued yield that will be reported in _totalValue()
+        // The vault's tracked allocation may be stale if yield has accrued since last allocation
+        uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
         uint256 absoluteCap = vault.absoluteCap(allocationId);
         uint256 relativeCap = vault.relativeCap(allocationId);
         
@@ -168,22 +171,24 @@ contract MultiStrategyUSDCHandler is Test {
         uint8 riskLevel = AlchemistStrategyClassifier(classifier).getStrategyRiskLevel(uint256(allocationId));
         uint256 globalRiskCap = AlchemistStrategyClassifier(classifier).getGlobalCap(riskLevel);
         
-        // Initial bound by absolute cap headroom
-        if (currentAllocation >= absoluteCap) return;
+        // Get the underlying vault's max deposit to respect protocol-level caps (e.g., Euler supply cap)
+        uint256 underlyingMaxDeposit = _getUnderlyingMaxDeposit(strategy);
+        if (underlyingMaxDeposit < MIN_ALLOCATE) return;
         
-        // Calculate total existing allocations to ensure we maintain relative cap for all strategies
+        // Initial bound by absolute cap headroom
+        if (currentRealAssets >= absoluteCap) return;
+
         uint256 totalExistingAllocations = 0;
         for (uint256 i = 0; i < strategies.length; i++) {
-            bytes32 id = IMYTStrategy(strategies[i]).adapterId();
-            totalExistingAllocations += vault.allocation(id);
+            totalExistingAllocations += IMYTStrategy(strategies[i]).realAssets();
         }
         
         // Get current vault balance
         uint256 currentVaultBalance = IERC20(asset).balanceOf(address(vault));
-        
-        // Bound amount by absolute cap and global risk cap headroom
-        uint256 maxByAbsolute = absoluteCap - currentAllocation;
+
+        uint256 maxByAbsolute = absoluteCap - currentRealAssets;
         uint256 maxAllocate = maxByAbsolute < globalRiskCap ? maxByAbsolute : globalRiskCap;
+        maxAllocate = maxAllocate < underlyingMaxDeposit ? maxAllocate : underlyingMaxDeposit;
         if (maxAllocate < MIN_ALLOCATE) return;
         
         amount = bound(amount, MIN_ALLOCATE, maxAllocate);
@@ -195,7 +200,7 @@ contract MultiStrategyUSDCHandler is Test {
         uint256 dealAmount = amount;
         if (relativeCap != type(uint256).max && relativeCap != 0 && relativeCap < 1e18) {
             // Calculate required total assets for the NEW total allocation
-            uint256 newTotalAllocation = currentAllocation + amount;
+            uint256 newTotalAllocation = currentRealAssets + amount;
             uint256 requiredTotalAssets = (newTotalAllocation * 1e18 + relativeCap - 1) / relativeCap; // Round up
             if (requiredTotalAssets > totalExistingAllocations) {
                 uint256 minVaultBalance = requiredTotalAssets - totalExistingAllocations;
@@ -216,11 +221,9 @@ contract MultiStrategyUSDCHandler is Test {
         
         uint256 limit = absoluteCap < absoluteValueOfRelativeCap ? absoluteCap : absoluteValueOfRelativeCap;
         limit = limit < globalRiskCap ? limit : globalRiskCap;
-        
-        // Ensure the TOTAL allocation (current + new) doesn't exceed the limit
-        // This matches the invariant check, not just the allocator's check
-        if (currentAllocation >= limit) return;
-        uint256 maxNewAllocation = limit - currentAllocation;
+
+        if (currentRealAssets >= limit) return;
+        uint256 maxNewAllocation = limit - currentRealAssets;
         
         if (amount > maxNewAllocation) {
             amount = maxNewAllocation;
@@ -314,7 +317,21 @@ contract MultiStrategyUSDCHandler is Test {
         }
     }
     
-    // ============ HELPER FUNCTIONS ============
+    /// @dev Get the maximum deposit amount for the underlying protocol vault
+    /// This accounts for protocol-level supply caps (e.g., Euler's E_SupplyCapExceeded)
+    function _getUnderlyingMaxDeposit(address strategy) internal view returns (uint256) {
+        // Try to get the underlying vault from the strategy and query its maxDeposit
+        // EulerUSDCStrategy exposes `vault` as an IERC4626
+        if (keccak256(bytes(strategyNames[strategy])) == keccak256("Euler Mainnet USDC")) {
+            try EulerUSDCStrategy(strategy).vault().maxDeposit(strategy) returns (uint256 max) {
+                return max;
+            } catch {
+                return type(uint256).max; // If call fails, don't constrain
+            }
+        }
+        // For other strategies, add similar checks as needed
+        return type(uint256).max; // Default: no additional constraint
+    }
     
     function getStrategyCount() external view returns (uint256) {
         return strategies.length;

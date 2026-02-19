@@ -132,9 +132,7 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
 
         // Convert relativeCap (WAD) to absolute value (WEI)
         uint256 totalAssets = vault.totalAssets();
-        uint256 absoluteValueOfRelativeCap = (relativeCap == type(uint256).max) 
-            ? type(uint256).max 
-            : (totalAssets * relativeCap) / 1e18;
+        uint256 absoluteValueOfRelativeCap = (totalAssets * relativeCap) / 1e18;
 
         // Calculate limit cap as the minimum of vault caps and global risk cap
         uint256 limit = absoluteCap < absoluteValueOfRelativeCap ? absoluteCap : absoluteValueOfRelativeCap;
