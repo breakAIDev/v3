@@ -177,13 +177,19 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
     }
 
     /// @dev Helper to get valid allocation bounds based on effective cap and vault assets.
+    ///      Returns (0, 0) if the available headroom is below MIN_ALLOCATE_AMOUNT.
     function _getAllocationBounds() internal view returns (uint256 min, uint256 max) {
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
         uint256 effectiveCap = _getEffectiveCapHeadroom(allocationId);
         uint256 vaultAssets = IVaultV2(vault).totalAssets();
         uint256 maxAlloc = effectiveCap < vaultAssets ? effectiveCap : vaultAssets;
-        uint256 minAlloc = MIN_ALLOCATE_AMOUNT > maxAlloc ? maxAlloc : MIN_ALLOCATE_AMOUNT;
-        return (minAlloc, maxAlloc);
+        
+        // If available headroom is below minimum, return (0, 0) to signal no valid allocation possible
+        if (maxAlloc < MIN_ALLOCATE_AMOUNT) {
+            return (0, 0);
+        }
+        
+        return (MIN_ALLOCATE_AMOUNT, maxAlloc);
     }
 
     /// @dev Helper to deal specific amount of assets to the vault.
@@ -194,20 +200,21 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
     /// @dev Helper to calculate effective cap headroom (matches AlchemistAllocator._validateCaps logic)
     function _getEffectiveCapHeadroom(bytes32 allocationId) internal view returns (uint256) {
         uint256 currentAllocation = IVaultV2(vault).allocation(allocationId);
+        console.log("currentAllocation", currentAllocation);
         uint256 absoluteCap = IVaultV2(vault).absoluteCap(allocationId);
         uint256 relativeCap = IVaultV2(vault).relativeCap(allocationId);
         uint256 totalAssets = IVaultV2(vault).totalAssets();
 
         uint256 absoluteRemaining = absoluteCap > currentAllocation ? absoluteCap - currentAllocation : 0;
-
-        uint256 absoluteValueOfRelativeCap =
-            (relativeCap == type(uint256).max) ? type(uint256).max : (totalAssets * relativeCap) / 1e18;
+        console.log("absoluteRemaining", absoluteRemaining);
+        uint256 absoluteValueOfRelativeCap = (totalAssets * relativeCap) / 1e18;
+        console.log("absoluteValueOfRelativeCap", absoluteValueOfRelativeCap);
         uint256 relativeRemaining = absoluteValueOfRelativeCap > currentAllocation
             ? absoluteValueOfRelativeCap - currentAllocation
             : 0;
-
+        console.log("relativeRemaining", relativeRemaining);
         uint256 limit = absoluteRemaining < relativeRemaining ? absoluteRemaining : relativeRemaining;
-
+        console.log("limit", limit);
         uint256 strategyId = uint256(allocationId);
         uint8 riskLevel = AlchemistStrategyClassifier(classifier).getStrategyRiskLevel(strategyId);
         uint256 globalRiskCap = AlchemistStrategyClassifier(classifier).getGlobalCap(riskLevel);

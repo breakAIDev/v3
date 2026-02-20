@@ -6,6 +6,7 @@ import {IAllocator} from "../../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {RevertContext} from "./StrategyTypes.sol";
 import {StrategyOps} from "./StrategyOps.sol";
+import "forge-std/console.sol";
 
 /// @notice Multi-step/fuzz/loop-heavy base tests shared by strategy suites.
 /// @dev Keep stochastic, iterative, and invariant-like tests here; prefer allowlist-aware helper paths.
@@ -23,7 +24,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
 
             if (isAllocate) {
                 (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
-                if (maxAlloc >= minAlloc) {
+                if (maxAlloc > 0 && maxAlloc >= minAlloc) {
                     uint256 amount = bound(amounts[i], minAlloc, maxAlloc);
                     if (amount > 0) {
                         _prepareVaultAssets(amount);
@@ -157,7 +158,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         vm.startPrank(admin);
 
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
-        if (maxAlloc < minAlloc) return;
+        if (maxAlloc == 0 || maxAlloc < minAlloc) return;
         amountToAllocate = bound(amountToAllocate, minAlloc, maxAlloc);
 
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
@@ -192,7 +193,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         vm.startPrank(admin);
 
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
-        if (maxAlloc < minAlloc) return;
+        if (maxAlloc == 0 || maxAlloc < minAlloc) return;
         amountToAllocate = bound(amountToAllocate, minAlloc, maxAlloc);
         fractionToDeallocate = bound(fractionToDeallocate, 1, 100); // 1-100%
 
@@ -286,7 +287,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         vm.startPrank(admin);
 
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
-        if (maxAlloc < minAlloc) return;
+        if (maxAlloc == 0 || maxAlloc < minAlloc) return;
         baseAmount = bound(baseAmount, minAlloc, maxAlloc);
         numOperations = uint8(bound(numOperations, 5, 50));
 
@@ -334,7 +335,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         vm.startPrank(admin);
 
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
-        if (maxAlloc < minAlloc) return;
+        if (maxAlloc == 0 || maxAlloc < minAlloc) return;
         initialAlloc = bound(initialAlloc, minAlloc, maxAlloc);
         numWarps = uint8(bound(numWarps, 1, 10));
 
@@ -374,11 +375,11 @@ abstract contract BaseStrategyMulti is StrategyOps {
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
 
         // First allocation
-        (, uint256 maxAlloc) = _getAllocationBounds();
+        (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
+        if (maxAlloc == 0) return;
         uint256 alloc1 = 100 * 10 ** testConfig.decimals;
         alloc1 = alloc1 > maxAlloc ? maxAlloc : alloc1;
-        if (alloc1 == 0) return;
-
+        if (alloc1 < minAlloc) return;
         _prepareVaultAssets(alloc1);
         bool alloc1Ok = _allocateOrSkipWhitelisted(alloc1, RevertContext.FuzzAllocate);
         if (!alloc1Ok) {
@@ -392,10 +393,12 @@ abstract contract BaseStrategyMulti is StrategyOps {
         _warpWithHook(1 days);
 
         // Second allocation
-        (, maxAlloc) = _getAllocationBounds();
+        console.log("---------- second allocation ----------");
+        (minAlloc, maxAlloc) = _getAllocationBounds();
+        if (maxAlloc == 0) return;
         uint256 alloc2 = 50 * 10 ** testConfig.decimals;
         alloc2 = alloc2 > maxAlloc ? maxAlloc : alloc2;
-        if (alloc2 == 0) return;
+        if (alloc2 < minAlloc) return;
 
         _prepareVaultAssets(alloc2);
         bool alloc2Ok = _allocateOrSkipWhitelisted(alloc2, RevertContext.FuzzAllocate);
