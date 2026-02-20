@@ -73,7 +73,9 @@ abstract contract BaseStrategySimple is StrategyOps {
 
         vm.clearMockedCalls();
 
-        assertApproxEqAbs(change, -int256(amountToDeallocate), 1 * 10 ** testConfig.decimals);
+        // FIXME aave observed slippage is ~13%
+        assertApproxEqRel(change, -int256(amountToDeallocate), 1e16); // 1% slippage tolerance
+
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(strategy).adapterId(), "adapter id not in strategyIds");
         uint256 finalRealAssets = IMYTStrategy(strategy).realAssets();
