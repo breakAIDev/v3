@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 // Adjust these imports to your layout
 
 import {TokeAutoEthStrategy} from "../../strategies/mainnet/TokeAutoETHStrategy.sol";
-import {BaseStrategyTest} from "../BaseStrategyTest.sol";
+import {BaseStrategyTest, RevertContext} from "../BaseStrategyTest.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
@@ -107,6 +107,12 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
     address public constant REWARDER = 0x60882D6f70857606Cdd37729ccCe882015d1755E;
     address public constant ORACLE = 0x61F8BE7FD721e80C0249829eaE6f0DAf21bc2CaC;
     address public constant TOKE = 0x2e9d63788249371f1DFC918a52f8d799F4a38C94;
+    // Error(string) selector (0x08c379a0), observed in Tokemak traces.
+    // In this suite it is observed on both allocate and deallocate paths.
+    bytes4 internal constant ERROR_STRING_SELECTOR = 0x08c379a0;
+    // Tokemak custom error selector (0x8d54ba1f / InvalidDataReturned in tests).
+    // In this suite it is observed on allocate paths (stake mock), not deallocate.
+    bytes4 internal constant ALLOWED_TOKEMAK_REVERT_SELECTOR = 0x8d54ba1f;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -183,6 +189,20 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
             abi.encodePacked(IAutoEthMath.convertToShares.selector, bytes32(previewAmount)),
             abi.encode(previewAmount)
         );
+    }
+
+    function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
+        if (
+            selector != ERROR_STRING_SELECTOR
+                && selector != ALLOWED_TOKEMAK_REVERT_SELECTOR
+        ) return false;
+
+        return context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
+            || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
+    }
+
+    function isMytRevertAllowed(bytes4, RevertContext) external pure override returns (bool) {
+        return false;
     }
 
     // Add any strategy-specific tests here
@@ -295,6 +315,53 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
         uint256 vaultBalanceAfter = IERC20(WETH).balanceOf(vault);
         assertEq(received, 0, "Should return 0 when staking is enabled");
         assertEq(vaultBalanceAfter, vaultBalanceBefore, "Vault balance should not change when staking is enabled");
+    }
+
+    function test_allowlisted_revert_deposit_value_below_minimum_is_deterministic() public {
+        bytes memory params = getVaultParams();
+        uint256 amountToAllocate = 1e18;
+        bytes4 convertToAssetsSelector = bytes4(keccak256("convertToAssets(uint256,uint256,uint256,uint8)"));
+
+        vm.startPrank(vault);
+        deal(testConfig.vaultAsset, strategy, amountToAllocate);
+        vm.mockCall(TOKE_AUTO_ETH_VAULT, abi.encodePacked(convertToAssetsSelector), abi.encode(0));
+        vm.expectRevert(bytes("Deposit value below minimum"));
+        IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
+        vm.stopPrank();
+    }
+
+    function test_allowlisted_revert_withdraw_amount_insufficient_is_deterministic() public {
+        bytes memory params = getVaultParams();
+        uint256 amountToAllocate = 2e18;
+        uint256 amountToDeallocate = 1e18;
+
+        vm.startPrank(vault);
+        deal(testConfig.vaultAsset, strategy, amountToAllocate);
+        IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
+
+        vm.mockCall(
+            REWARDER,
+            abi.encodeWithSelector(bytes4(keccak256("balanceOf(address)")), strategy),
+            abi.encode(0)
+        );
+        vm.expectRevert();
+        IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
+        vm.stopPrank();
+    }
+
+    // Ensures the allowlisted custom selector (0x8d54ba1f / InvalidDataReturned) is explicitly asserted.
+    // Mocks rewarder.stake() to emit that revert so fuzz-skip coverage has a deterministic counterpart.
+    function test_allowlisted_revert_custom_selector_is_deterministic() public {
+        uint256 amountToAllocate = 1e18;
+        bytes4 convertToAssetsSelector = bytes4(keccak256("convertToAssets(uint256,uint256,uint256,uint8)"));
+        bytes4 stakeSelector = bytes4(keccak256("stake(address,uint256)"));
+
+        vm.startPrank(allocator);
+        vm.mockCall(TOKE_AUTO_ETH_VAULT, abi.encodePacked(convertToAssetsSelector), abi.encode(amountToAllocate));
+        vm.mockCallRevert(REWARDER, abi.encodePacked(stakeSelector), abi.encodeWithSelector(ALLOWED_TOKEMAK_REVERT_SELECTOR));
+        vm.expectRevert(ALLOWED_TOKEMAK_REVERT_SELECTOR);
+        IVaultV2(vault).allocate(strategy, getVaultParams(), amountToAllocate);
+        vm.stopPrank();
     }
 
     // End-to-end test: Full lifecycle with time accumulation for TokeAutoETH

@@ -15,6 +15,10 @@ contract MockMorphoYearnOGWETHStrategy is MorphoYearnOGWETHStrategy {
 contract MorphoYearnOGWETHStrategyTest is BaseStrategyTest {
     address public constant MORPHO_YEARN_OG_VAULT = 0xE89371eAaAC6D46d4C3ED23453241987916224FC;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    // Error(string) selector (0x08c379a0), observed in traces as "PD" and
+    // "Minimum amount has not been deposited" on Morpho Yearn vault interactions.
+    // In this suite it is observed on both allocate and deallocate paths.
+    bytes4 internal constant ERROR_STRING_SELECTOR = 0x08c379a0;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -40,6 +44,13 @@ contract MorphoYearnOGWETHStrategyTest is BaseStrategyTest {
 
     function getRpcUrl() internal view override returns (string memory) {
         return vm.envString("MAINNET_RPC_URL");
+    }
+
+    function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
+        bool isFuzzOrHandler = context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
+            || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
+
+        return isFuzzOrHandler && selector == ERROR_STRING_SELECTOR;
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {

@@ -15,6 +15,11 @@ contract MockFluidARBUSDCStrategy is FluidARBUSDCStrategy {
 contract FluidARBUSDCStrategyTest is BaseStrategyTest {
     address public constant FLUID_USDC_VAULT = 0x1A996cb54bb95462040408C06122D45D6Cdb6096;
     address public constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+    // Fluid custom error selector (0xdcab82e2): `FluidLiquidityError(uint256)`.
+    // Observed in fork traces on allocator allocate path when Fluid `deposit` is called with dust-sized amounts (e.g. 1 unit).
+    // In this suite it is observed on allocate paths; deallocate-path occurrences were not observed.
+    // Allowlisted only for fuzz/handler contexts to avoid flakiness from protocol-side dust guards.
+    bytes4 internal constant ALLOWED_FLUID_REVERT_SELECTOR = 0xdcab82e2;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -44,6 +49,13 @@ contract FluidARBUSDCStrategyTest is BaseStrategyTest {
 
     function getRpcUrl() internal view override returns (string memory) {
         return vm.envString("ARBITRUM_RPC_URL");
+    }
+
+    function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
+        bool isFuzzOrHandler = context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
+            || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
+
+        return isFuzzOrHandler && selector == ALLOWED_FLUID_REVERT_SELECTOR;
     }
 
     // Add any strategy-specific tests here

@@ -2,9 +2,13 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {PeapodsETHStrategy} from "../../strategies/mainnet/PeapodsETHStrategy.sol";
+import {PeapodsETHStrategy} from "../..//strategies/mainnet/PeapodsETHStrategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
+
+interface IERC4626MaxWithdraw {
+    function maxWithdraw(address owner) external view returns (uint256);
+}
 
 contract MockPeapodsETHStrategy is PeapodsETHStrategy {
     constructor(address _myt, StrategyParams memory _params, address _vault, address _weth)
@@ -15,6 +19,9 @@ contract MockPeapodsETHStrategy is PeapodsETHStrategy {
 contract PeapodsETHStrategyTest is BaseStrategyTest {
     address public constant PEAPODS_ETH_VAULT = 0x9a42e1bEA03154c758BeC4866ec5AD214D4F2191;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    // Error(string) selector (0x08c379a0), observed as "M" on allocate and "PD" on deallocate.
+    // In this suite it is observed on both allocate (deposit mock) and deallocate (withdraw mock) paths.
+    bytes4 internal constant ERROR_STRING_SELECTOR = 0x08c379a0;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -44,6 +51,52 @@ contract PeapodsETHStrategyTest is BaseStrategyTest {
 
     function getRpcUrl() internal view override returns (string memory) {
         return vm.envString("MAINNET_RPC_URL");
+    }
+
+    function _effectiveDeallocateAmount(uint256 requestedAssets) internal view override returns (uint256) {
+        uint256 maxWithdrawable = IERC4626MaxWithdraw(PEAPODS_ETH_VAULT).maxWithdraw(strategy);
+        return requestedAssets < maxWithdrawable ? requestedAssets : maxWithdrawable;
+    }
+
+    function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
+        bool isFuzzOrHandler = context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
+            || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
+
+        return isFuzzOrHandler && selector == ERROR_STRING_SELECTOR;
+    }
+
+    function test_allowlisted_revert_error_string_M_is_deterministic() public {
+        uint256 amountToAllocate = 1e18;
+        bytes4 depositSelector = bytes4(keccak256("deposit(uint256,address)"));
+
+        vm.startPrank(allocator);
+        _prepareVaultAssets(amountToAllocate);
+        vm.mockCallRevert(
+            PEAPODS_ETH_VAULT, abi.encodePacked(depositSelector), abi.encodeWithSelector(ERROR_STRING_SELECTOR, "M")
+        );
+        vm.expectRevert(bytes("M"));
+        IVaultV2(vault).allocate(strategy, getVaultParams(), amountToAllocate);
+        vm.stopPrank();
+    }
+
+    function test_allowlisted_revert_error_string_PD_is_deterministic() public {
+        uint256 amountToAllocate = 2e18;
+        uint256 amountToDeallocate = 1e18;
+        bytes4 withdrawSelector = bytes4(keccak256("withdraw(uint256,address,address)"));
+
+        vm.startPrank(allocator);
+        _prepareVaultAssets(amountToAllocate);
+        IVaultV2(vault).allocate(strategy, getVaultParams(), amountToAllocate);
+
+        uint256 deallocPreview = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToDeallocate);
+        require(deallocPreview > 0, "preview is zero");
+
+        vm.mockCallRevert(
+            PEAPODS_ETH_VAULT, abi.encodePacked(withdrawSelector), abi.encodeWithSelector(ERROR_STRING_SELECTOR, "PD")
+        );
+        vm.expectRevert(bytes("PD"));
+        IVaultV2(vault).deallocate(strategy, getVaultParams(), deallocPreview);
+        vm.stopPrank();
     }
 
     // Test that full deallocation completes without reverting

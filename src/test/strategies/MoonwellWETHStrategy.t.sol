@@ -51,6 +51,11 @@ contract MoonwellWETHStrategyTest is BaseStrategyTest {
     address public constant WETH = 0x4200000000000000000000000000000000000006;
     address public constant WELL = 0xA88594D404727625A9437C3f886C7643872296AE;
     address public constant COMPTROLLER = 0xCa889f40aae37FFf165BccF69aeF1E82b5C511B9;
+    // Error(string) selector (0x08c379a0), observed as "PD" in Moonwell deallocation traces.
+    // Reproduced in this suite via `RevertContext.FuzzDeallocate` (allocator->deallocate path).
+    // In this suite it is observed on deallocate paths, not allocate.
+    // The trace does not identify whether "PD" is specifically a max-limit or min-limit violation.
+    bytes4 internal constant ERROR_STRING_SELECTOR = 0x08c379a0;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -80,6 +85,13 @@ contract MoonwellWETHStrategyTest is BaseStrategyTest {
 
     function getRpcUrl() internal view override returns (string memory) {
         return vm.envString("OPTIMISM_RPC_URL");
+    }
+
+    function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
+        bool isFuzzOrHandler = context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
+            || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
+
+        return isFuzzOrHandler && selector == ERROR_STRING_SELECTOR;
     }
 
     // Test that full deallocation completes without reverting

@@ -2,7 +2,7 @@
 
 pragma solidity 0.8.28;
 
-import {IVaultV2} from "../lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 import {PermissionedProxy} from "./utils/PermissionedProxy.sol";
 import {IAllocator} from "./interfaces/IAllocator.sol";
 import {IMYTStrategy} from "./interfaces/IMYTStrategy.sol";

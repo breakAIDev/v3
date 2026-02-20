@@ -59,6 +59,9 @@ contract AaveV3ARBUSDCStrategyTest is BaseStrategyTest {
     address public constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address public constant ARB = 0x912CE59144191C1204E64559FE8253a0e49E6548;
     address public constant REWARDS_CONTROLLER = 0x929EC64c34a17401F460460D4B9390518E5B473e;
+    // Aave custom error selector (0x2c5211c6): `InvalidAmount()`.
+    // In this suite it is observed on deallocate paths (withdraw mock), not allocate.
+    bytes4 internal constant ALLOWED_AAVE_REVERT_SELECTOR = 0x2c5211c6;
 
     function getStrategyConfig() internal pure override returns (IMYTStrategy.StrategyParams memory) {
         return IMYTStrategy.StrategyParams({
@@ -90,6 +93,13 @@ contract AaveV3ARBUSDCStrategyTest is BaseStrategyTest {
         return vm.envString("ARBITRUM_RPC_URL");
     }
 
+    function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
+        bool isFuzzOrHandler = context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
+            || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
+
+        return isFuzzOrHandler && selector == ALLOWED_AAVE_REVERT_SELECTOR;
+    }
+
     // Add any strategy-specific tests here
     function test_strategy_deallocate_reverts_due_to_slippage(uint256 amountToAllocate, uint256 amountToDeallocate) public {
         amountToAllocate = bound(amountToAllocate, 1 * 10 ** testConfig.decimals, testConfig.vaultInitialDeposit);
@@ -102,6 +112,29 @@ contract AaveV3ARBUSDCStrategyTest is BaseStrategyTest {
         require(initialRealAssets > 0, "Initial real assets is 0");
         vm.expectRevert();
         IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
+        vm.stopPrank();
+    }
+
+    function test_allowlisted_revert_custom_selector_is_deterministic() public {
+        uint256 amountToAllocate = 100e6;
+        uint256 amountToDeallocate = 50e6;
+        address mockPool = address(0xBEEF);
+        bytes4 getPoolSelector = bytes4(keccak256("getPool()"));
+        bytes4 withdrawSelector = bytes4(keccak256("withdraw(address,uint256,address)"));
+
+        vm.startPrank(allocator);
+        _prepareVaultAssets(amountToAllocate);
+        IVaultV2(vault).allocate(strategy, getVaultParams(), amountToAllocate);
+
+        uint256 deallocPreview = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToDeallocate);
+        require(deallocPreview > 0, "preview is zero");
+
+        vm.mockCall(AAVE_V3_USDC_POOL, abi.encodeWithSelector(getPoolSelector), abi.encode(mockPool));
+        vm.mockCallRevert(
+            mockPool, abi.encodePacked(withdrawSelector), abi.encodeWithSelector(ALLOWED_AAVE_REVERT_SELECTOR)
+        );
+        vm.expectRevert(ALLOWED_AAVE_REVERT_SELECTOR);
+        IVaultV2(vault).deallocate(strategy, getVaultParams(), deallocPreview);
         vm.stopPrank();
     }
 

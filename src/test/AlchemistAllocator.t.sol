@@ -14,6 +14,7 @@ import {MockMYTStrategy} from "./mocks/MockMYTStrategy.sol";
 import {AlchemistAllocator} from "../AlchemistAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {console} from "forge-std/console.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 
 contract MockAlchemistAllocator is AlchemistAllocator {
@@ -101,6 +102,47 @@ contract AlchemistAllocatorTest is Test {
         vm.expectRevert(abi.encode("RL"));
         allocator.allocate(address(mytStrategy), maxAllocation + 1);
         vm.stopPrank();
+    }
+
+    function testAllocateRelativeCapOne_RevertWhenTotalAssetsAboveAbsoluteCap() public {
+        bytes memory idData = mytStrategy.getIdData();
+        vm.startPrank(curator);
+        _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.increaseRelativeCap, (idData, 1e18)));
+        vault.increaseRelativeCap(idData, 1e18);
+        vm.stopPrank();
+
+        _magicDepositToVault(address(vault), user1, 300 ether);
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 totalAssets = vault.totalAssets();
+        uint256 absoluteCap = vault.absoluteCap(strategyId);
+
+        assertGt(totalAssets, absoluteCap);
+
+        vm.startPrank(admin);
+        vm.expectRevert(abi.encode("RL"));
+        allocator.allocate(address(mytStrategy), totalAssets);
+        vm.stopPrank();
+    }
+
+    function testAllocateRelativeCapOne_SucceedsWhenTotalAssetsBelowAbsoluteCap() public {
+        bytes memory idData = mytStrategy.getIdData();
+        vm.startPrank(curator);
+        _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.increaseRelativeCap, (idData, 1e18)));
+        vault.increaseRelativeCap(idData, 1e18);
+        vm.stopPrank();
+
+        _magicDepositToVault(address(vault), user1, 150 ether);
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 totalAssets = vault.totalAssets();
+        uint256 absoluteCap = vault.absoluteCap(strategyId);
+
+        assertLt(totalAssets, absoluteCap);
+
+        vm.startPrank(admin);
+        allocator.allocate(address(mytStrategy), totalAssets);
+        vm.stopPrank();
+
+        assertEq(vault.allocation(strategyId), totalAssets);
     }
 
     function testAllocateRevertIfAboveRiskGlobalCap() public {
