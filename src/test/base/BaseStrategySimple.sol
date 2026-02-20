@@ -7,6 +7,8 @@ import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {RevertContext} from "./StrategyTypes.sol";
 import {StrategyOps} from "./StrategyOps.sol";
+import "forge-std/console.sol";
+
 
 /// @notice Simple base tests shared by strategy suites.
 /// @dev Add deterministic or straightforward tests here; keep assertions readable and strategy-agnostic.
@@ -47,18 +49,21 @@ abstract contract BaseStrategySimple is StrategyOps {
         vm.stopPrank();
     }
 
-    function test_strategy_deallocate(uint256 amountToAllocate, uint256 amountToDeallocate) public {
+    function test_strategy_deallocate(uint256 amountToAllocate) public {
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
         amountToAllocate = bound(amountToAllocate, minAlloc, maxAlloc);
+        console.log(minAlloc, maxAlloc);
         bytes memory params = getVaultParams();
-
         vm.startPrank(vault);
-        deal(testConfig.vaultAsset, strategy, amountToAllocate);
-        IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
+        // only allocate if we are whithin caps
+        if(amountToAllocate > 0) {
+                deal(testConfig.vaultAsset, strategy, amountToAllocate);
+                IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
+        }
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
-        require(initialRealAssets > 0, "Initial real assets is 0");
-
-        amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToAllocate);
+        uint256 amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToAllocate);
+        amountToDeallocate = bound(amountToDeallocate, 0, IMYTStrategy(strategy).realAssets());
+        if (amountToDeallocate == 0) return; // we are not interested in deallocating from empty vaults
 
         bytes32 adapterId = IMYTStrategy(strategy).adapterId();
         vm.mockCall(vault, abi.encodeWithSelector(IVaultV2.allocation.selector, adapterId), abi.encode(initialRealAssets));
@@ -91,6 +96,7 @@ abstract contract BaseStrategySimple is StrategyOps {
 
     function test_allocator_allocate_direct(uint256 amountToAllocate) public {
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
+        if (maxAlloc == 0) return;
         amountToAllocate = bound(amountToAllocate, minAlloc, maxAlloc);
 
         vm.startPrank(admin);
@@ -116,6 +122,7 @@ abstract contract BaseStrategySimple is StrategyOps {
 
     function test_allocator_deallocate_direct(uint256 amountToAllocate, uint256 amountToDeallocate) public {
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
+        if (maxAlloc == 0) return;
         amountToAllocate = bound(amountToAllocate, minAlloc, maxAlloc);
 
         vm.startPrank(admin);

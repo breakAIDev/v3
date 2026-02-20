@@ -19,6 +19,7 @@ interface IPoolAddressProvider {
 
 interface IAaveAToken {
     function balanceOf(address) external view returns (uint256);
+    function scaledBalanceOf(address) external view returns (uint256);
 }
 
 interface IRewardsController {
@@ -71,7 +72,7 @@ contract AaveV3ARBUSDCStrategy is MYTStrategy {
 
     function _totalValue() internal view override returns (uint256) {
         // aToken balance reflects principal + interest in underlying units
-        return aUSDC.balanceOf(address(this));
+        return aUSDC.scaledBalanceOf(address(this));
     }
 
     function _claimRewards(address token, bytes memory quote, uint256 minAmountOut) internal override returns (uint256) {

@@ -33,9 +33,10 @@ abstract contract BaseStrategyMulti is StrategyOps {
                 }
             } else {
                 uint256 currentAllocation = IVaultV2(vault).allocation(allocationId);
-                if (currentAllocation >= MIN_ALLOCATE_AMOUNT) {
+                uint256 minAlloc = _getMinAllocateAmount();
+                if (currentAllocation >= minAlloc) {
                     uint256 maxDealloc = currentAllocation;
-                    uint256 amount = bound(amounts[i], MIN_ALLOCATE_AMOUNT, maxDealloc);
+                    uint256 amount = bound(amounts[i], minAlloc, maxDealloc);
                     uint256 target = _effectiveDeallocateAmount(amount);
                     if (target > 0) {
                         _beforePreviewWithdraw(target);
@@ -131,8 +132,9 @@ abstract contract BaseStrategyMulti is StrategyOps {
             if (op == 0) {
                 // Allocate - bounded by effective cap
                 uint256 effectiveCap = _getEffectiveCapHeadroom(allocationId);
-                if (effectiveCap >= MIN_ALLOCATE_AMOUNT) {
-                    amount = bound(amount, MIN_ALLOCATE_AMOUNT, effectiveCap);
+                uint256 minAlloc = _getMinAllocateAmount();
+                if (effectiveCap >= minAlloc) {
+                    amount = bound(amount, minAlloc, effectiveCap);
                     _prepareVaultAssets(amount);
                     _allocateOrSkipWhitelisted(amount, RevertContext.FuzzAllocate);
                 }
@@ -245,8 +247,9 @@ abstract contract BaseStrategyMulti is StrategyOps {
         vm.startPrank(admin);
 
         uint256 vaultTotalAssets = IVaultV2(vault).totalAssets();
-        // Bound from MIN_ALLOCATE_AMOUNT to allow testing both within and exceeding available balance
-        uint256 minBound = MIN_ALLOCATE_AMOUNT < vaultTotalAssets * 100 ? MIN_ALLOCATE_AMOUNT : vaultTotalAssets * 100;
+        uint256 minAlloc = _getMinAllocateAmount();
+        // Bound from minAlloc to allow testing both within and exceeding available balance
+        uint256 minBound = minAlloc < vaultTotalAssets * 100 ? minAlloc : vaultTotalAssets * 100;
         amountToAllocate = bound(amountToAllocate, minBound, vaultTotalAssets * 100);
 
         uint256 realAssetsBefore = IMYTStrategy(strategy).realAssets();
@@ -498,23 +501,26 @@ abstract contract BaseStrategyMulti is StrategyOps {
     }
 
     /// @notice Fuzz test: Zero amount operations should have no effect (idempotency)
-    function test_fuzz_zero_operations_no_effect(uint256 nonZeroAmount) public {
+    function test_fuzz_zero_operations_no_effect(uint256 amount) public {
         vm.startPrank(admin);
 
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
         if (maxAlloc < minAlloc) return;
-        nonZeroAmount = bound(nonZeroAmount, minAlloc, maxAlloc);
+        amount = bound(amount, minAlloc, maxAlloc);
 
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
 
-        _prepareVaultAssets(nonZeroAmount);
-        IAllocator(allocator).allocate(strategy, nonZeroAmount);
+        // maxAlloc helper is 0 when we reached an effective cap
+        if(amount > 0) {
+            _prepareVaultAssets(amount);
+            IAllocator(allocator).allocate(strategy, amount);
+        }
 
         uint256 realAssetsBefore = IMYTStrategy(strategy).realAssets();
         uint256 allocationBefore = IVaultV2(vault).allocation(allocationId);
 
-        // Try to allocate zero - should have no effect or revert with specific error
-        try IAllocator(allocator).allocate(strategy, 0) {} catch {}
+        vm.expectRevert("Zero amount");
+        IAllocator(allocator).allocate(strategy, 0);
 
         uint256 realAssetsAfterZeroAlloc = IMYTStrategy(strategy).realAssets();
         uint256 allocationAfterZeroAlloc = IVaultV2(vault).allocation(allocationId);

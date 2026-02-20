@@ -40,7 +40,8 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
     }
 
     // Minimum allocation amount to satisfy underlying protocol requirements (e.g., Aave V3 min supply)
-    uint256 public constant MIN_ALLOCATE_AMOUNT = 1e15; // 0.001 ETH/token
+    // Represents 0.001 tokens - computed dynamically based on asset decimals
+    uint256 public constant MIN_ALLOCATE_AMOUNT_SCALAR = 3; // 10^(decimals - 3) = 0.001 tokens
 
     // Abstract functions that must be implemented by child contracts
     function getTestConfig() internal virtual returns (TestConfig memory);
@@ -176,20 +177,27 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
         vm.warp(targetTimestamp);
     }
 
+    /// @dev Helper to get decimals-aware minimum allocation amount (0.001 tokens).
+    function _getMinAllocateAmount() internal view returns (uint256) {
+        return 10 ** (testConfig.decimals - MIN_ALLOCATE_AMOUNT_SCALAR);
+    }
+
     /// @dev Helper to get valid allocation bounds based on effective cap and vault assets.
-    ///      Returns (0, 0) if the available headroom is below MIN_ALLOCATE_AMOUNT.
     function _getAllocationBounds() internal view returns (uint256 min, uint256 max) {
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
         uint256 effectiveCap = _getEffectiveCapHeadroom(allocationId);
         uint256 vaultAssets = IVaultV2(vault).totalAssets();
+        console.log("vaultAssets", vaultAssets);
         uint256 maxAlloc = effectiveCap < vaultAssets ? effectiveCap : vaultAssets;
+        console.log("final maxAlloc", maxAlloc);
         
+        uint256 minAlloc = _getMinAllocateAmount();
         // If available headroom is below minimum, return (0, 0) to signal no valid allocation possible
-        if (maxAlloc < MIN_ALLOCATE_AMOUNT) {
+        if (maxAlloc < minAlloc) {
             return (0, 0);
         }
         
-        return (MIN_ALLOCATE_AMOUNT, maxAlloc);
+        return (minAlloc, maxAlloc);
     }
 
     /// @dev Helper to deal specific amount of assets to the vault.
@@ -214,13 +222,13 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
             : 0;
         console.log("relativeRemaining", relativeRemaining);
         uint256 limit = absoluteRemaining < relativeRemaining ? absoluteRemaining : relativeRemaining;
-        console.log("limit", limit);
         uint256 strategyId = uint256(allocationId);
         uint8 riskLevel = AlchemistStrategyClassifier(classifier).getStrategyRiskLevel(strategyId);
         uint256 globalRiskCap = AlchemistStrategyClassifier(classifier).getGlobalCap(riskLevel);
         uint256 globalRiskRemaining = globalRiskCap > currentAllocation ? globalRiskCap - currentAllocation : 0;
         limit = limit < globalRiskRemaining ? limit : globalRiskRemaining;
 
+        console.log("limit", limit);
         return limit;
     }
 }
