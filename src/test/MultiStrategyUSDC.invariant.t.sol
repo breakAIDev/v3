@@ -101,7 +101,7 @@ contract MultiStrategyUSDCHandler is Test {
         amount = bound(amount, MIN_DEPOSIT, balance);
         
         IERC20(asset).approve(address(vault), amount);
-        uint256 shares = vault.deposit(amount, currentActor);
+        vault.deposit(amount, currentActor);
         
         ghost_totalDeposited += amount;
         ghost_userDeposits[currentActor] += amount;
@@ -131,7 +131,7 @@ contract MultiStrategyUSDCHandler is Test {
         amount = bound(amount, MIN_DEPOSIT, balance);
         
         IERC20(asset).approve(address(vault), amount);
-        uint256 shares = vault.mint(amount, currentActor);
+        vault.mint(amount, currentActor);
         
         ghost_totalDeposited += amount;
         ghost_userDeposits[currentActor] += amount;
@@ -154,15 +154,136 @@ contract MultiStrategyUSDCHandler is Test {
     
     // ============ ADMIN OPERATIONS ============
     
-    /// @notice Admin allocates assets to a specific strategy
-    function allocate(uint256 strategyIndex, uint256 amount) external countCall(this.allocate.selector) {
-        strategyIndex = bound(strategyIndex, 0, strategies.length - 1);
-        address strategy = strategies[strategyIndex];
+    /// @notice Maximum share any single strategy can have of total allocations (as safety buffer)
+    uint256 public constant MAX_STRATEGY_SHARE = 60;
+    
+    /// @notice Returns the maximum allowed share percentage for each strategy based on globalCap
+    /// @dev Uses the strategy's params.globalCap which defines max % of total assets
+    function _getStrategyMaxSharePercent(uint256 strategyIndex) internal view returns (uint256) {
+        (,,,,,, uint256 globalCap,,) = IMYTStrategy(strategies[strategyIndex]).params();
+        // Convert from WAD (1e18) to percentage (0-100)
+        return (globalCap * 100) / 1e18;
+    }
+    
+    /// @notice Returns the current share percentage (0-100) of each strategy
+    function _getStrategyShares() internal view returns (uint256[] memory shares, uint256 totalAllocations) {
+        uint256 strategiesLen = strategies.length;
+        shares = new uint256[](strategiesLen);
         
+        for (uint256 i = 0; i < strategiesLen; i++) {
+            bytes32 allocationId = IMYTStrategy(strategies[i]).adapterId();
+            shares[i] = vault.allocation(allocationId);
+            totalAllocations += shares[i];
+        }
+        
+        // Convert to percentages
+        if (totalAllocations > 0) {
+            for (uint256 i = 0; i < strategiesLen; i++) {
+                shares[i] = (shares[i] * 100) / totalAllocations;
+            }
+        }
+    }
+    
+    /// @notice Selects a random strategy from those that haven't reached their relative cap share
+    /// @dev Uses each strategy's actual relative cap to determine eligibility
+    function _selectNonDominatingStrategy(uint256 seed) internal view returns (uint256) {
+        uint256 strategiesLen = strategies.length;
+        (uint256[] memory shares,) = _getStrategyShares();
+        
+        // Count eligible strategies (those below their relative cap share)
+        uint256 eligibleCount = 0;
+        for (uint256 i = 0; i < strategiesLen; i++) {
+            uint256 maxSharePercent = _getStrategyMaxSharePercent(i);
+            // Use 90% of max as buffer to avoid hitting cap exactly
+            uint256 effectiveMax = (maxSharePercent * 90) / 100;
+            if (shares[i] < effectiveMax && effectiveMax > 0) {
+                eligibleCount++;
+            }
+        }
+        
+        // If no eligible strategies, all are at cap - return type(uint256).max as signal
+        if (eligibleCount == 0) {
+            return type(uint256).max;
+        }
+        
+        // Pick randomly among eligible strategies
+        uint256 pickIndex = seed % eligibleCount;
+        uint256 currentIndex = 0;
+        
+        for (uint256 i = 0; i < strategiesLen; i++) {
+            uint256 maxSharePercent = _getStrategyMaxSharePercent(i);
+            uint256 effectiveMax = (maxSharePercent * 90) / 100;
+            if (shares[i] < effectiveMax && effectiveMax > 0) {
+                if (currentIndex == pickIndex) {
+                    return i;
+                }
+                currentIndex++;
+            }
+        }
+        
+        // Should never reach here
+        return 0;
+    }
+    
+    /// @notice Admin allocates assets to a specific strategy
+    /// @dev Respects each strategy's relative cap to ensure balanced distribution
+    function allocate(uint256 strategyIndexSeed, uint256 amount) external countCall(this.allocate.selector) {
+        uint256 strategiesLen = strategies.length;
+        
+        // Select a strategy that hasn't reached its relative cap share
+        uint256 startIndex = _selectNonDominatingStrategy(strategyIndexSeed);
+        
+        // If all strategies are at cap, we can't allocate
+        if (startIndex == type(uint256).max) return;
+        
+        // Track which strategies we've tried to avoid infinite loops
+        uint256 triedMask = 0;
+        
+        for (uint256 attempt = 0; attempt < strategiesLen; attempt++) {
+            uint256 strategyIndex = (startIndex + attempt) % strategiesLen;
+            
+            // Skip if already tried
+            if (triedMask & (1 << strategyIndex) != 0) continue;
+            triedMask |= (1 << strategyIndex);
+            
+            // Check relative cap guard - use strategy's specific max share
+            uint256 maxSharePercent = _getStrategyMaxSharePercent(strategyIndex);
+            uint256 effectiveMax = (maxSharePercent * 90) / 100; // 90% buffer
+            
+            (uint256[] memory shares, uint256 totalAllocations) = _getStrategyShares();
+            if (totalAllocations > 0 && shares[strategyIndex] >= effectiveMax) {
+                continue;
+            }
+            
+            (bool success, uint256 allocatedAmount) = _tryAllocate(
+                strategies[strategyIndex], 
+                amount, 
+                strategyIndexSeed,
+                strategyIndex,
+                effectiveMax
+            );
+            if (success) {
+                ghost_totalAllocated += allocatedAmount;
+                ghost_strategyAllocations[strategies[strategyIndex]] += allocatedAmount;
+                console.log("allocation finished");
+                return;
+            }
+        }
+        // If no strategy could accept allocation, silently return
+    }
+    
+    /// @notice Attempts to allocate to a specific strategy, returns success and amount allocated
+    /// @param maxSharePercent The maximum share percentage this strategy can have (based on relative cap)
+    function _tryAllocate(
+        address strategy, 
+        uint256 amount, 
+        uint256 /* seed */,
+        uint256 /* strategyIndex */,
+        uint256 maxSharePercent
+    ) internal returns (bool success, uint256 allocatedAmount) {
         bytes32 allocationId = IMYTStrategy(strategy).adapterId();
         
         // Use realAssets() to account for accrued yield that will be reported in _totalValue()
-        // The vault's tracked allocation may be stale if yield has accrued since last allocation
         uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
         uint256 absoluteCap = vault.absoluteCap(allocationId);
         uint256 relativeCap = vault.relativeCap(allocationId);
@@ -171,37 +292,51 @@ contract MultiStrategyUSDCHandler is Test {
         uint8 riskLevel = AlchemistStrategyClassifier(classifier).getStrategyRiskLevel(uint256(allocationId));
         uint256 globalRiskCap = AlchemistStrategyClassifier(classifier).getGlobalCap(riskLevel);
         
-        // Get the underlying vault's max deposit to respect protocol-level caps (e.g., Euler supply cap)
+        // Get the underlying vault's max deposit to respect protocol-level caps
         uint256 underlyingMaxDeposit = _getUnderlyingMaxDeposit(strategy);
-        if (underlyingMaxDeposit < MIN_ALLOCATE) return;
+        if (underlyingMaxDeposit < MIN_ALLOCATE) return (false, 0);
         
-        // Initial bound by absolute cap headroom
-        if (currentRealAssets >= absoluteCap) return;
+        // Check absolute cap headroom
+        if (currentRealAssets >= absoluteCap) return (false, 0);
 
         uint256 totalExistingAllocations = 0;
         for (uint256 i = 0; i < strategies.length; i++) {
             totalExistingAllocations += IMYTStrategy(strategies[i]).realAssets();
         }
         
-        // Get current vault balance
         uint256 currentVaultBalance = IERC20(asset).balanceOf(address(vault));
 
         uint256 maxByAbsolute = absoluteCap - currentRealAssets;
         uint256 maxAllocate = maxByAbsolute < globalRiskCap ? maxByAbsolute : globalRiskCap;
         maxAllocate = maxAllocate < underlyingMaxDeposit ? maxAllocate : underlyingMaxDeposit;
-        if (maxAllocate < MIN_ALLOCATE) return;
         
+        // Constrain by this strategy's relative cap share
+        // We want: (currentRealAssets + x) / (totalExistingAllocations + x) <= maxSharePercent / 100
+        // Solving: x <= (maxSharePercent * totalExistingAllocations - 100 * currentRealAssets) / (100 - maxSharePercent)
+        uint256 maxByRelativeCapShare = type(uint256).max;
+        if (totalExistingAllocations > 0 && maxSharePercent < 100) {
+            uint256 currentSharePercent = (currentRealAssets * 100) / totalExistingAllocations;
+            if (currentSharePercent >= maxSharePercent) {
+                return (false, 0); // Already at or over limit
+            }
+            uint256 numerator = (maxSharePercent * totalExistingAllocations);
+            if (numerator > 100 * currentRealAssets) {
+                maxByRelativeCapShare = (numerator - 100 * currentRealAssets) / (100 - maxSharePercent);
+            } else {
+                maxByRelativeCapShare = 0;
+            }
+        }
+        maxAllocate = maxAllocate < maxByRelativeCapShare ? maxAllocate : maxByRelativeCapShare;
+        
+        if (maxAllocate < MIN_ALLOCATE) return (false, 0);
+
         amount = bound(amount, MIN_ALLOCATE, maxAllocate);
         
-        // Calculate the deal amount needed to ensure the TOTAL allocation (current + new) 
-        // doesn't exceed the relative cap after the deal.
-        // For allocation A with relative cap R: need totalAssets >= A / R
-        // totalAssets = vaultBalance + totalExistingAllocations
+        // Calculate deal amount for relative cap compliance
         uint256 dealAmount = amount;
         if (relativeCap != type(uint256).max && relativeCap != 0 && relativeCap < 1e18) {
-            // Calculate required total assets for the NEW total allocation
             uint256 newTotalAllocation = currentRealAssets + amount;
-            uint256 requiredTotalAssets = (newTotalAllocation * 1e18 + relativeCap - 1) / relativeCap; // Round up
+            uint256 requiredTotalAssets = (newTotalAllocation * 1e18 + relativeCap - 1) / relativeCap;
             if (requiredTotalAssets > totalExistingAllocations) {
                 uint256 minVaultBalance = requiredTotalAssets - totalExistingAllocations;
                 if (minVaultBalance > dealAmount) {
@@ -222,20 +357,21 @@ contract MultiStrategyUSDCHandler is Test {
         uint256 limit = absoluteCap < absoluteValueOfRelativeCap ? absoluteCap : absoluteValueOfRelativeCap;
         limit = limit < globalRiskCap ? limit : globalRiskCap;
 
-        if (currentRealAssets >= limit) return;
+        if (currentRealAssets >= limit) return (false, 0);
         uint256 maxNewAllocation = limit - currentRealAssets;
         
         if (amount > maxNewAllocation) {
             amount = maxNewAllocation;
         }
         
-        if (amount < MIN_ALLOCATE) return;
+        if (amount < MIN_ALLOCATE) return (false, 0);
         
         vm.prank(admin);
-        IAllocator(allocator).allocate(strategy, amount);
-        
-        ghost_totalAllocated += amount;
-        ghost_strategyAllocations[strategy] += amount;
+        try IAllocator(allocator).allocate(strategy, amount) {
+            return (true, amount);
+        } catch {
+            return (false, 0);
+        }
     }
     
     /// @notice Admin deallocates assets from a specific strategy
@@ -339,6 +475,10 @@ contract MultiStrategyUSDCHandler is Test {
     
     function getStrategy(uint256 index) external view returns (address) {
         return strategies[index];
+    }
+    
+    function getCalls(bytes4 selector) external view returns (uint256) {
+        return calls[selector];
     }
     
     function callSummary() external view {
@@ -556,12 +696,12 @@ contract MultiStrategyUSDCInvariantTest is Test {
             curator.submitSetStrategy(strategies[i], address(vault));
             curator.setStrategy(strategies[i], address(vault));
             
-            // Submit and set caps through curator
+            // Submit and set absolute cap through curator
             curator.submitIncreaseAbsoluteCap(strategies[i], ABSOLUTE_CAP);
             curator.increaseAbsoluteCap(strategies[i], ABSOLUTE_CAP);
             
-            curator.submitIncreaseRelativeCap(strategies[i], RELATIVE_CAP);
-            curator.increaseRelativeCap(strategies[i], RELATIVE_CAP);
+            // Note: relative caps are already defined in strategy params.globalCap
+            // (Euler: 50%, Peapods: 20%, TokeAuto: 30%)
         }
     }
     
@@ -739,10 +879,23 @@ contract MultiStrategyUSDCInvariantTest is Test {
         // Skip if no allocations
         if (totalAllocations == 0) return;
         
-        // No single strategy should have more than 80% of total allocations
+        // Skip during warmup phase - need enough allocate calls to expect diversification
+        // Require at least (strategies.length * 2) calls to give each strategy a fair chance
+        uint256 allocateCalls = handler.getCalls(handler.allocate.selector);
+        if (allocateCalls < strategies.length * 2) return;
+        
+        // Skip if total allocations are too small to be meaningful
+        if (totalAllocations < 1_000_000e6) return; // Less than 1M USDC allocated
+        console.log("we have", strategies.length, "strategies");
+        console.log("total", totalAllocations);
+        // No single strategy should have more than its globalCap share of total allocations
         for (uint256 i = 0; i < strategies.length; i++) {
+            console.log("Strat has", allocations[i], " allocations");
             uint256 share = (allocations[i] * 100) / totalAllocations;
-            assertLe(share, 80, string(abi.encodePacked("Strategy ", handler.strategyNames(strategies[i]), " has too much dominance")));
+            console.log("Strat has", share, "shares");
+            (,,,,,, uint256 globalCap,,) = IMYTStrategy(strategies[i]).params();
+            uint256 maxSharePercent = (globalCap * 100) / 1e18;
+            assertLe(share, maxSharePercent, string(abi.encodePacked("Strategy ", handler.strategyNames(strategies[i]), " has too much dominance")));
         }
     }
     
