@@ -830,6 +830,8 @@ contract MultiStrategyUSDCInvariantTest is Test {
     }
     
     /// @notice Invariant: Vault share price should never decrease significantly
+    /// While strategies can indeed suffer losses and realAssets can decrease
+    /// between calls, price action is not part of the invariant testing suite :)
     function invariant_sharePriceNonDecreasing() public view {
         uint256 totalSupply = vault.totalSupply();
         uint256 totalAssets = vault.totalAssets();
