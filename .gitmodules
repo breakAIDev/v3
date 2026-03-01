@@ -19,3 +19,6 @@
 [submodule "lib/v3-periphery"]
 	path = lib/v3-periphery
 	url = https://github.com/UniSwap/v3-periphery
+[submodule "lib/v2-foundry"]
+	path = lib/v2-foundry
+	url = https://github.com/alchemix-finance/v2-foundry
