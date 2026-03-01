@@ -589,7 +589,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // Protocol fee only applies to earmarked debt repaid.
         uint256 feeAmount = earmarkedRepaidToYield * protocolFee / BPS;
         if (feeAmount > account.collateralBalance) {
-            revert("Not enough collateral to pay for debt fee");
+            revert IllegalState();
         } else {
             _subCollateralBalance(feeAmount, recipientTokenId);
         }
@@ -1457,7 +1457,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         // Unwind via the survival accumulator.
-        uint256 earmarkSurvival = _earIndex(account.lastAccruedEarmarkWeight);
+        uint256 earmarkSurvival = _redIndex(account.lastAccruedEarmarkWeight);
         if (earmarkSurvival == 0) earmarkSurvival = ONE_Q128;
 
         // Default path for accounts that stayed inside the same earmark epoch.
@@ -1791,7 +1791,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         epochAdvanced = newEpoch > oldEpoch;
-        packedNew = _packEar(newEpoch, newIndex);
+        packedNew = _packRed(newEpoch, newIndex);
         ratioApplied = epochAdvanced ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
     }
 
@@ -1808,15 +1808,4 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return (epoch << _REDEMPTION_INDEX_BITS) | index;
     }
 
-    function _earEpoch(uint256 packed) private pure returns (uint256) {
-        return packed >> _EARMARK_INDEX_BITS;
-    }
-
-    function _earIndex(uint256 packed) private pure returns (uint256) {
-        return packed & _EARMARK_INDEX_MASK;
-    }
-
-    function _packEar(uint256 epoch, uint256 index) private pure returns (uint256) {
-        return (epoch << _EARMARK_INDEX_BITS) | index;
-    }
 }
