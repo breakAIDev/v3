@@ -82,7 +82,7 @@ contract DeployV3OptimismKungfuScript is Script {
     address public wstETHOP = 0x1F32b1c2345538c0c6f582fCB022739c4A194Ebb;
     address public velodromePool = 0xbF30Ff33CF9C6b0c48702Ff17891293b002DfeA4;
 
-    address constant deployer = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266; // FIXME
+    address constant deployer = 0x1c9387747baA55C26197732Bda132955E1F56b80;
 
     // Strategy parameters
     IMYTStrategy.StrategyParams public aaveUSDCParams = IMYTStrategy.StrategyParams({
