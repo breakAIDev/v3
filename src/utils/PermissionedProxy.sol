@@ -12,6 +12,7 @@ contract PermissionedProxy {
         require(_admin != address(0), "zero");
         require(_operator != address(0), "zero");
         admin = _admin;
+        permissionedCalls[0xac9650d8] = true;
         operators[_operator] = true;
     }
 

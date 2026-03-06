@@ -143,7 +143,7 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
             limit = limit < localRiskCap ? limit : localRiskCap;
         }
         // Ensure the requested amount does not exceed the calculated risk-limit limit
-        require(amount <= limit, EffectiveCap(amount, limit));
+        require(vault.allocation(id) + amount <= limit, EffectiveCap(amount, limit));
 
 
     }

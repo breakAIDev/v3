@@ -12,6 +12,7 @@ import {IMockYieldToken} from "./mocks/MockYieldToken.sol";
 import {MYTTestHelper} from "./libraries/MYTTestHelper.sol";
 import {MockMYTStrategy} from "./mocks/MockMYTStrategy.sol";
 import {AlchemistAllocator} from "../AlchemistAllocator.sol";
+import {IAllocator} from "../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {console} from "forge-std/console.sol";
@@ -62,6 +63,38 @@ contract AlchemistAllocatorTest is Test {
         vault.increaseAbsoluteCap(idData, defaultStrategyAbsoluteCap);
         _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.increaseRelativeCap, (idData, defaultStrategyRelativeCap)));
         vault.increaseRelativeCap(idData, defaultStrategyRelativeCap);
+        vm.stopPrank();
+    }
+
+    function testProxyBlockedSelectors() public {
+        _magicDepositToVault(address(vault), user1, 150 ether);
+        
+        // Get selectors for blocked functions
+        bytes4 allocateSelector = bytes4(keccak256("allocate(address,bytes,uint256)"));
+        bytes4 deallocateSelector = bytes4(keccak256("deallocate(address,bytes,uint256)"));
+        bytes4 multicallSelector = bytes4(keccak256("multicall(bytes[])"));
+
+        vm.startPrank(operator);
+        
+        bytes memory idData = mytStrategy.getIdData();
+
+        // Test that allocate selector is blocked
+        bytes memory allocateData = abi.encodeCall(IVaultV2.allocate, (address(mytStrategy), idData, 100 ether));
+        vm.expectRevert(abi.encode("PD"));
+        allocator.proxy(address(vault), allocateData);
+        
+        // Test that deallocate selector is blocked
+        bytes memory deallocateData = abi.encodeCall(IVaultV2.deallocate, (address(mytStrategy), idData, 50 ether));
+        vm.expectRevert(abi.encode("PD"));
+        allocator.proxy(address(vault), deallocateData);
+        
+        // Test that multicall selector is blocked (prevents tunneling blocked calls)
+        bytes[] memory innerCalls = new bytes[](1);
+        innerCalls[0] = abi.encodeCall(IVaultV2.allocate, (address(mytStrategy), idData, 100 ether));
+        bytes memory multicallData = abi.encodeCall(IVaultV2.multicall, (innerCalls));
+        vm.expectRevert(abi.encode("PD"));
+        allocator.proxy(address(vault), multicallData);
+        
         vm.stopPrank();
     }
 
@@ -177,6 +210,42 @@ contract AlchemistAllocatorTest is Test {
         vm.expectRevert(abi.encode("RL"));
         allocator.allocate(address(mytStrategy), individualCap + 1);
         vm.stopPrank();
+    }
+
+    /// @notice Verifies that cumulative allocations are properly checked against risk caps
+    /// @dev After fix, _validateCaps should check currentAllocation + amount <= limit
+    function testAllocateRevertIfCumulativeAllocationExceedsRiskCap() public {
+        _magicDepositToVault(address(vault), user1, 1000 ether);
+        
+        bytes32 strategyId = mytStrategy.adapterId();
+        uint256 individualCap = 100 ether;
+        
+        vm.startPrank(curator);
+        // Increase vault caps to ensure only risk caps are the limiting factor
+        bytes memory idData = mytStrategy.getIdData();
+        _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.increaseAbsoluteCap, (idData, 10000 ether)));
+        vault.increaseAbsoluteCap(idData, 10000 ether);
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        // Set individual risk cap for LOW risk class
+        classifier.setRiskClass(0, 100 ether, individualCap);
+        vm.stopPrank();
+        
+        vm.startPrank(operator);
+        
+        // First allocation: 60 ether (should succeed, 60 <= 100)
+        allocator.allocate(address(mytStrategy), 60 ether);
+        assertEq(vault.allocation(strategyId), 60 ether, "First allocation should succeed");
+        
+        // Second allocation: 50 ether should FAIL because 60 + 50 = 110 > 100
+        // This verifies the fix: cumulative allocation is properly checked
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, 50 ether, 100 ether));
+        allocator.allocate(address(mytStrategy), 50 ether);
+        vm.stopPrank();
+        
+        // Verify total allocation remains at 60 ether (second allocation was rejected)
+        assertEq(vault.allocation(strategyId), 60 ether, "Allocation should remain at 60 ether");
     }
 
     function testAllocate() public {
