@@ -5,15 +5,13 @@ import {IAlchemistV3} from "./interfaces/IAlchemistV3.sol";
 import {ITransmuter} from "./interfaces/ITransmuter.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {NFTMetadataGenerator} from "./libraries/NFTMetadataGenerator.sol";
 import {SafeCast} from "./libraries/SafeCast.sol";
 import {StakingGraph} from "./libraries/StakingGraph.sol";
 import {TokenUtils} from "./libraries/TokenUtils.sol";
 import {FixedPointMath} from "./libraries/FixedPointMath.sol";
 
-import {Unauthorized, IllegalArgument, IllegalState, InsufficientAllowance} from "./base/Errors.sol";
+import {Unauthorized, IllegalArgument, IllegalState} from "./base/Errors.sol";
 import "./base/TransmuterErrors.sol";
 
 /// @title AlchemixV3 Transmuter
@@ -315,7 +313,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         int256 queried = _stakingGraph.queryStake(startBlock, endBlock);
         if (queried == 0) return 0;
 
-        return (queried / BLOCK_SCALING_FACTOR).toUint256() + (queried % BLOCK_SCALING_FACTOR == 0 ? 0 : 1);
+        return FixedPointMath.mulDivUp(queried.toUint256(), 1, uint256(BLOCK_SCALING_FACTOR));
     }
 
     /// @inheritdoc ITransmuter

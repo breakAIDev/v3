@@ -583,7 +583,7 @@ contract AlchemistV3Test is Test {
     }
 
     function testSetCollateralizationLowerBound_Variable_Upper_Bound(uint256 collateralizationRatio) external {
-        collateralizationRatio = bound(collateralizationRatio, FIXED_POINT_SCALAR, minimumCollateralization);
+        collateralizationRatio = bound(collateralizationRatio, FIXED_POINT_SCALAR, minimumCollateralization - 1);
         vm.startPrank(alOwner);
         alchemist.setCollateralizationLowerBound(collateralizationRatio);
         vm.assertApproxEqAbs(alchemist.collateralizationLowerBound(), collateralizationRatio, minimumDepositOrWithdrawalLoss);

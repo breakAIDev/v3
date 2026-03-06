@@ -2,7 +2,6 @@
 pragma solidity 0.8.28;
 
 import {MYTStrategy} from "../../MYTStrategy.sol";
-import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 
 interface WETH {

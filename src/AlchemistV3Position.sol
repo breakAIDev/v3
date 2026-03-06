@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {IAlchemistV3Position} from "./interfaces/IAlchemistV3Position.sol";
 import {IAlchemistV3} from "./interfaces/IAlchemistV3.sol";
 import {IMetadataRenderer} from "./interfaces/IMetadataRenderer.sol";
 

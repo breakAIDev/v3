@@ -327,7 +327,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3AdminActions
     function setCollateralizationLowerBound(uint256 value) external onlyAdmin {
-        _checkArgument(value <= minimumCollateralization);
+        _checkArgument(value < minimumCollateralization);
         _checkArgument(value >= FIXED_POINT_SCALAR);
         collateralizationLowerBound = value;
         emit CollateralizationLowerBoundUpdated(value);
@@ -692,11 +692,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
                 newIndex = ONE_Q128;
             } else {
                 newIndex = FixedPointMath.mulQ128(oldIndex, ratioWanted);
-
-                if (newIndex == 0) {
-                    newEpoch += 1;
-                    newIndex = ONE_Q128;
-                }
             }
 
             _redemptionWeight = _packRed(newEpoch, newIndex);
@@ -802,7 +797,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
 
         // fee is taken from surplus = collateral - debt
-        uint256 surplus = collateral > debt ? collateral - debt : 0;
+        uint256 surplus = collateral - debt;
 
         fee = (surplus * feeBps) / BPS;
 
@@ -1784,10 +1779,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             newIndex = ONE_Q128;
         } else {
             newIndex = FixedPointMath.mulQ128(oldIndex, ratioWanted);
-            if (newIndex == 0) {
-                newEpoch += 1;
-                newIndex = ONE_Q128;
-            }
         }
 
         epochAdvanced = newEpoch > oldEpoch;

@@ -20,6 +20,9 @@
   "lib/solmate": {
     "rev": "97bdb2003b70382996a79a406813f76417b1cf90"
   },
+  "lib/v2-foundry": {
+    "rev": "8915ef7b1714c16f9e260a4ef41c5f254d5b7f58"
+  },
   "lib/v3-periphery": {
     "tag": {
       "name": "v1.3.0",
