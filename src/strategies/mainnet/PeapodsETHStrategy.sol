@@ -52,4 +52,8 @@ contract PeapodsETHStrategy is MYTStrategy {
         uint256 netAssets = amount - feeAssets;
         return netAssets - (netAssets * params.slippageBPS / 10_000);
     }
+
+    function _isProtectedToken(address token) internal view override returns (bool) {
+        return token == MYT.asset() || token == address(vault);
+    }
 }

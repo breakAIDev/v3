@@ -145,6 +145,10 @@ contract MoonwellWETHStrategy is MYTStrategy {
         TokenUtils.safeTransfer(address(MYT.asset()), address(MYT), wethReceived);
         return wethReceived;
     }
+
+    function _isProtectedToken(address token) internal view override returns (bool) {
+        return token == MYT.asset() || token == address(mWETH);
+    }
     
     receive() external payable {}
 }

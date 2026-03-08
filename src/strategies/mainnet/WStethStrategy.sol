@@ -129,4 +129,8 @@ contract WstethMainnetStrategy is MYTStrategy {
 
     receive() external payable {
     }
+
+    function _isProtectedToken(address token) internal view override returns (bool) {
+        return token == MYT.asset() || token == address(wsteth) || token == address(steth);
+    }
 }

@@ -54,6 +54,7 @@ interface IMYTStrategy {
     event StrategyAllocationLoss(string message, uint256 amountRequested, uint256 actualAmountAllocated);
     event WithdrawToVault(uint256 indexed amount);
     event RewardsClaimed(address indexed token, uint256 indexed amount);
+    event TokensRescued(address indexed token, address indexed to, uint256 amount);
     // Errors
     error StrategyAllocationPaused(address strategy);
     error CounterfeitSettler(address);

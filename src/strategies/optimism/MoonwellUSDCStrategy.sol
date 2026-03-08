@@ -137,4 +137,8 @@ contract MoonwellUSDCStrategy is MYTStrategy {
         TokenUtils.safeTransfer(address(MYT.asset()), address(MYT), usdcReceived);
         return usdcReceived;
     }
+
+    function _isProtectedToken(address token) internal view override returns (bool) {
+        return token == MYT.asset() || token == address(mUSDC);
+    }
 }

@@ -164,4 +164,8 @@ contract TokeAutoEthStrategy is MYTStrategy {
         (bool ok,) = to.call{value: amount}("");
         require(ok, "ETH send failed");
     }
+
+    function _isProtectedToken(address token) internal view override returns (bool) {
+        return token == MYT.asset() || token == address(autoEth);
+    }
 }

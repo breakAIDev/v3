@@ -146,4 +146,8 @@ contract TokeAutoUSDStrategy is MYTStrategy {
         TokenUtils.safeTransfer(address(MYT.asset()), address(MYT), amountOut);
         return amountOut;
     }
+
+    function _isProtectedToken(address token) internal view override returns (bool) {
+        return token == MYT.asset() || token == address(autoUSD);
+    }
 }

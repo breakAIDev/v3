@@ -479,4 +479,74 @@ contract MYTStrategyTest is Test {
         vm.expectRevert(bytes("0x exception"));
         harness.exposedDexSwap(address(toToken), address(fromToken), 100e18, 0, hex"01");
     }
+
+    function test_rescueTokens_rescues_arbitrary_token() public {
+        ERC20Mock randomToken = new ERC20Mock();
+        deal(address(randomToken), address(strategy), 100e18);
+
+        uint256 balanceBefore = randomToken.balanceOf(admin);
+        vm.prank(admin);
+        strategy.rescueTokens(address(randomToken), admin, 100e18);
+        uint256 balanceAfter = randomToken.balanceOf(admin);
+
+        assertEq(balanceAfter - balanceBefore, 100e18, "Rescue failed");
+        assertEq(randomToken.balanceOf(address(strategy)), 0, "Strategy still has tokens");
+    }
+
+    function test_rescueTokens_reverts_on_protected_token() public {
+        // MYT.asset() is protected by default
+        vm.expectRevert(bytes("Protected token"));
+        vm.prank(admin);
+        strategy.rescueTokens(address(fakeUnderlyingToken), admin, 10e18);
+    }
+
+    function test_rescueTokens_reverts_on_zero_recipient() public {
+        ERC20Mock randomToken = new ERC20Mock();
+        deal(address(randomToken), address(strategy), 100e18);
+
+        vm.expectRevert(bytes("Invalid recipient"));
+        vm.prank(admin);
+        strategy.rescueTokens(address(randomToken), address(0), 100e18);
+    }
+
+    function test_rescueTokens_reverts_on_insufficient_balance() public {
+        ERC20Mock randomToken = new ERC20Mock();
+        deal(address(randomToken), address(strategy), 50e18);
+
+        vm.expectRevert(bytes("Insufficient balance"));
+        vm.prank(admin);
+        strategy.rescueTokens(address(randomToken), admin, 100e18);
+    }
+
+    function test_rescueTokens_onlyOwner() public {
+        ERC20Mock randomToken = new ERC20Mock();
+        deal(address(randomToken), address(strategy), 100e18);
+
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("OwnableUnauthorizedAccount(address)")), user));
+        vm.prank(user);
+        strategy.rescueTokens(address(randomToken), user, 100e18);
+    }
+
+    function test_rescueTokens_partial_amount() public {
+        ERC20Mock randomToken = new ERC20Mock();
+        deal(address(randomToken), address(strategy), 100e18);
+
+        uint256 balanceBefore = randomToken.balanceOf(admin);
+        vm.prank(admin);
+        strategy.rescueTokens(address(randomToken), admin, 30e18);
+        uint256 balanceAfter = randomToken.balanceOf(admin);
+
+        assertEq(balanceAfter - balanceBefore, 30e18, "Partial rescue failed");
+        assertEq(randomToken.balanceOf(address(strategy)), 70e18, "Remaining balance wrong");
+    }
+
+    function test_rescueTokens_emits_event() public {
+        ERC20Mock randomToken = new ERC20Mock();
+        deal(address(randomToken), address(strategy), 100e18);
+
+        vm.expectEmit(true, true, false, true);
+        emit IMYTStrategy.TokensRescued(address(randomToken), admin, 50e18);
+        vm.prank(admin);
+        strategy.rescueTokens(address(randomToken), admin, 50e18);
+    }
 }

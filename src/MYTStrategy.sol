@@ -157,6 +157,28 @@ contract MYTStrategy is IMYTStrategy, Ownable {
         return leftover;
     }
 
+    /// @notice Rescue arbitrary ERC20 tokens sent to this contract by mistake
+    /// @param token The token to rescue
+    /// @param to The recipient address
+    /// @param amount The amount to rescue
+    function rescueTokens(address token, address to, uint256 amount) external onlyOwner {
+        require(to != address(0), "Invalid recipient");
+        require(!_isProtectedToken(token), "Protected token");
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        require(amount <= balance, "Insufficient balance");
+        IERC20(token).transfer(to, amount);
+        emit TokensRescued(token, to, amount);
+    }
+
+    /// @dev Check if a token is protected and cannot be rescued.
+    /// Override this function in child contracts to add protocol-specific protected tokens
+    /// (e.g., receipt tokens, aTokens, mTokens, staking tokens).
+    /// @param token The token to check
+    /// @return True if the token is protected
+    function _isProtectedToken(address token) internal view virtual returns (bool) {
+        return token == MYT.asset();
+    }
+
     /// @dev override this function to handle wrapping/allocation/moving funds to
     /// the respective protocol of this strategy
     /// @notice uint56 amount returned should be equal to the amount parameter passed in
