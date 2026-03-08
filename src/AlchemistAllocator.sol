@@ -134,17 +134,33 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
         uint256 totalAssets = vault.totalAssets();
         uint256 absoluteValueOfRelativeCap = (totalAssets * relativeCap) / 1e18;
 
-        // Calculate limit cap as the minimum of vault caps and global risk cap
+        // Calculate limit cap as the minimum of vault caps
         uint256 limit = absoluteCap < absoluteValueOfRelativeCap ? absoluteCap : absoluteValueOfRelativeCap;
-        limit = limit < globalRiskCap ? limit : globalRiskCap;
 
+        // Enforce global risk cap (aggregate across all strategies in this risk class)
+        uint256 currentRiskAllocation = 0;
+        uint256 len = vault.adaptersLength();
+        for (uint256 i = 0; i < len; i++) {
+            address stratAdapter = vault.adapters(i);
+            bytes32 stratId = IMYTStrategy(stratAdapter).adapterId();
+            
+            // Check if the strategy belongs to the same risk level
+            if (strategyClassifier.getStrategyRiskLevel(uint256(stratId)) == riskLevel) {
+                currentRiskAllocation += vault.allocation(stratId);
+            }
+        }
+        
+        // Check if the proposed allocation exceeds the remaining capacity of the global risk cap
+        uint256 remainingGlobal = currentRiskAllocation < globalRiskCap ? globalRiskCap - currentRiskAllocation : 0;
+        require(amount <= remainingGlobal, EffectiveCap(amount, remainingGlobal));
+
+        // Apply local risk cap constraint for operators
         if (msg.sender != admin) {
             // caller is operator, further constrain by local risk cap
             limit = limit < localRiskCap ? limit : localRiskCap;
         }
-        // Ensure the requested amount does not exceed the calculated risk-limit limit
+
+        // Ensure the requested amount does not exceed the calculated individual strategy limit
         require(vault.allocation(id) + amount <= limit, EffectiveCap(amount, limit));
-
-
     }
 }

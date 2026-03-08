@@ -248,6 +248,56 @@ contract AlchemistAllocatorTest is Test {
         assertEq(vault.allocation(strategyId), 60 ether, "Allocation should remain at 60 ether");
     }
 
+    /// @notice Verifies that global risk caps are enforced across multiple strategies in the same risk class
+    /// @dev Audit fix: Ensure aggregate allocation of a risk class does not exceed globalCap
+    function testAllocateRevertIfGlobalRiskCapExceededByMultipleStrategies() public {
+        _magicDepositToVault(address(vault), user1, 1000 ether);
+
+        // Setup Strategy 2 (same risk class LOW)
+        address mockStrategyYieldToken2 = address(new MockYieldToken(mockVaultCollateral));
+        MockMYTStrategy mytStrategy2 = MYTTestHelper._setupStrategy(address(vault), mockStrategyYieldToken2, admin, "MockToken2", "MockTokenProtocol2", IMYTStrategy.RiskClass.LOW);
+        
+        vm.startPrank(admin);
+        bytes32 strategyId2 = mytStrategy2.adapterId();
+        classifier.assignStrategyRiskLevel(uint256(strategyId2), uint8(IMYTStrategy.RiskClass.LOW));
+        vm.stopPrank();
+
+        vm.startPrank(curator);
+        bytes memory idData2 = mytStrategy2.getIdData();
+        _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.addAdapter, address(mytStrategy2)));
+        vault.addAdapter(address(mytStrategy2));
+        _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.increaseAbsoluteCap, (idData2, 10000 ether)));
+        vault.increaseAbsoluteCap(idData2, 10000 ether);
+        _vaultSubmitAndFastForward(abi.encodeCall(IVaultV2.increaseRelativeCap, (idData2, 1e18)));
+        vault.increaseRelativeCap(idData2, 1e18);
+        vm.stopPrank();
+
+        // Set Global Cap for LOW risk to 100 ether
+        vm.startPrank(admin);
+        classifier.setRiskClass(0, 100 ether, 100 ether); // global=100, local=100
+        vm.stopPrank();
+
+        vm.startPrank(operator);
+        
+        // Allocate 60 ether to Strategy 1 (should succeed)
+        allocator.allocate(address(mytStrategy), 60 ether);
+        assertEq(vault.allocation(mytStrategy.adapterId()), 60 ether);
+
+        // Allocate 50 ether to Strategy 2 (should FAIL: 60 + 50 = 110 > 100 globalCap)
+        // Remaining capacity = 100 - 60 = 40. Requesting 50.
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, 50 ether, 40 ether));
+        allocator.allocate(address(mytStrategy2), 50 ether);
+
+        // Verify Strategy 2 allocation is 0
+        assertEq(vault.allocation(strategyId2), 0 ether, "Strategy 2 allocation should be 0");
+
+        // Allocate 40 ether to Strategy 2 (should succeed: 60 + 40 = 100 <= 100)
+        allocator.allocate(address(mytStrategy2), 40 ether);
+        assertEq(vault.allocation(strategyId2), 40 ether);
+
+        vm.stopPrank();
+    }
+
     function testAllocate() public {
         require(vault.adaptersLength() == 1, "adaptersLength is must be 1");
         _magicDepositToVault(address(vault), user1, 150 ether);
