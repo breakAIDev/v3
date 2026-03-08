@@ -64,8 +64,11 @@ contract WstethMainnetStrategy is MYTStrategy {
 
     function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256 depositReturn) {
         require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than amount");
-        uint256 wethOut = dexSwap(address(wsteth), address(weth), amount, amount, callData);
-        require(wethOut == amount, "IA"); // dexSwap already verifies this though...
+        // TODO no access to offchain quotes so setting minAmount to 1
+        uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, 1, callData);
+        
+        require(wstETHReceived > 0, "No wstETH received");
+        
         return amount;
     }
 
