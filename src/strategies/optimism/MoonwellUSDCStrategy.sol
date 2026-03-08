@@ -38,7 +38,7 @@ contract MoonwellUSDCStrategy is MYTStrategy {
     using MathExtra for uint256;
 
     IMToken public immutable mUSDC;
-    IERC20 public immutable usdc
+    IERC20 public immutable usdc;
     IERC20 public constant WELL = IERC20(0xA88594D404727625A9437C3f886C7643872296AE);
     IComptroller public immutable comptroller;
     
