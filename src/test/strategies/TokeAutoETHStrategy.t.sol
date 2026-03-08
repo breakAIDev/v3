@@ -93,17 +93,15 @@ contract MockTokeAutoEthStrategy is TokeAutoEthStrategy {
         address _myt,
         StrategyParams memory _params,
         address _autoEth,
-        address _router,
         address _rewarder,
         address _weth,
         address _oracle
-    ) TokeAutoEthStrategy(_myt, _params, _autoEth, _router, _rewarder, _weth, _oracle) {}
+    ) TokeAutoEthStrategy(_myt, _params, _autoEth, _rewarder, _weth, _oracle) {}
 }
 
 contract TokeAutoETHStrategyTest is BaseStrategyTest {
     address public constant TOKE_AUTO_ETH_VAULT = 0x0A2b94F6871c1D7A32Fe58E1ab5e6deA2f114E56;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    address public constant AUTOPILOT_ROUTER = 0x37dD409f5e98aB4f151F4259Ea0CC13e97e8aE21;
     address public constant REWARDER = 0x60882D6f70857606Cdd37729ccCe882015d1755E;
     address public constant ORACLE = 0x61F8BE7FD721e80C0249829eaE6f0DAf21bc2CaC;
     address public constant TOKE = 0x2e9d63788249371f1DFC918a52f8d799F4a38C94;
@@ -134,7 +132,7 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockTokeAutoEthStrategy(vault, params, TOKE_AUTO_ETH_VAULT, AUTOPILOT_ROUTER, REWARDER, WETH, ORACLE));
+        return address(new MockTokeAutoEthStrategy(vault, params, TOKE_AUTO_ETH_VAULT, REWARDER, WETH, ORACLE));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

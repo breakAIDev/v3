@@ -19,9 +19,6 @@ contract AlchemistCurator is IAlchemistCurator, PermissionedProxy {
     // map of myt adapter(strategy) address to myt address
     mapping(address => address) public adapterToMYT;
 
-    
-    address public pendingStrategy;
-
     constructor(address _admin, address _operator) PermissionedProxy(_admin, _operator) {
         // every onlyAdmin call is blacklisted from the proxy as morhpho does not
         // differentiate between a curator operator and a curator admin

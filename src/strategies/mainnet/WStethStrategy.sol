@@ -32,14 +32,13 @@ interface WETH {
 contract WstethMainnetStrategy is MYTStrategy {
     stETH public immutable steth;
     wstETH public immutable wsteth;
-    unstETH public immutable unsteth;
+
     WETH public immutable weth;
 
     constructor(address _myt, StrategyParams memory _params, address _weth, address _stETH, address _wstETH, address _unstETH, address _referral) MYTStrategy(_myt, _params) {
         weth = WETH(_weth);
         steth = stETH(_stETH);
         wsteth = wstETH(_wstETH);
-        unsteth = unstETH(_unstETH);
     }
 
     function _allocate(uint256 amount) internal override returns (uint256 depositReturn) {

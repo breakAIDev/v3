@@ -551,7 +551,6 @@ contract MultiStrategyETHInvariantTest is Test {
     address public constant EULER_WETH_VAULT = 0xD8b27CF359b7D15710a5BE299AF6e7Bf904984C2;
     address public constant PEAPODS_ETH_VAULT = 0x9a42e1bEA03154c758BeC4866ec5AD214D4F2191;
     address public constant TOKE_AUTO_ETH_VAULT = 0x0A2b94F6871c1D7A32Fe58E1ab5e6deA2f114E56;
-    address public constant AUTOPILOT_ROUTER = 0x37dD409f5e98aB4f151F4259Ea0CC13e97e8aE21;
     address public constant TOKE_REWARDER_ETH = 0x60882D6f70857606Cdd37729ccCe882015d1755E;
     address public constant TOKE_ORACLE = 0x61F8BE7FD721e80C0249829eaE6f0DAf21bc2CaC;
     
@@ -681,7 +680,6 @@ contract MultiStrategyETHInvariantTest is Test {
             address(vault),
             params,
             TOKE_AUTO_ETH_VAULT,
-            AUTOPILOT_ROUTER,
             TOKE_REWARDER_ETH,
             WETH,
             TOKE_ORACLE

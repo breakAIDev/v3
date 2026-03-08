@@ -522,7 +522,6 @@ contract MultiStrategyUSDCInvariantTest is Test {
     address public constant EULER_USDC_VAULT = 0xe0a80d35bB6618CBA260120b279d357978c42BCE;
     address public constant PEAPODS_USDC_VAULT = 0x3717e340140D30F3A077Dd21fAc39A86ACe873AA;
     address public constant TOKE_AUTO_USD_VAULT = 0xa7569A44f348d3D70d8ad5889e50F78E33d80D35;
-    address public constant AUTOPILOT_ROUTER = 0x37dD409f5e98aB4f151F4259Ea0CC13e97e8aE21;
     address public constant TOKE_REWARDER_USD = 0x726104CfBd7ece2d1f5b3654a19109A9e2b6c27B;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000_000e6; // 10M USDC
@@ -651,7 +650,6 @@ contract MultiStrategyUSDCInvariantTest is Test {
             params,
             USDC,
             TOKE_AUTO_USD_VAULT,
-            AUTOPILOT_ROUTER,
             TOKE_REWARDER_USD
         ));
     }

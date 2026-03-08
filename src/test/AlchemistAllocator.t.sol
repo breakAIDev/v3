@@ -116,7 +116,7 @@ contract AlchemistAllocatorTest is Test {
         
         vm.startPrank(admin);
 
-        vm.expectRevert(abi.encode("RL"));
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, absoluteCap + 1, absoluteCap));
         allocator.allocate(address(mytStrategy), absoluteCap + 1);
         vm.stopPrank();
     }
@@ -125,14 +125,18 @@ contract AlchemistAllocatorTest is Test {
         _magicDepositToVault(address(vault), user1, 1000 ether);
         
         bytes32 strategyId = mytStrategy.adapterId();
+        uint256 absoluteCap = vault.absoluteCap(strategyId);
         uint256 relativeCap = vault.relativeCap(strategyId);
         
         // Max allocation = totalAssets * relativeCap / 1e18
         uint256 totalAssets = vault.totalAssets();
         uint256 maxAllocation = (totalAssets * relativeCap) / 1e18;
+
+        // The effective limit is the minimum of absolute and relative cap (absolute is lower: 200 ether)
+        uint256 effectiveLimit = absoluteCap < maxAllocation ? absoluteCap : maxAllocation;
         
         vm.startPrank(admin);
-        vm.expectRevert(abi.encode("RL"));
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, maxAllocation + 1, effectiveLimit));
         allocator.allocate(address(mytStrategy), maxAllocation + 1);
         vm.stopPrank();
     }
@@ -152,7 +156,7 @@ contract AlchemistAllocatorTest is Test {
         assertGt(totalAssets, absoluteCap);
 
         vm.startPrank(admin);
-        vm.expectRevert(abi.encode("RL"));
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, totalAssets, absoluteCap));
         allocator.allocate(address(mytStrategy), totalAssets);
         vm.stopPrank();
     }
@@ -189,7 +193,7 @@ contract AlchemistAllocatorTest is Test {
         vm.stopPrank();
 
         vm.startPrank(admin);
-        vm.expectRevert(abi.encode("RL"));
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, globalCap + 1, globalCap));
         allocator.allocate(address(mytStrategy), globalCap + 1);
         vm.stopPrank();
     }
@@ -207,7 +211,7 @@ contract AlchemistAllocatorTest is Test {
         vm.stopPrank();
         vm.startPrank(operator);
 
-        vm.expectRevert(abi.encode("RL"));
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, individualCap + 1, individualCap));
         allocator.allocate(address(mytStrategy), individualCap + 1);
         vm.stopPrank();
     }
@@ -238,9 +242,9 @@ contract AlchemistAllocatorTest is Test {
         allocator.allocate(address(mytStrategy), 60 ether);
         assertEq(vault.allocation(strategyId), 60 ether, "First allocation should succeed");
         
-        // Second allocation: 50 ether should FAIL because 60 + 50 = 110 > 100
-        // This verifies the fix: cumulative allocation is properly checked
-        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, 50 ether, 100 ether));
+        // Second allocation: 50 ether should FAIL because remaining global capacity is 40 ether
+        // This verifies the fix: cumulative allocation is properly checked against remaining global capacity
+        vm.expectRevert(abi.encodeWithSelector(IAllocator.EffectiveCap.selector, 50 ether, 40 ether));
         allocator.allocate(address(mytStrategy), 50 ether);
         vm.stopPrank();
         

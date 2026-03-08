@@ -60,15 +60,14 @@ contract MockSwapExecutor {
 }
 
 contract MockTokeAutoUSDStrategy is TokeAutoUSDStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _autoUSD, address _router, address _rewarder, address _usdc)
-        TokeAutoUSDStrategy(_myt, _params, _autoUSD, _router, _rewarder, _usdc)
+    constructor(address _myt, StrategyParams memory _params, address _autoUSD, address _rewarder, address _usdc)
+        TokeAutoUSDStrategy(_myt, _params, _autoUSD,  _rewarder, _usdc)
     {}
 }
 
 contract TokeAutoUSDStrategyTest is BaseStrategyTest {
     address public constant TOKE_AUTO_USD_VAULT = 0xa7569A44f348d3D70d8ad5889e50F78E33d80D35;
     address public constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
-    address public constant AUTOPILOT_ROUTER = 0x37dD409f5e98aB4f151F4259Ea0CC13e97e8aE21;
     address public constant REWARDER = 0x726104CfBd7ece2d1f5b3654a19109A9e2b6c27B;
     address public constant TOKE = 0x2e9d63788249371f1DFC918a52f8d799F4a38C94;
 
@@ -91,7 +90,7 @@ contract TokeAutoUSDStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockTokeAutoUSDStrategy(vault, params, USDC, TOKE_AUTO_USD_VAULT, AUTOPILOT_ROUTER, REWARDER));
+        return address(new MockTokeAutoUSDStrategy(vault, params, USDC, TOKE_AUTO_USD_VAULT, REWARDER));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

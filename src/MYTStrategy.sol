@@ -22,16 +22,11 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     address public allowanceHolder; // 0x Allowance holder
     uint256 public constant SECONDS_PER_YEAR = 365 days;
     uint256 public constant FIXED_POINT_SCALAR = 1e18;
-    uint256 public constant MIN_SNAPSHOT_INTERVAL = 1 days;
     bytes4 public constant FORCE_DEALLOCATE_SELECTOR = 0xe4d38cd8;
     
     IMYTStrategy.StrategyParams public params;
     bytes32 public immutable adapterId;
-    uint256 public lastSnapshotTime;
-    uint256 public lastIndex;
-    uint256 public estApr;
-    uint256 public estApy;
-
+    
     /// @notice This value is true when the underlying protocol is known to
     /// experience issues or security incidents. In this case the allocation step is simply
     /// bypassed without reverts (to keep external allocators from reverting).

@@ -57,7 +57,6 @@ contract AaveV3ARBUSDCStrategy is MYTStrategy {
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
         IAavePool pool = IAavePool(poolProvider.getPool());
-        uint256 usdcBalanceBefore = TokenUtils.safeBalanceOf(address(usdc), address(this));
         // withdraw exact underlying amount back to this adapter
         pool.withdraw(address(usdc), amount, address(this));
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than the amount needed");

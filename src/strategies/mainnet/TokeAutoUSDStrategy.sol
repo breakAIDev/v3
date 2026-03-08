@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {IMainRewarder, IAutopilotRouter} from "../interfaces/ITokemac.sol";
+import {IMainRewarder} from "../interfaces/ITokemac.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -39,7 +39,6 @@ interface IERC4626Like is IERC4626 {
  */
 contract TokeAutoUSDStrategy is MYTStrategy {
     IERC4626Like public immutable autoUSD;
-    IAutopilotRouter public immutable router;
     IMainRewarder public immutable rewarder;
     IERC20 public immutable usdc;
     constructor(
@@ -47,11 +46,9 @@ contract TokeAutoUSDStrategy is MYTStrategy {
         StrategyParams memory _params,
         address _usdc,
         address _autoUSD,
-        address _router,
         address _rewarder
     ) MYTStrategy(_myt, _params) {
         autoUSD = IERC4626Like(_autoUSD);
-        router = IAutopilotRouter(_router);
         rewarder = IMainRewarder(_rewarder);
         usdc = IERC20(_usdc);
     }
