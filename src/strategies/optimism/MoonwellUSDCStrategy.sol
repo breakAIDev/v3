@@ -37,8 +37,8 @@ library MathExtra {
 contract MoonwellUSDCStrategy is MYTStrategy {
     using MathExtra for uint256;
 
-    IMToken public immutable mUSDC; // Moonwell market mUSDC (mToken) 0xd0670AEe3698F66e2D4dAf071EB9c690d978BFA8
-    IERC20 public immutable usdc; // 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+    IMToken public immutable mUSDC;
+    IERC20 public immutable usdc
     IERC20 public constant WELL = IERC20(0xA88594D404727625A9437C3f886C7643872296AE);
     IComptroller public immutable comptroller;
     
