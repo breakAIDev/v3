@@ -458,6 +458,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         _sync(tokenId);
 
+        if (_accounts[tokenId].collateralBalance > _mytSharesDeposited) {
+            _accounts[tokenId].collateralBalance = _mytSharesDeposited;
+        }
+
         uint256 debtShares = convertDebtTokensToYield(_accounts[tokenId].debt);
         uint256 lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
         uint256 collateral = _accounts[tokenId].collateralBalance;
@@ -469,17 +473,17 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 globalFree = _mytSharesDeposited > required ? _mytSharesDeposited - required : 0;
         uint256 withdrawable = positionFree < globalFree ? positionFree : globalFree;
         _checkArgument(amount <= withdrawable);
-        _subCollateralBalance(amount, tokenId);
+        uint256 transferred = _subCollateralBalance(amount, tokenId);
 
         // Assure that the collateralization invariant is still held.
         _validate(tokenId);
 
         // Transfer the yield tokens to msg.sender
-        TokenUtils.safeTransfer(myt, recipient, amount);
+        TokenUtils.safeTransfer(myt, recipient, transferred);
 
-        emit Withdraw(amount, tokenId, recipient);
+        emit Withdraw(transferred, tokenId, recipient);
 
-        return amount;
+        return transferred;
     }
 
     /// @inheritdoc IAlchemistV3Actions
