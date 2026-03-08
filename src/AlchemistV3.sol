@@ -460,7 +460,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 debtShares = convertDebtTokensToYield(_accounts[tokenId].debt);
         uint256 lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
-        _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
+        uint256 collateral = _accounts[tokenId].collateralBalance;
+        uint256 positionFree = collateral > lockedCollateral ? collateral - lockedCollateral : 0;
+
+        // Prevent zero-debt deposits from being withdrawn when global collateral is fully locked.
+        // This keeps bad-debt haircut accounting from being bypassed via temporary backing boosts.
+        uint256 required = _requiredLockedShares();
+        uint256 globalFree = _mytSharesDeposited > required ? _mytSharesDeposited - required : 0;
+        uint256 withdrawable = positionFree < globalFree ? positionFree : globalFree;
+        _checkArgument(amount <= withdrawable);
         _subCollateralBalance(amount, tokenId);
 
         // Assure that the collateralization invariant is still held.
