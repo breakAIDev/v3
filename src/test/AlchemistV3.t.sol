@@ -7,6 +7,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {TransparentUpgradeableProxy} from "lib/openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {SafeCast} from "../libraries/SafeCast.sol";
 import {Test} from "lib/forge-std/src/Test.sol";
+import {Vm} from "lib/forge-std/src/Vm.sol";
 import {SafeERC20} from "../libraries/SafeERC20.sol";
 import {console} from "lib/forge-std/src/console.sol";
 import {AlchemistV3} from "../AlchemistV3.sol";
@@ -2384,8 +2385,23 @@ contract AlchemistV3Test is Test {
         // Liquidate with no fee vault set
         vm.startPrank(externalUser);
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        vm.recordLogs();
         (, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
         vm.stopPrank();
+
+        bytes32 feeShortfallSig = keccak256("FeeShortfall(address,uint256,uint256)");
+        bool sawFeeShortfall = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(alchemist) && logs[i].topics.length > 1 && logs[i].topics[0] == feeShortfallSig
+                    && logs[i].topics[1] == bytes32(uint256(uint160(externalUser)))
+            ) {
+                sawFeeShortfall = true;
+                break;
+            }
+        }
+        assertTrue(sawFeeShortfall, "FeeShortfall event not emitted");
 
         // _payWithFeeVault should return 0 when alchemistFeeVault is address(0)
         assertEq(feeInUnderlying, 0);
@@ -2393,6 +2409,66 @@ contract AlchemistV3Test is Test {
         assertEq(feeInYield, 0);
         // Liquidator should not have received any underlying tokens
         assertEq(IERC20(vault.asset()).balanceOf(address(externalUser)), liquidatorPrevUnderlyingBalance);
+    }
+
+    function testLiquidate_Bad_Debt_With_Insufficient_FeeVault_Balance_Emits_FeeShortfall() external {
+        vm.startPrank(someWhale);
+        IMockYieldToken(mockStrategyYieldToken).mint(whaleSupply, someWhale);
+        vm.stopPrank();
+
+        // Ensure global alchemist collateralization stays above minimum for regular liquidations
+        vm.startPrank(yetAnotherExternalUser);
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount * 2);
+        alchemist.deposit(depositAmount, yetAnotherExternalUser, 0);
+        vm.stopPrank();
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), depositAmount + 100e18);
+        alchemist.deposit(depositAmount, address(0xbeef), 0);
+        uint256 tokenIdFor0xBeef = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        alchemist.mint(tokenIdFor0xBeef, alchemist.totalValue(tokenIdFor0xBeef) * FIXED_POINT_SCALAR / minimumCollateralization, address(0xbeef));
+        vm.stopPrank();
+
+        // Create bad debt: increase yield token supply by 12% while keeping underlying unchanged
+        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
+        uint256 modifiedVaultSupply = (initialVaultSupply * 1200 / 10_000) + initialVaultSupply;
+        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
+
+        // Leave the fee vault set, but cap its balance below the requested payout.
+        uint256 limitedVaultBalance = 1e18;
+        deal(address(vault.asset()), alchemist.alchemistFeeVault(), limitedVaultBalance);
+
+        vm.startPrank(externalUser);
+        uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        vm.recordLogs();
+        (, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        vm.stopPrank();
+
+        bytes32 feeShortfallSig = keccak256("FeeShortfall(address,uint256,uint256)");
+        bool sawFeeShortfall = false;
+        uint256 requested;
+        uint256 paid;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(alchemist) && logs[i].topics.length > 1 && logs[i].topics[0] == feeShortfallSig
+                    && logs[i].topics[1] == bytes32(uint256(uint160(externalUser)))
+            ) {
+                (requested, paid) = abi.decode(logs[i].data, (uint256, uint256));
+                sawFeeShortfall = true;
+                break;
+            }
+        }
+
+        assertTrue(sawFeeShortfall, "FeeShortfall event not emitted");
+        assertGt(requested, paid);
+        assertEq(paid, limitedVaultBalance);
+
+        // Requested fee is larger than vault balance, so payout is capped by vault balance.
+        assertEq(feeInUnderlying, limitedVaultBalance);
+        assertEq(feeInYield, 0);
+        assertEq(IERC20(vault.asset()).balanceOf(address(externalUser)), liquidatorPrevUnderlyingBalance + limitedVaultBalance);
     }
 
     function testLiquidate_Full_Liquidation_Globally_Undercollateralized() external {

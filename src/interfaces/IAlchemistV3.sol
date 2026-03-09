@@ -643,6 +643,13 @@ interface IAlchemistV3Events {
     /// @param feeInUnderlying The amount of fee paid in underlying tokens.
     event RepaymentFee(uint256 indexed accountId, address feeReciever, uint256 feeInYield, uint256 feeInUnderlying);
 
+    /// @notice Emitted when a fee-vault payout is short of the requested amount.
+    ///
+    /// @param liquidator The liquidator receiving the payout.
+    /// @param requested  The requested fee amount in underlying tokens.
+    /// @param paid       The amount actually paid from the fee vault.
+    event FeeShortfall(address indexed liquidator, uint256 requested, uint256 paid);
+
 
     /// @notice Emitted when a new Position NFT is minted.
     ///

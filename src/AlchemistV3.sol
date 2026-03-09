@@ -1116,13 +1116,21 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param amountInUnderlying The amount of underlying tokens to pay
     /// @return actual amount paid based on the vault balance
     function _payWithFeeVault(uint256 amountInUnderlying) internal returns (uint256) {
-        if (alchemistFeeVault == address(0)) return 0;
+        if (amountInUnderlying == 0) return 0;
+        if (alchemistFeeVault == address(0)) {
+            emit FeeShortfall(msg.sender, amountInUnderlying, 0);
+            return 0;
+        }
         uint256 vaultBalance = IFeeVault(alchemistFeeVault).totalDeposits();
         if (vaultBalance > 0) {
             uint256 adjustedAmount = amountInUnderlying > vaultBalance ? vaultBalance : amountInUnderlying;
             IFeeVault(alchemistFeeVault).withdraw(msg.sender, adjustedAmount);
+            if (adjustedAmount < amountInUnderlying) {
+                emit FeeShortfall(msg.sender, amountInUnderlying, adjustedAmount);
+            }
             return adjustedAmount;
         }
+        emit FeeShortfall(msg.sender, amountInUnderlying, 0);
         return 0;
     }
 
