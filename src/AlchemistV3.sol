@@ -1074,7 +1074,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked, false);
-            (feeInYield, feeInUnderlying) = _calculateRepaymentFee(accountId, repaidAmountInYield);
+            feeInYield = _calculateRepaymentFee(repaidAmountInYield);
             // Final safety check after all deductions
             if (account.collateralBalance == 0 && account.debt > 0) {
                 uint256 debtToClear = _clearableDebt(account.debt);
@@ -1086,6 +1086,17 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Recalculate ratio after any repayment to determine if further liquidation is needed
         if (_isAccountHealthy(accountId, false)) {
+            if (feeInYield > 0) {
+                uint256 targetFeeInYield = feeInYield;
+                uint256 maxSafeFeeInYield = _maxRepaymentFeeInYield(accountId);
+                // All-or-nothing source switch:
+                // if account cannot safely cover full fee, pay entirely from fee vault.
+                if (maxSafeFeeInYield < targetFeeInYield) {
+                    feeInYield = 0;
+                    feeInUnderlying = convertYieldTokensToUnderlying(targetFeeInYield);
+                }
+            }
+
             if (feeInYield > 0) {
                 feeInYield = _subCollateralBalance(feeInYield, accountId); // clamps to available balance
                 TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
@@ -1105,13 +1116,21 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param amountInUnderlying The amount of underlying tokens to pay
     /// @return actual amount paid based on the vault balance
     function _payWithFeeVault(uint256 amountInUnderlying) internal returns (uint256) {
-        if (alchemistFeeVault == address(0)) return 0;
+        if (amountInUnderlying == 0) return 0;
+        if (alchemistFeeVault == address(0)) {
+            emit FeeShortfall(msg.sender, amountInUnderlying, 0);
+            return 0;
+        }
         uint256 vaultBalance = IFeeVault(alchemistFeeVault).totalDeposits();
         if (vaultBalance > 0) {
             uint256 adjustedAmount = amountInUnderlying > vaultBalance ? vaultBalance : amountInUnderlying;
             IFeeVault(alchemistFeeVault).withdraw(msg.sender, adjustedAmount);
+            if (adjustedAmount < amountInUnderlying) {
+                emit FeeShortfall(msg.sender, amountInUnderlying, adjustedAmount);
+            }
             return adjustedAmount;
         }
+        emit FeeShortfall(msg.sender, amountInUnderlying, 0);
         return 0;
     }
 
@@ -1232,22 +1251,36 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
  
     /// @dev Handles repayment fee calculation.
-    /// @param accountId The tokenId of the account to compute the repayment fee for.
     /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
     /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
-    /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
-    function _calculateRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal view returns (uint256 feeInYield, uint256 feeInUnderlying) {
+    function _calculateRepaymentFee(uint256 repaidAmountInYield) internal view returns (uint256 feeInYield) {
+        return repaidAmountInYield * repaymentFee / BPS;
+    }
+
+    /// @dev Returns max yield-fee removable while remaining strictly healthy (> lower bound).
+    /// @param accountId The tokenId of the account to compute the max repayment fee for.
+    /// @return The max repayment fee in yield tokens.
+    function _maxRepaymentFeeInYield(uint256 accountId) internal view returns (uint256) {
         Account storage account = _accounts[accountId];
-        uint256 debtInYield = convertDebtTokensToYield(account.debt);
-        uint256 surplus = account.collateralBalance > debtInYield ? account.collateralBalance - debtInYield : 0;
-        if(surplus > 0){
-            // calculate repayment fee
-            feeInYield = surplus * repaymentFee / BPS;
-        } else {
-            uint256 targetFee = repaidAmountInYield * repaymentFee / BPS;
-            feeInUnderlying = convertYieldTokensToUnderlying(targetFee);
+        uint256 debt = account.debt;
+        if (debt == 0) {
+            return account.collateralBalance;
         }
-        return (feeInYield, feeInUnderlying);
+
+        uint256 collateralInDebt = convertYieldTokensToDebt(account.collateralBalance);
+        uint256 minimumByLowerBound = FixedPointMath.mulDivUp(debt, collateralizationLowerBound, FIXED_POINT_SCALAR);
+        if (minimumByLowerBound == type(uint256).max) {
+            return 0;
+        }
+
+        // _isAccountHealthy uses a strict ">" check, so retain one debt-unit of margin.
+        uint256 minRequiredPostFee = minimumByLowerBound + 1;
+        if (collateralInDebt <= minRequiredPostFee) {
+            return 0;
+        }
+
+        uint256 removableInDebt = collateralInDebt - minRequiredPostFee;
+        return convertDebtTokensToYield(removableInDebt);
     }
 
     /// @dev Increases the debt by `amount` for the account owned by `tokenId`.
