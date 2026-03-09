@@ -1074,7 +1074,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked, false);
-            (feeInYield, feeInUnderlying) = _calculateRepaymentFee(accountId, repaidAmountInYield);
+            feeInYield = _calculateRepaymentFee(repaidAmountInYield);
             // Final safety check after all deductions
             if (account.collateralBalance == 0 && account.debt > 0) {
                 uint256 debtToClear = _clearableDebt(account.debt);
@@ -1087,9 +1087,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         // Recalculate ratio after any repayment to determine if further liquidation is needed
         if (_isAccountHealthy(accountId, false)) {
             if (feeInYield > 0) {
+                uint256 targetFeeInYield = feeInYield;
                 uint256 maxSafeFeeInYield = _maxRepaymentFeeInYield(accountId);
-                if (feeInYield > maxSafeFeeInYield) {
-                    feeInYield = maxSafeFeeInYield;
+                // All-or-nothing source switch:
+                // if account cannot safely cover full fee, pay entirely from fee vault.
+                if (maxSafeFeeInYield < targetFeeInYield) {
+                    feeInYield = 0;
+                    feeInUnderlying = convertYieldTokensToUnderlying(targetFeeInYield);
                 }
             }
 
@@ -1239,27 +1243,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
  
     /// @dev Handles repayment fee calculation.
-    /// @param accountId The tokenId of the account to compute the repayment fee for.
     /// @param repaidAmountInYield The amount of debt repaid in yield tokens.
     /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
-    /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
-    function _calculateRepaymentFee(uint256 accountId, uint256 repaidAmountInYield) internal view returns (uint256 feeInYield, uint256 feeInUnderlying) {
-        Account storage account = _accounts[accountId];
-        uint256 debt = account.debt;
-        uint256 collateralInDebt = convertYieldTokensToDebt(account.collateralBalance);
-        uint256 requiredByLowerBoundInDebt = FixedPointMath.mulDivUp(debt, collateralizationLowerBound, FIXED_POINT_SCALAR);
-        uint256 safeSurplusInDebt = collateralInDebt > requiredByLowerBoundInDebt
-            ? collateralInDebt - requiredByLowerBoundInDebt
-            : 0;
-
-        if (safeSurplusInDebt > 0) {
-            uint256 feeInDebt = safeSurplusInDebt * repaymentFee / BPS;
-            feeInYield = convertDebtTokensToYield(feeInDebt);
-        } else {
-            uint256 targetFee = repaidAmountInYield * repaymentFee / BPS;
-            feeInUnderlying = convertYieldTokensToUnderlying(targetFee);
-        }
-        return (feeInYield, feeInUnderlying);
+    function _calculateRepaymentFee(uint256 repaidAmountInYield) internal view returns (uint256 feeInYield) {
+        return repaidAmountInYield * repaymentFee / BPS;
     }
 
     /// @dev Returns max yield-fee removable while remaining strictly healthy (> lower bound).

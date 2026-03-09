@@ -353,6 +353,7 @@ contract AlchemistV3Test is Test {
 
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 prevVaultBalance = alchemistFeeVault.totalDeposits();
         uint256 mytBefore = IERC20(address(vault)).balanceOf(address(alchemist)); 
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
 
@@ -362,25 +363,24 @@ contract AlchemistV3Test is Test {
         // Debt after earmarked repayment (in debt tokens)
         uint256 debtAfterRepayment = prevDebt - earmarked;
 
-        // Repayment fee uses surplus above lower-bound-required collateral, then gets clamped
-        // so post-fee collateralization remains strictly healthy (> lower bound).
+        // Repayment fee is repay-proportional, then sourced all-or-nothing:
+        // pay from account only if fully safe, otherwise pay from fee vault.
         uint256 collateralAfterRepaymentInDebt = alchemist.convertYieldTokensToDebt(collateralAfterRepayment);
         uint256 requiredByLowerBoundInDebt =
             (debtAfterRepayment * alchemist.collateralizationLowerBound() + FIXED_POINT_SCALAR - 1) / FIXED_POINT_SCALAR;
-        uint256 safeSurplusInDebt =
-            collateralAfterRepaymentInDebt > requiredByLowerBoundInDebt
-                ? collateralAfterRepaymentInDebt - requiredByLowerBoundInDebt
-                : 0;
-        uint256 repaymentFee = alchemist.convertDebtTokensToYield(safeSurplusInDebt * repaymentFeeBPS / BPS);
-
+        uint256 targetRepaymentFeeInYield = assets * repaymentFeeBPS / BPS;
         uint256 minRequiredPostFeeInDebt = requiredByLowerBoundInDebt + 1;
         uint256 maxRemovableInDebt =
             collateralAfterRepaymentInDebt > minRequiredPostFeeInDebt
                 ? collateralAfterRepaymentInDebt - minRequiredPostFeeInDebt
                 : 0;
         uint256 maxRepaymentFeeInYield = alchemist.convertDebtTokensToYield(maxRemovableInDebt);
-        if (repaymentFee > maxRepaymentFeeInYield) {
-            repaymentFee = maxRepaymentFeeInYield;
+        uint256 expectedFeeInYield = targetRepaymentFeeInYield;
+        uint256 expectedFeeInUnderlying = 0;
+        if (targetRepaymentFeeInYield > maxRepaymentFeeInYield) {
+            expectedFeeInYield = 0;
+            uint256 targetFeeInUnderlying = alchemist.convertYieldTokensToUnderlying(targetRepaymentFeeInYield);
+            expectedFeeInUnderlying = targetFeeInUnderlying > prevVaultBalance ? prevVaultBalance : targetFeeInUnderlying;
         }
 
         vm.stopPrank();
@@ -391,7 +391,7 @@ contract AlchemistV3Test is Test {
         // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(
             depositedCollateral,
-            prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield - repaymentFee,
+            prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield - expectedFeeInYield,
             minimumDepositOrWithdrawalLoss
         );
 
@@ -399,8 +399,8 @@ contract AlchemistV3Test is Test {
         // vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
 
         // ensure liquidator fee is correct (i.e.0, since only a repayment is done)
-        vm.assertApproxEqAbs(feeInYield, repaymentFee, 1e18);
-        vm.assertEq(feeInUnderlying, 0);
+        vm.assertApproxEqAbs(feeInYield, expectedFeeInYield, 1e18);
+        vm.assertEq(feeInUnderlying, expectedFeeInUnderlying);
 
         // liquidator gets correct amount of fee, i.e. 0
         _validateLiquidiatorState(
@@ -412,7 +412,7 @@ contract AlchemistV3Test is Test {
             assets,
             alchemist.convertDebtTokensToYield(earmarked)
         );
-        vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether);
+        vm.assertEq(alchemistFeeVault.totalDeposits(), prevVaultBalance - expectedFeeInUnderlying);
 
         // transmuter recieves the liquidation amount in yield token minus the fee
         vm.assertApproxEqAbs(
@@ -474,6 +474,7 @@ contract AlchemistV3Test is Test {
         vm.startPrank(externalUser);
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 prevVaultBalance = alchemistFeeVault.totalDeposits();
 
         uint256 alchemistCurrentCollateralization =
             alchemist.normalizeUnderlyingTokensToDebt(alchemist.getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / alchemist.totalDebt();
@@ -2825,6 +2826,7 @@ contract AlchemistV3Test is Test {
         vm.startPrank(externalUser);
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 prevVaultBalance = alchemistFeeVault.totalDeposits();
         uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
         uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
         uint256 protocolFeeInYield = (creditToYield * alchemist.protocolFee() / BPS);
@@ -2837,16 +2839,12 @@ contract AlchemistV3Test is Test {
         // Debt after earmarked repayment (in debt tokens)
         uint256 debtAfterRepayment = prevDebt - earmarked;
 
-        // Repayment fee uses surplus above lower-bound-required collateral, then gets clamped
-        // so post-fee collateralization remains strictly healthy (> lower bound).
+        // Repayment fee is repay-proportional, then sourced all-or-nothing:
+        // pay from account only if fully safe, otherwise pay from fee vault.
         uint256 collateralAfterRepaymentInDebt = alchemist.convertYieldTokensToDebt(collateralAfterRepayment);
         uint256 requiredByLowerBoundInDebt =
             (debtAfterRepayment * alchemist.collateralizationLowerBound() + FIXED_POINT_SCALAR - 1) / FIXED_POINT_SCALAR;
-        uint256 safeSurplusInDebt =
-            collateralAfterRepaymentInDebt > requiredByLowerBoundInDebt
-                ? collateralAfterRepaymentInDebt - requiredByLowerBoundInDebt
-                : 0;
-        uint256 repaymentFee = alchemist.convertDebtTokensToYield(safeSurplusInDebt * repaymentFeeBPS / BPS);
+        uint256 targetRepaymentFeeInYield = assets * repaymentFeeBPS / BPS;
 
         uint256 minRequiredPostFeeInDebt = requiredByLowerBoundInDebt + 1;
         uint256 maxRemovableInDebt =
@@ -2854,21 +2852,29 @@ contract AlchemistV3Test is Test {
                 ? collateralAfterRepaymentInDebt - minRequiredPostFeeInDebt
                 : 0;
         uint256 maxRepaymentFeeInYield = alchemist.convertDebtTokensToYield(maxRemovableInDebt);
-        if (repaymentFee > maxRepaymentFeeInYield) {
-            repaymentFee = maxRepaymentFeeInYield;
+        uint256 expectedFeeInYield = targetRepaymentFeeInYield;
+        uint256 expectedFeeInUnderlying = 0;
+        if (targetRepaymentFeeInYield > maxRepaymentFeeInYield) {
+            expectedFeeInYield = 0;
+            uint256 targetFeeInUnderlying = alchemist.convertYieldTokensToUnderlying(targetRepaymentFeeInYield);
+            expectedFeeInUnderlying = targetFeeInUnderlying > prevVaultBalance ? prevVaultBalance : targetFeeInUnderlying;
         }
         // ensure debt is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(debt, prevDebt - earmarked, minimumDepositOrWithdrawalLoss);
 
         // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
-        vm.assertApproxEqAbs(depositedCollateral, prevCollateral - creditToYield - repaymentFee - protocolFeeInYield, minimumDepositOrWithdrawalLoss);
+        vm.assertApproxEqAbs(
+            depositedCollateral,
+            prevCollateral - creditToYield - expectedFeeInYield - protocolFeeInYield,
+            minimumDepositOrWithdrawalLoss
+        );
 
         // ensure assets is equal to repayment of max earmarked amount
         vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
 
         // ensure liquidator fee is correct (i.e.0, since only a repayment is done)
-        vm.assertApproxEqAbs(feeInYield, repaymentFee, 1e18);
-        vm.assertEq(feeInUnderlying, 0);
+        vm.assertApproxEqAbs(feeInYield, expectedFeeInYield, 1e18);
+        vm.assertEq(feeInUnderlying, expectedFeeInUnderlying);
 
         // liquidator gets correct amount of fee, i.e. 0
         _validateLiquidiatorState(
@@ -2881,7 +2887,7 @@ contract AlchemistV3Test is Test {
             alchemist.convertDebtTokensToYield(earmarked)
         );
 
-        vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether);
+        vm.assertEq(alchemistFeeVault.totalDeposits(), prevVaultBalance - expectedFeeInUnderlying);
 
         // transmuter recieves the liquidation amount in yield token minus the fee
         vm.assertApproxEqAbs(
@@ -3261,6 +3267,7 @@ contract AlchemistV3Test is Test {
 
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 prevVaultBalance = alchemistFeeVault.totalDeposits();
         (uint256 assets, uint256 feeInYield, uint256 feeInUnderlying) = alchemist.liquidate(tokenIdFor0xBeef);
 
         (uint256 depositedCollateral, uint256 debt,) = alchemist.getCDP(tokenIdFor0xBeef);
@@ -3269,16 +3276,12 @@ contract AlchemistV3Test is Test {
         // Debt after earmarked repayment (in debt tokens)
         uint256 debtAfterRepayment = prevDebt - earmarked;
 
-        // Repayment fee uses surplus above lower-bound-required collateral, then gets clamped
-        // so post-fee collateralization remains strictly healthy (> lower bound).
+        // Repayment fee is repay-proportional, then sourced all-or-nothing:
+        // pay from account only if fully safe, otherwise pay from fee vault.
         uint256 collateralAfterRepaymentInDebt = alchemist.convertYieldTokensToDebt(collateralAfterRepayment);
         uint256 requiredByLowerBoundInDebt =
             (debtAfterRepayment * alchemist.collateralizationLowerBound() + FIXED_POINT_SCALAR - 1) / FIXED_POINT_SCALAR;
-        uint256 safeSurplusInDebt =
-            collateralAfterRepaymentInDebt > requiredByLowerBoundInDebt
-                ? collateralAfterRepaymentInDebt - requiredByLowerBoundInDebt
-                : 0;
-        uint256 repaymentFee = alchemist.convertDebtTokensToYield(safeSurplusInDebt * repaymentFeeBPS / BPS);
+        uint256 targetRepaymentFeeInYield = assets * repaymentFeeBPS / BPS;
 
         uint256 minRequiredPostFeeInDebt = requiredByLowerBoundInDebt + 1;
         uint256 maxRemovableInDebt =
@@ -3286,8 +3289,12 @@ contract AlchemistV3Test is Test {
                 ? collateralAfterRepaymentInDebt - minRequiredPostFeeInDebt
                 : 0;
         uint256 maxRepaymentFeeInYield = alchemist.convertDebtTokensToYield(maxRemovableInDebt);
-        if (repaymentFee > maxRepaymentFeeInYield) {
-            repaymentFee = maxRepaymentFeeInYield;
+        uint256 expectedFeeInYield = targetRepaymentFeeInYield;
+        uint256 expectedFeeInUnderlying = 0;
+        if (targetRepaymentFeeInYield > maxRepaymentFeeInYield) {
+            expectedFeeInYield = 0;
+            uint256 targetFeeInUnderlying = alchemist.convertYieldTokensToUnderlying(targetRepaymentFeeInYield);
+            expectedFeeInUnderlying = targetFeeInUnderlying > prevVaultBalance ? prevVaultBalance : targetFeeInUnderlying;
         }
         vm.stopPrank();
 
@@ -3297,7 +3304,7 @@ contract AlchemistV3Test is Test {
         // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(
             depositedCollateral,
-            prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield - repaymentFee,
+            prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - protocolFeeInYield - expectedFeeInYield,
             minimumDepositOrWithdrawalLoss
         );
 
@@ -3305,8 +3312,8 @@ contract AlchemistV3Test is Test {
         // vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
 
         // ensure liquidator fee is correct (i.e.0, since only a repayment is done)
-        vm.assertApproxEqAbs(feeInYield, repaymentFee, 1e18);
-        vm.assertEq(feeInUnderlying, 0);
+        vm.assertApproxEqAbs(feeInYield, expectedFeeInYield, 1e18);
+        vm.assertEq(feeInUnderlying, expectedFeeInUnderlying);
 
         // liquidator gets correct amount of fee, i.e. 0
         _validateLiquidiatorState(
@@ -3318,7 +3325,7 @@ contract AlchemistV3Test is Test {
             assets,
             alchemist.convertDebtTokensToYield(earmarked)
         );
-        vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether);
+        vm.assertEq(alchemistFeeVault.totalDeposits(), prevVaultBalance - expectedFeeInUnderlying);
 
         // transmuter recieves the liquidation amount in yield token minus the fee
         vm.assertApproxEqAbs(
@@ -3547,6 +3554,7 @@ contract AlchemistV3Test is Test {
         vm.startPrank(externalUser);
         uint256 liquidatorPrevTokenBalance = IERC20(address(vault)).balanceOf(address(externalUser));
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
+        uint256 prevVaultBalance = alchemistFeeVault.totalDeposits();
 
         uint256 credit = earmarked > prevDebt ? prevDebt : earmarked;
         uint256 creditToYield = alchemist.convertDebtTokensToYield(credit);
@@ -3557,22 +3565,42 @@ contract AlchemistV3Test is Test {
 
 
         uint256 collateralAfterRepayment = prevCollateral - creditToYield - protocolFeeInYield;
-        uint256 surplusAfterRepayment = collateralAfterRepayment > debt ? collateralAfterRepayment - debt : 0;
-        uint256 repaymentFee = surplusAfterRepayment * 100 / BPS;
+        uint256 debtAfterRepayment = prevDebt - earmarked;
+        uint256 collateralAfterRepaymentInDebt = alchemist.convertYieldTokensToDebt(collateralAfterRepayment);
+        uint256 requiredByLowerBoundInDebt =
+            (debtAfterRepayment * alchemist.collateralizationLowerBound() + FIXED_POINT_SCALAR - 1) / FIXED_POINT_SCALAR;
+        uint256 targetRepaymentFeeInYield = assets * repaymentFeeBPS / BPS;
+        uint256 minRequiredPostFeeInDebt = requiredByLowerBoundInDebt + 1;
+        uint256 maxRemovableInDebt =
+            collateralAfterRepaymentInDebt > minRequiredPostFeeInDebt
+                ? collateralAfterRepaymentInDebt - minRequiredPostFeeInDebt
+                : 0;
+        uint256 maxRepaymentFeeInYield = alchemist.convertDebtTokensToYield(maxRemovableInDebt);
+        uint256 expectedFeeInYield = targetRepaymentFeeInYield;
+        uint256 expectedFeeInUnderlying = 0;
+        if (targetRepaymentFeeInYield > maxRepaymentFeeInYield) {
+            expectedFeeInYield = 0;
+            uint256 targetFeeInUnderlying = alchemist.convertYieldTokensToUnderlying(targetRepaymentFeeInYield);
+            expectedFeeInUnderlying = targetFeeInUnderlying > prevVaultBalance ? prevVaultBalance : targetFeeInUnderlying;
+        }
         vm.stopPrank();
 
         // ensure debt is reduced only by the repayment of max earmarked amount
         vm.assertApproxEqAbs(debt, prevDebt - earmarked, minimumDepositOrWithdrawalLoss);
 
         // ensure depositedCollateral is reduced only by the repayment of max earmarked amount
-        vm.assertApproxEqAbs(depositedCollateral, prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - repaymentFee - protocolFeeInYield, minimumDepositOrWithdrawalLoss);
+        vm.assertApproxEqAbs(
+            depositedCollateral,
+            prevCollateral - alchemist.convertDebtTokensToYield(earmarked) - expectedFeeInYield - protocolFeeInYield,
+            minimumDepositOrWithdrawalLoss
+        );
 
         // ensure assets is equal to repayment of max earmarked amount
         // vm.assertApproxEqAbs(assets, alchemist.convertDebtTokensToYield(earmarked), minimumDepositOrWithdrawalLoss);
 
         // ensure liquidator fee is correct (i.e. only repayment fee, since only a repayment is done)
-        vm.assertApproxEqAbs(feeInYield, repaymentFee, 1e18);
-        vm.assertEq(feeInUnderlying, 0);
+        vm.assertApproxEqAbs(feeInYield, expectedFeeInYield, 1e18);
+        vm.assertEq(feeInUnderlying, expectedFeeInUnderlying);
 
         // liquidator gets correct amount of fee, i.e. repayment fee > 0
         _validateLiquidiatorState(
@@ -3585,7 +3613,7 @@ contract AlchemistV3Test is Test {
             alchemist.convertDebtTokensToYield(earmarked)
         );
 
-        vm.assertEq(alchemistFeeVault.totalDeposits(), 10_000 ether);
+        vm.assertEq(alchemistFeeVault.totalDeposits(), prevVaultBalance - expectedFeeInUnderlying);
 
         // transmuter recieves the liquidation amount in yield token minus the fee
         vm.assertApproxEqAbs(
@@ -5551,15 +5579,20 @@ contract AlchemistV3Test is Test {
         vm.stopPrank();
 
         uint256 yieldBalBefore = vault.balanceOf(liquidator);
+        uint256 underlyingBalBefore = IERC20(mockVaultCollateral).balanceOf(liquidator);
 
         // === 3) First liquidation: earmark repayment + repayment fee ===
         vm.prank(liquidator);
         (, uint256 firstFeeYield, uint256 firstFeeUnderlying) = alchemist.liquidate(tokenId);
 
-        // Liquidator received a repayment fee in yield tokens
-        assertEq(firstFeeUnderlying, 0, "repayment fee should be in yield only");
-        assertGt(firstFeeYield, 0, "repayment fee not paid");
-        assertEq(vault.balanceOf(liquidator) - yieldBalBefore, firstFeeYield, "liquidator received first fee");
+        // Liquidator receives repayment fee from exactly one source (all-or-nothing switch).
+        assertGt(firstFeeYield + firstFeeUnderlying, 0, "repayment fee not paid");
+        assertEq(vault.balanceOf(liquidator) - yieldBalBefore, firstFeeYield, "liquidator received expected yield fee");
+        assertEq(
+            IERC20(mockVaultCollateral).balanceOf(liquidator) - underlyingBalBefore,
+            firstFeeUnderlying,
+            "liquidator received expected underlying fee"
+        );
 
         // Fee deduction should preserve strict health with lower-bound surplus + clamp.
         uint256 collateralValueAfterFee = alchemist.totalValue(tokenId);
@@ -5576,7 +5609,7 @@ contract AlchemistV3Test is Test {
 
         uint256 liquidatorUnderlyingAfter = IERC20(mockVaultCollateral).balanceOf(liquidator);
         assertEq(liquidatorUnderlyingAfter, liquidatorUnderlyingBefore, "no second fee should be paid");
-        assertGt(firstFeeYield, 0, "first fee (repayment, in yield) was paid");
+        assertGt(firstFeeYield + firstFeeUnderlying, 0, "first repayment fee was paid");
     }
 
     function _abs(uint256 a, uint256 b) internal pure returns (uint256) {
