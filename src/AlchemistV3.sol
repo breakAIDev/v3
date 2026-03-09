@@ -314,8 +314,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (minimumCollateralization > liquidationTargetCollateralization) {
             minimumCollateralization = liquidationTargetCollateralization;
         }
-
-        emit MinimumCollateralizationUpdated(value);
+        emit MinimumCollateralizationUpdated(minimumCollateralization);
     }
 
     /// @inheritdoc IAlchemistV3AdminActions
