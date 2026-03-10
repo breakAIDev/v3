@@ -3,6 +3,7 @@
 pragma solidity 0.8.28;
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
+import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 interface stETH {
     function sharesOf(address account) external view returns (uint256);
@@ -18,11 +19,6 @@ interface wstETH {
     function balanceOf(address account) external view returns (uint256);
 }
 
-interface unstETH {
-    function requestWithdrawalsWstETH(uint256[] calldata amounts, address owner) external returns (uint256[] memory requestIds);
-    function claimWithdrawals(uint256[] calldata requestIds, uint256[] calldata hints) external;
-}
-
 interface WETH {
     function deposit() external payable;
     function withdraw(uint256) external;
@@ -30,15 +26,28 @@ interface WETH {
 
 
 contract WstethMainnetStrategy is MYTStrategy {
+    uint256 public constant MAX_ORACLE_STALENESS = 7 days;
+
     stETH public immutable steth;
     wstETH public immutable wsteth;
 
     WETH public immutable weth;
+    AggregatorV3Interface public immutable stEthEthOracle;
+    uint8 public immutable stEthEthOracleDecimals;
 
-    constructor(address _myt, StrategyParams memory _params, address _weth, address _stETH, address _wstETH, address _unstETH, address _referral) MYTStrategy(_myt, _params) {
+    constructor(
+        address _myt,
+        StrategyParams memory _params,
+        address _weth,
+        address _stETH,
+        address _wstETH,
+        address _stEthEthOracle
+    ) MYTStrategy(_myt, _params) {
         weth = WETH(_weth);
         steth = stETH(_stETH);
         wsteth = wstETH(_wstETH);
+        stEthEthOracle = AggregatorV3Interface(_stEthEthOracle);
+        stEthEthOracleDecimals = stEthEthOracle.decimals();
     }
 
     function _allocate(uint256 amount) internal override returns (uint256 depositReturn) {
@@ -99,10 +108,15 @@ contract WstethMainnetStrategy is MYTStrategy {
         return amount;
     }
 
-    // FIXME this should be WETH
     function _totalValue() internal view override returns (uint256) {
         uint256 wstBal = wsteth.balanceOf(address(this));
-        return wsteth.getStETHByWstETH(wstBal);
+        if (wstBal == 0) return _idleAssets();
+        uint256 stEthNotional = wsteth.getStETHByWstETH(wstBal);
+        return _idleAssets() + _stEthToWeth(stEthNotional);
+    }
+
+    function _idleAssets() internal view returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(weth), address(this));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) 
@@ -115,8 +129,7 @@ contract WstethMainnetStrategy is MYTStrategy {
         if (wstBal == 0) return 0;
 
         // Amount of steth that can be withdrawn from wsteth balance
-        // Lido pool represents 1 steth as a claim on 1 eth
-        uint256 maxFundamentalWeth = wsteth.getStETHByWstETH(wstBal);
+        uint256 maxFundamentalWeth = _stEthToWeth(wsteth.getStETHByWstETH(wstBal));
 
         // Cap to available capacity
         uint256 fundable = amount <= maxFundamentalWeth 
@@ -131,5 +144,12 @@ contract WstethMainnetStrategy is MYTStrategy {
 
     function _isProtectedToken(address token) internal view override returns (bool) {
         return token == MYT.asset() || token == address(wsteth) || token == address(steth);
+    }
+
+    function _stEthToWeth(uint256 stEthAmount) internal view returns (uint256) {
+        (, int256 answer,, uint256 updatedAt,) = stEthEthOracle.latestRoundData();
+        require(answer > 0 && updatedAt != 0, "Invalid oracle answer");
+        require(updatedAt <= block.timestamp && block.timestamp - updatedAt <= MAX_ORACLE_STALENESS, "Stale oracle answer");
+        return stEthAmount * uint256(answer) / (10 ** stEthEthOracleDecimals);
     }
 }
