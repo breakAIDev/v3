@@ -138,7 +138,8 @@ abstract contract BaseStrategySimple is StrategyOps {
         }
         uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
 
-        amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToAllocate);
+        uint256 targetDeallocate = _effectiveDeallocateAmount(amountToAllocate);
+        amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
         bool deallocated = _deallocateOrSkipWhitelisted(amountToDeallocate, RevertContext.FuzzDeallocate);
         if (!deallocated) {
             vm.stopPrank();

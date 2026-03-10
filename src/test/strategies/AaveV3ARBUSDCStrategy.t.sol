@@ -90,6 +90,11 @@ contract AaveV3ARBUSDCStrategyTest is BaseStrategyTest {
         return vm.envString("ARBITRUM_RPC_URL");
     }
 
+    function _effectiveDeallocateAmount(uint256 requestedAssets) internal view override returns (uint256) {
+        uint256 maxWithdrawable = IMYTStrategy(strategy).realAssets();
+        return requestedAssets < maxWithdrawable ? requestedAssets : maxWithdrawable;
+    }
+
     function isProtocolRevertAllowed(bytes4 selector, RevertContext context) external pure override returns (bool) {
         bool isFuzzOrHandler = context == RevertContext.HandlerAllocate || context == RevertContext.HandlerDeallocate
             || context == RevertContext.FuzzAllocate || context == RevertContext.FuzzDeallocate;
