@@ -60,15 +60,16 @@ contract MoonwellWETHStrategy is MYTStrategy {
     function _allocate(uint256 amount) internal override returns (uint256) {
         require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than amount");
         TokenUtils.safeApprove(address(weth), address(mWETH), amount);
+        uint256 mTokenBalanceBefore = mWETH.balanceOf(address(this));
         // Mint mWETH with underlying WETH
         uint256 errorCode = mWETH.mint(amount);
         if (errorCode != 0) {
             revert MoonwellWETHStrategyMintFailed(errorCode);
         }
-        // Return actual assets received (mToken balance converted to underlying units)
-        uint256 mTokenBalance = mWETH.balanceOf(address(this));
+        // Return incremental assets received from this mint only.
+        uint256 mTokensMinted = mWETH.balanceOf(address(this)) - mTokenBalanceBefore;
         uint256 exchangeRate = mWETH.exchangeRateStored();
-        return (mTokenBalance * exchangeRate) / 1e18;
+        return (mTokensMinted * exchangeRate) / 1e18;
     }
 
     function _deallocate(uint256 amount) internal override returns (uint256) {

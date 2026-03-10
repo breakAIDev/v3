@@ -94,6 +94,29 @@ contract MoonwellWETHStrategyTest is BaseStrategyTest {
         return isFuzzOrHandler && selector == ERROR_STRING_SELECTOR;
     }
 
+    function test_strategy_allocate_emits_incremental_amounts() public {
+        bytes memory params = getVaultParams();
+        uint256 alloc1 = 0.5e18;
+        uint256 alloc2 = 0.6e18;
+        bytes32 adapterId = IMYTStrategy(strategy).adapterId();
+
+        vm.startPrank(vault);
+
+        deal(testConfig.vaultAsset, strategy, alloc1);
+        IMYTStrategy(strategy).allocate(params, alloc1, "", address(vault));
+        uint256 firstRealAssets = IMYTStrategy(strategy).realAssets();
+
+        vm.mockCall(vault, abi.encodeWithSelector(IVaultV2.allocation.selector, adapterId), abi.encode(firstRealAssets));
+
+        deal(testConfig.vaultAsset, strategy, alloc2);
+        (, int256 change) = IMYTStrategy(strategy).allocate(params, alloc2, "", address(vault));
+        vm.clearMockedCalls();
+        vm.stopPrank();
+
+        assertGt(change, 0, "second allocate change should be positive");
+        assertApproxEqAbs(uint256(change), alloc2, alloc2 / 100);
+    }
+
     // Test that full deallocation completes without reverting
     function test_strategy_full_deallocate(uint256 amountToAllocate) public {
         amountToAllocate = bound(amountToAllocate, 1 * 10 ** testConfig.decimals, testConfig.vaultInitialDeposit);

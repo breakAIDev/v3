@@ -56,15 +56,16 @@ contract MoonwellUSDCStrategy is MYTStrategy {
     function _allocate(uint256 amount) internal override returns (uint256) {
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than amount");
         TokenUtils.safeApprove(address(usdc), address(mUSDC), amount);
+        uint256 mTokenBalanceBefore = mUSDC.balanceOf(address(this));
         // Mint mUSDC with underlying USDC
         uint256 errorCode = mUSDC.mint(amount);
         if (errorCode != 0) {
             revert MoonwellUSDCStrategyMintFailed(errorCode);
         }
-        // Return actual assets received (mToken balance converted to underlying units)
-        uint256 mTokenBalance = mUSDC.balanceOf(address(this));
+        // Return incremental assets received from this mint only.
+        uint256 mTokensMinted = mUSDC.balanceOf(address(this)) - mTokenBalanceBefore;
         uint256 exchangeRate = mUSDC.exchangeRateStored();
-        return (mTokenBalance * exchangeRate) / 1e18;
+        return (mTokensMinted * exchangeRate) / 1e18;
     }
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
