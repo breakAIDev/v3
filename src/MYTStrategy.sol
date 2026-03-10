@@ -6,6 +6,7 @@ import {IVaultV2} from "vault-v2/interfaces/IVaultV2.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IMYTStrategy} from "./interfaces/IMYTStrategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "./libraries/SafeERC20.sol";
 
 interface IERC721Tiny {
     function ownerOf(uint256 tokenId) external view returns (address);
@@ -111,12 +112,12 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     }
 
     function dexSwap(address to, address from, uint256 amount, uint256 minAmountOut, bytes memory callData) internal returns (uint256) {
-        IERC20(from).approve(allowanceHolder, amount);
+        SafeERC20.safeApprove(from, allowanceHolder, amount);
         uint256 targetBalanceBefore = IERC20(to).balanceOf(address(this));
         (bool success, ) = allowanceHolder.call(callData);
         require(success, "0x exception");
         uint256 targetBalanceAfter = IERC20(to).balanceOf(address(this));
-        IERC20(from).approve(allowanceHolder, 0);
+        SafeERC20.safeApprove(from, allowanceHolder, 0);
         uint256 amountReceived = targetBalanceAfter > targetBalanceBefore ? targetBalanceAfter - targetBalanceBefore : 0;
         if (amountReceived < minAmountOut) revert InvalidAmount(minAmountOut, amountReceived);
         return amountReceived;
@@ -147,7 +148,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     function withdrawToVault() public virtual onlyOwner returns (uint256) {
         //Withdraw any leftover assets back to the vault
         uint256 leftover = IERC20(MYT.asset()).balanceOf(address(this));
-        IERC20(MYT.asset()).transfer(address(MYT), leftover);
+        SafeERC20.safeTransfer(MYT.asset(), address(MYT), leftover);
         emit WithdrawToVault(leftover);
         return leftover;
     }
