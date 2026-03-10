@@ -130,6 +130,81 @@ contract AlchemistRouter is ReentrancyGuard {
         _depositToExisting(alchemist, underlying, mytVault, msg.value, existingTokenId, borrowAmount, minSharesOut);
     }
 
+    /// @notice Deposit MYT shares directly into Alchemist, optionally borrow.
+    /// @dev    Caller must have approved this contract for `shares` of MYT.
+    /// @param  alchemist     The Alchemist contract address.
+    /// @param  shares        Amount of MYT shares to deposit.
+    /// @param  borrowAmount  Amount of debt tokens to borrow (0 to skip borrowing).
+    /// @param  deadline      Timestamp after which the transaction reverts.
+    /// @return tokenId       The position NFT token ID.
+    function depositMYT(
+        address alchemist,
+        uint256 shares,
+        uint256 borrowAmount,
+        uint256 deadline
+    ) external nonReentrant returns (uint256 tokenId) {
+        require(block.timestamp <= deadline, "Expired");
+        require(shares > 0, "Zero shares");
+
+        address mytVault = IAlchemistV3(alchemist).myt();
+
+        IERC20(mytVault).safeTransferFrom(msg.sender, address(this), shares);
+        IERC20(mytVault).forceApprove(alchemist, shares);
+
+        IAlchemistV3Position nft = IAlchemistV3Position(IAlchemistV3(alchemist).alchemistPositionNFT());
+        uint256 balanceBefore = nft.balanceOf(address(this));
+
+        IAlchemistV3(alchemist).deposit(shares, address(this), 0);
+
+        IERC20(mytVault).forceApprove(alchemist, 0);
+
+        uint256 balanceAfter = nft.balanceOf(address(this));
+        require(balanceAfter == balanceBefore + 1, "No NFT minted");
+        tokenId = nft.tokenOfOwnerByIndex(address(this), balanceAfter - 1);
+
+        if (borrowAmount > 0) {
+            IAlchemistV3(alchemist).mint(tokenId, borrowAmount, msg.sender);
+        }
+
+        nft.transferFrom(address(this), msg.sender, tokenId);
+    }
+
+    /// @notice Deposit MYT shares into an existing Alchemist position, optionally borrow.
+    /// @dev    Caller must have approved this contract for `shares` of MYT.
+    ///         Caller must own the position NFT (it stays with the caller).
+    ///         If `borrowAmount` > 0, caller must have called `approveMint(tokenId, router, borrowAmount)` on the Alchemist.
+    /// @param  alchemist       The Alchemist contract address.
+    /// @param  existingTokenId The position NFT token ID to deposit into.
+    /// @param  shares          Amount of MYT shares to deposit.
+    /// @param  borrowAmount    Amount of debt tokens to borrow (0 to skip borrowing).
+    /// @param  deadline        Timestamp after which the transaction reverts.
+    function depositMYTToExisting(
+        address alchemist,
+        uint256 existingTokenId,
+        uint256 shares,
+        uint256 borrowAmount,
+        uint256 deadline
+    ) external nonReentrant {
+        require(block.timestamp <= deadline, "Expired");
+        require(shares > 0, "Zero shares");
+
+        address mytVault = IAlchemistV3(alchemist).myt();
+
+        IAlchemistV3Position nft = IAlchemistV3Position(IAlchemistV3(alchemist).alchemistPositionNFT());
+        require(nft.ownerOf(existingTokenId) == msg.sender, "Not position owner");
+
+        IERC20(mytVault).safeTransferFrom(msg.sender, address(this), shares);
+        IERC20(mytVault).forceApprove(alchemist, shares);
+
+        IAlchemistV3(alchemist).deposit(shares, msg.sender, existingTokenId);
+
+        IERC20(mytVault).forceApprove(alchemist, 0);
+
+        if (borrowAmount > 0) {
+            IAlchemistV3(alchemist).mintFrom(existingTokenId, borrowAmount, msg.sender);
+        }
+    }
+
     /// @notice Deposit ETH into MYT vault only (no Alchemist position).
     ///         MYT shares are sent directly to the caller.
     /// @dev    WETH address is derived from alchemist.underlyingToken().
