@@ -73,32 +73,41 @@ contract MoonwellWETHStrategy is MYTStrategy {
     }
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
-        // Calculate mTokens needed: ceil(amount * 1e18 / exchangeRate)
-        uint256 mTokensNeeded = (amount * 1e18).ceilDiv(mWETH.exchangeRateStored());
-        
-        // Redeem mTokens for underlying WETH
-        uint256 errorCode = mWETH.redeem(mTokensNeeded);
-        if (errorCode != 0) {
-            revert MoonwellWETHStrategyRedeemUnderlyingFailed(errorCode);
+        uint256 idleBalance = _idleAssets();
+
+        if (idleBalance < amount) {
+            uint256 shortfall = amount - idleBalance;
+            uint256 mTokensNeeded = (shortfall * 1e18).ceilDiv(mWETH.exchangeRateStored());
+
+            // Redeem only the shortfall from Moonwell.
+            uint256 errorCode = mWETH.redeem(mTokensNeeded);
+            if (errorCode != 0) {
+                revert MoonwellWETHStrategyRedeemUnderlyingFailed(errorCode);
+            }
         }
-        
+
         // Wrap any native ETH received to WETH
         if (address(this).balance > 0) {
             weth.deposit{value: address(this).balance}();
         }
-        
+
         require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than the amount needed");
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
     }
 
+    function _idleAssets() internal view returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(weth), address(this));
+    }
+
     function _totalValue() internal view override returns (uint256) {
+        uint256 idleUnderlying = _idleAssets();
         // Use stored exchange rate and mToken balance to avoid state changes during static calls
         uint256 mTokenBalance = mWETH.balanceOf(address(this));
-        if (mTokenBalance == 0) return 0;
+        if (mTokenBalance == 0) return idleUnderlying;
         uint256 exchangeRate = mWETH.exchangeRateStored();
         // Exchange rate is scaled by 1e18, so we need to divide by 1e18
-        return (mTokenBalance * exchangeRate) / 1e18;
+        return idleUnderlying + (mTokenBalance * exchangeRate) / 1e18;
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {

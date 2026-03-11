@@ -69,27 +69,35 @@ contract MoonwellUSDCStrategy is MYTStrategy {
     }
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
-        // Calculate mTokens needed: ceil(amount * 1e18 / exchangeRate)
-        uint256 mTokensNeeded = (amount * 1e18).ceilDiv(mUSDC.exchangeRateStored());
-        
-        // Redeem mTokens for underlying USDC
-        uint256 errorCode = mUSDC.redeem(mTokensNeeded);
-        if (errorCode != 0) {
-            revert MoonwellUSDCStrategyRedeemUnderlyingFailed(errorCode);
+        uint256 idleBalance = _idleAssets();
+        if (idleBalance < amount) {
+            uint256 shortfall = amount - idleBalance;
+            uint256 mTokensNeeded = (shortfall * 1e18).ceilDiv(mUSDC.exchangeRateStored());
+
+            // Redeem only the shortfall from Moonwell.
+            uint256 errorCode = mUSDC.redeem(mTokensNeeded);
+            if (errorCode != 0) {
+                revert MoonwellUSDCStrategyRedeemUnderlyingFailed(errorCode);
+            }
         }
-        
+
         require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than the amount needed");
         TokenUtils.safeApprove(address(usdc), msg.sender, amount);
         return amount;
     }
 
+    function _idleAssets() internal view returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(usdc), address(this));
+    }
+
     function _totalValue() internal view override returns (uint256) {
+        uint256 idleUnderlying = _idleAssets();
         // Use stored exchange rate and mToken balance to avoid state changes during static calls
         uint256 mTokenBalance = mUSDC.balanceOf(address(this));
-        if (mTokenBalance == 0) return 0;
+        if (mTokenBalance == 0) return idleUnderlying;
         uint256 exchangeRate = mUSDC.exchangeRateStored();
         // Exchange rate is scaled by 1e18, so we need to divide by 1e18
-        return (mTokenBalance * exchangeRate) / 1e18;
+        return idleUnderlying + (mTokenBalance * exchangeRate) / 1e18;
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
