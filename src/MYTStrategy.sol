@@ -7,7 +7,6 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IMYTStrategy} from "./interfaces/IMYTStrategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "./libraries/SafeERC20.sol";
-
 interface IERC721Tiny {
     function ownerOf(uint256 tokenId) external view returns (address);
 }
@@ -106,7 +105,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
             revert("Invalid action");
         }
         uint256 oldAllocation = allocation();
-        uint256 newAllocation = _totalValue();
+        uint256 newAllocation = _totalValue() - amountDeallocated;
         emit Deallocate(amountDeallocated, address(this));
         return (ids(), int256(newAllocation) - int256(oldAllocation));
     }
@@ -236,18 +235,6 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     /// this ERC20 reward must then be converted to the MYT's asset
     function _claimRewards(address token, bytes memory quote, uint256 minAmountOut) internal virtual returns (uint256) {}
 
-    // Helper for yield snapshot calculation
-    function _approxAPY(uint256 ratePerSecWad) internal pure returns (uint256) {
-        uint256 apr = ratePerSecWad * SECONDS_PER_YEAR;
-        uint256 aprSq = apr * apr / FIXED_POINT_SCALAR;
-        return apr + aprSq / 2;
-    }
-
-    // Helper for yield snapshot calculation
-    function _lerp(uint256 oldVal, uint256 newVal, uint256 alpha) internal pure returns (uint256) {
-        return alpha * oldVal / FIXED_POINT_SCALAR + (FIXED_POINT_SCALAR - alpha) * newVal / FIXED_POINT_SCALAR;
-    }
-
     /// @notice recategorize this strategy to a different risk class
     function setRiskClass(RiskClass newClass) public onlyOwner {
         params.riskClass = newClass;
@@ -321,5 +308,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     function realAssets() external view virtual returns (uint256) {
         return _totalValue();
     }
+
+    function _idleAssets() internal view virtual returns (uint256) {}
 
 }

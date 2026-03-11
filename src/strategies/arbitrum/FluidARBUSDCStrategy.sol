@@ -1,57 +1,17 @@
 pragma solidity 0.8.28;
 
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {TokenUtils} from "../../libraries/TokenUtils.sol";
-import {MYTStrategy} from "../../MYTStrategy.sol";
-
-interface IERC20 {
-    function balanceOf(address) external view returns (uint256);
-    function approve(address, uint256) external returns (bool);
-}
+import {ERC4626BaseStrategy} from "../ERC4626BaseStrategy.sol";
 
 /**
  * @title FluidARBUSDCStrategy
  * @notice This strategy is used to allocate and deallocate usdc to the Fluid USDC vault on ARB
  */
-contract FluidARBUSDCStrategy is MYTStrategy {
-    IERC20 public immutable usdc; // ARB USDC
-    IERC4626 public immutable vault; // Fluid USDC vault on ARB
-
+contract FluidARBUSDCStrategy is ERC4626BaseStrategy {
     constructor(address _myt, StrategyParams memory _params, address _usdc, address _fluidVault)
-        MYTStrategy(_myt, _params)
-    {
-        usdc = IERC20(_usdc);
-        vault = IERC4626(_fluidVault);
-    }
+        ERC4626BaseStrategy(_myt, _params, _usdc, _fluidVault)
+    {}
 
-    function _allocate(uint256 amount) internal override returns (uint256) {
-        require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than amount");
-        TokenUtils.safeApprove(address(usdc), address(vault), amount);
-        vault.deposit(amount, address(this));
-        return amount;
-    }
-
-    function _deallocate(uint256 amount) internal override returns (uint256) {
-        vault.withdraw(amount, address(this), address(this));
-        require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than the amount needed");
-        TokenUtils.safeApprove(address(usdc), msg.sender, amount);
-        return amount;
-    }
-
-    function _totalValue() internal view override returns (uint256) {
-        return vault.convertToAssets(vault.balanceOf(address(this)));
-    }
-
-    function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
-        uint256 sharesNoFee = vault.convertToShares(amount);
-        uint256 sharesWithFee = vault.previewWithdraw(amount);
-        uint256 feeShares = sharesWithFee > sharesNoFee ? sharesWithFee - sharesNoFee : 0;
-        uint256 feeAssets = vault.convertToAssets(feeShares);
-        uint256 netAssets = amount - feeAssets;
-        return netAssets * (10_000 - params.slippageBPS) / 10_000;
-    }
-
-    function _isProtectedToken(address token) internal view override returns (bool) {
-        return token == MYT.asset() || token == address(vault);
+    function usdc() external view returns (address) {
+        return address(assetToken);
     }
 }

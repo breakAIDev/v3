@@ -110,7 +110,8 @@ contract PeapodsETHStrategyTest is BaseStrategyTest {
         require(initialRealAssets > 0, "Initial real assets is 0");
         IMYTStrategy(strategy).deallocate(params, amountToAllocate, "", address(vault));
         uint256 finalRealAssets = IMYTStrategy(strategy).realAssets();
-        require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        // require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        assertApproxEqRel(TokenUtils.safeBalanceOf(testConfig.vaultAsset, address(strategy)), finalRealAssets, 1e16);
         vm.stopPrank();
     }
 

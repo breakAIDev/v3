@@ -96,10 +96,6 @@ contract MoonwellWETHStrategy is MYTStrategy {
         return amount;
     }
 
-    function _idleAssets() internal view returns (uint256) {
-        return TokenUtils.safeBalanceOf(address(weth), address(this));
-    }
-
     function _totalValue() internal view override returns (uint256) {
         uint256 idleUnderlying = _idleAssets();
         // Use stored exchange rate and mToken balance to avoid state changes during static calls
