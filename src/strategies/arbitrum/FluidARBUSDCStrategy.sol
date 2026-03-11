@@ -48,7 +48,7 @@ contract FluidARBUSDCStrategy is MYTStrategy {
         uint256 feeShares = sharesWithFee > sharesNoFee ? sharesWithFee - sharesNoFee : 0;
         uint256 feeAssets = vault.convertToAssets(feeShares);
         uint256 netAssets = amount - feeAssets;
-        return netAssets - (netAssets * params.slippageBPS / 10_000);
+        return netAssets * (10_000 - params.slippageBPS) / 10_000;
     }
 
     function _isProtectedToken(address token) internal view override returns (bool) {
