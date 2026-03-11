@@ -91,36 +91,42 @@ contract TokeAutoEthStrategy is MYTStrategy {
     // Withdraws auto eth shares from the rewarder
     // redeems same amount of shares from auto eth vault to weth
     function _deallocate(uint256 amount) internal override returns (uint256) {
-        uint256 sharesNeeded = autoEth.convertToShares(amount,
-            autoEth.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
-            autoEth.totalSupply(),
-            IERC4626Like.Rounding.Up  // Round UP when calculating shares to withdraw
-        );
-        
-        // Cap to actual balance (handles rounding)
-        uint256 actualShares = rewarder.balanceOf(address(this));
-        if (sharesNeeded > actualShares) sharesNeeded = actualShares;
-        
-        // Withdraw shares from rewarder
-        rewarder.withdraw(address(this), sharesNeeded, false);
-        
-        autoEth.redeem(sharesNeeded, address(this), address(this));
         uint256 wethBalance = TokenUtils.safeBalanceOf(address(weth), address(this));
-        
+        if (wethBalance < amount) {
+            uint256 totalAssetsForWithdraw = autoEth.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw);
+            uint256 totalSupply = autoEth.totalSupply();
+            uint256 shortfall = amount - wethBalance;
+            uint256 sharesNeeded =
+                autoEth.convertToShares(shortfall, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Up);
+
+            uint256 directShares = autoEth.balanceOf(address(this));
+            uint256 stakedShares = rewarder.balanceOf(address(this));
+            uint256 totalShares = directShares + stakedShares;
+            if (sharesNeeded > totalShares) sharesNeeded = totalShares;
+
+            if (sharesNeeded > directShares) {
+                rewarder.withdraw(address(this), sharesNeeded - directShares, false);
+            }
+
+            autoEth.redeem(sharesNeeded, address(this), address(this));
+            wethBalance = TokenUtils.safeBalanceOf(address(weth), address(this));
+        }
+
         require(wethBalance >= amount, "Withdraw amount insufficient");
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
     }
 
     function _totalValue() internal view override returns (uint256) {
-            uint256 shares = rewarder.balanceOf(address(this));
-            uint256 assets = autoEth.convertToAssets(
+        uint256 idleAssets = TokenUtils.safeBalanceOf(address(weth), address(this));
+        uint256 shares = rewarder.balanceOf(address(this)) + autoEth.balanceOf(address(this));
+        uint256 assets = autoEth.convertToAssets(
             shares,
             autoEth.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
             autoEth.totalSupply(),
             IERC4626Like.Rounding.Down
         );
-        return assets;
+        return idleAssets + assets;
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
@@ -130,6 +136,8 @@ contract TokeAutoEthStrategy is MYTStrategy {
             autoEth.totalSupply(),
             IERC4626Like.Rounding.Up
         );
+        uint256 totalShares = rewarder.balanceOf(address(this)) + autoEth.balanceOf(address(this));
+        if (sharesNeeded > totalShares) sharesNeeded = totalShares;
         uint256 assets = autoEth.convertToAssets(
             sharesNeeded,
             autoEth.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
