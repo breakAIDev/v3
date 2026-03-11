@@ -35,7 +35,6 @@ contract PeapodsETHStrategy is MYTStrategy {
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
         vault.withdraw(amount, address(this), address(this));
-        require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than the amount needed");
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
     }
