@@ -476,29 +476,17 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function mint(uint256 tokenId, uint256 amount, address recipient) external {
-        _requireNonZeroAddress(recipient);
-        _checkForValidAccountId(tokenId);
-        _requirePositiveAmount(amount);
-        _requireLoansEnabled();
+        _validateMintRequest(tokenId, amount, recipient);
         _requireTokenOwner(tokenId, msg.sender);
-        _earmarkAndSyncAccount(tokenId, true);
-
-        // Mint tokens to recipient
-        _mint(tokenId, amount, recipient);
+        _executeMintRequest(tokenId, amount, recipient);
     }
 
     /// @inheritdoc IAlchemistV3Actions
     function mintFrom(uint256 tokenId, uint256 amount, address recipient) external {
-        _requirePositiveAmount(amount);
-        _checkForValidAccountId(tokenId);
-        _requireNonZeroAddress(recipient);
-        _requireLoansEnabled();
+        _validateMintRequest(tokenId, amount, recipient);
         // Preemptively try and decrease the minting allowance. This will save gas when the allowance is not sufficient.
         _decreaseMintAllowance(tokenId, msg.sender, amount);
-        _earmarkAndSyncAccount(tokenId, true);
-
-        // Mint tokens from the tokenId's account to the recipient.
-        _mint(tokenId, amount, recipient);
+        _executeMintRequest(tokenId, amount, recipient);
     }
 
     /// @inheritdoc IAlchemistV3Actions
@@ -1369,6 +1357,18 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             _checkState(!_isProtocolInBadDebt());
         }
         _sync(tokenId);
+    }
+
+    function _validateMintRequest(uint256 tokenId, uint256 amount, address recipient) internal view {
+        _requireNonZeroAddress(recipient);
+        _checkForValidAccountId(tokenId);
+        _requirePositiveAmount(amount);
+        _requireLoansEnabled();
+    }
+
+    function _executeMintRequest(uint256 tokenId, uint256 amount, address recipient) internal {
+        _earmarkAndSyncAccount(tokenId, true);
+        _mint(tokenId, amount, recipient);
     }
 
     /// @dev Checks an expression and reverts with an {IllegalArgument} error if the expression is {false}.
