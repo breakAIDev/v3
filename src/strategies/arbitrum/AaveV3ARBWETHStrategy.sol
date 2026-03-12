@@ -59,13 +59,13 @@ contract AaveV3ARBWETHStrategy is MYTStrategy {
         IAavePool pool = IAavePool(poolProvider.getPool());
         uint256 wethBalanceBefore = TokenUtils.safeBalanceOf(address(weth), address(this));
         // withdraw exact underlying amount back to this adapter
-        pool.withdraw(address(weth), amount, address(this));
+        uint256 withdrawnAmount = pool.withdraw(address(weth), amount, address(this));
         require(
-            TokenUtils.safeBalanceOf(address(weth), address(this)) >= wethBalanceBefore + amount,
+            TokenUtils.safeBalanceOf(address(weth), address(this)) >= wethBalanceBefore + withdrawnAmount,
             "Strategy balance is less than the amount needed"
         );
-        TokenUtils.safeApprove(address(weth), msg.sender, amount);
-        return amount;
+        TokenUtils.safeApprove(address(weth), msg.sender, withdrawnAmount);
+        return withdrawnAmount;
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
