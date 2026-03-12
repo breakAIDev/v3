@@ -116,13 +116,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @dev Total MYT shares paid out for redemptions (collRedeemed + feeCollateral)
     uint256 private _totalRedeemedSharesOut;
 
-    /// @dev Weight of earmarked amount / total unearmarked debt
+    /// @dev Packed earmark survival state for unearmarked exposure.
     uint256 private _earmarkWeight;
 
-    /// @dev Weight of redemption amount / total earmarked debt
+    /// @dev Packed redemption survival state for earmarked exposure.
     uint256 private _redemptionWeight;
 
-    /// @dev Earmarked scaled by survival
+    /// @dev Cumulative surviving earmark mass used to unwind redemptions across epochs.
     uint256 private _survivalAccumulator;
 
     /// @dev Total yield tokens deposited
@@ -198,7 +198,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _redemptionWeight = ONE_Q128;
         _earmarkWeight = ONE_Q128;
 
-        // Initialize  epoch history
+        // Initialize epoch history
         _earmarkEpochStartRedemptionWeight[0] = _redemptionWeight;
         _earmarkEpochStartSurvivalAccumulator[0] = _survivalAccumulator;
     }
@@ -421,10 +421,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function deposit(uint256 amount, address recipient, uint256 tokenId) external returns (uint256) {
-        _checkArgument(recipient != address(0));
-        _checkArgument(amount > 0);
-        _checkState(!depositsPaused);
-        _checkState(!_isProtocolInBadDebt());
+        _requireNonZeroAddress(recipient);
+        _requirePositiveAmount(amount);
+        _requireDepositsEnabledAndSolvent();
         _checkState(_mytSharesDeposited + amount <= depositCap);
 
         // Only mint a new position if the id is 0
@@ -433,8 +432,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             emit AlchemistV3PositionNFTMinted(recipient, tokenId);
         } else {
             _checkForValidAccountId(tokenId);
-            _earmark();
-            _sync(tokenId);
+            _earmarkAndSyncAccount(tokenId, false);
         }
 
         _accounts[tokenId].collateralBalance += amount;
@@ -450,12 +448,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function withdraw(uint256 amount, address recipient, uint256 tokenId) external returns (uint256) {
-        _checkArgument(recipient != address(0));
+        _requireNonZeroAddress(recipient);
         _checkForValidAccountId(tokenId);
-        _checkArgument(amount > 0);
-        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), msg.sender);
-        _earmark();
-        _sync(tokenId);
+        _requirePositiveAmount(amount);
+        _requireTokenOwner(tokenId, msg.sender);
+        _earmarkAndSyncAccount(tokenId, false);
 
         if (_accounts[tokenId].collateralBalance > _mytSharesDeposited) {
             _accounts[tokenId].collateralBalance = _mytSharesDeposited;
@@ -479,17 +476,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function mint(uint256 tokenId, uint256 amount, address recipient) external {
-        _checkArgument(recipient != address(0));
+        _requireNonZeroAddress(recipient);
         _checkForValidAccountId(tokenId);
-        _checkArgument(amount > 0);
-        _checkState(!loansPaused);
-        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), msg.sender);
-
-        // Query transmuter and earmark global debt
-        _earmark();
-        _checkState(!_isProtocolInBadDebt());
-        // Sync current user debt before more is taken
-        _sync(tokenId);
+        _requirePositiveAmount(amount);
+        _requireLoansEnabled();
+        _requireTokenOwner(tokenId, msg.sender);
+        _earmarkAndSyncAccount(tokenId, true);
 
         // Mint tokens to recipient
         _mint(tokenId, amount, recipient);
@@ -497,18 +489,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function mintFrom(uint256 tokenId, uint256 amount, address recipient) external {
-        _checkArgument(amount > 0);
+        _requirePositiveAmount(amount);
         _checkForValidAccountId(tokenId);
-        _checkArgument(recipient != address(0));
-        _checkState(!loansPaused);
+        _requireNonZeroAddress(recipient);
+        _requireLoansEnabled();
         // Preemptively try and decrease the minting allowance. This will save gas when the allowance is not sufficient.
         _decreaseMintAllowance(tokenId, msg.sender, amount);
-
-        // Query transmuter and earmark global debt
-        _earmark();
-        _checkState(!_isProtocolInBadDebt());
-        // Sync current user debt before more is taken
-        _sync(tokenId);
+        _earmarkAndSyncAccount(tokenId, true);
 
         // Mint tokens from the tokenId's account to the recipient.
         _mint(tokenId, amount, recipient);
@@ -574,7 +561,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 debt;
 
-        // Burning yieldTokens will pay off all types of debt
+        // Force-repay burns debt against the account's current total debt.
         _checkState((debt = account.debt) > 0);
 
         uint256 yieldToDebt = convertYieldTokensToDebt(amount);
@@ -959,7 +946,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         Account storage account = _accounts[accountId];
         uint256 debt;
 
-        // Burning yieldTokens will pay off all types of debt
+        // Yield-token repayment can cover both earmarked and unearmarked debt.
         _checkState((debt = account.debt) > 0);
 
         // earmarked debt always <= account debt
@@ -969,10 +956,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _subEarmarkedDebt(credit, accountId);
         _subDebt(accountId, credit);
         
-        // sub the amount in yield tokens from collateral balance
+        // Remove the realized debt value from collateral.
         uint256 creditToYield = _subCollateralBalance(convertDebtTokensToYield(credit), accountId);
 
-        // sub the protocol fee from collateral balance. collateral balance may be zero 
+        // Remove any protocol fee from remaining collateral.
         uint256 targetProtocolFee = creditToYield * protocolFee / BPS;
         uint256 protocolFeeTotal = _subCollateralBalance(targetProtocolFee, accountId);
 
@@ -1303,6 +1290,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         account.debt -= amount;
         totalDebt -= amount;
 
+        if (account.debt == 0) {
+            account.earmarked = 0;
+            _checkpointAccountState(account);
+        }
+
         if (cumulativeEarmarked > totalDebt) {
             cumulativeEarmarked = totalDebt;
         }
@@ -1318,6 +1310,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @dev Returns debt that can be safely cleared against global debt accounting.
     function _clearableDebt(uint256 accountDebt) internal view returns (uint256) {
         return accountDebt > totalDebt ? totalDebt : accountDebt;
+    }
+
+    /// @dev Snapshots an account against the current global accounting state.
+    function _checkpointAccountState(Account storage account) internal {
+        account.lastTotalRedeemedDebt = _totalRedeemedDebt;
+        account.lastTotalRedeemedSharesOut = _totalRedeemedSharesOut;
+        account.lastAccruedEarmarkWeight = _earmarkWeight;
+        account.lastAccruedRedemptionWeight = _redemptionWeight;
+        account.lastSurvivalAccumulator = _survivalAccumulator;
     }
 
     /// @dev Set the mint allowance for `spender` to `amount` for the account owned by `tokenId`.
@@ -1339,6 +1340,35 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _decreaseMintAllowance(uint256 ownerTokenId, address spender, uint256 amount) internal {
         Account storage account = _accounts[ownerTokenId];
         account.mintAllowances[account.allowancesVersion][spender] -= amount;
+    }
+
+    function _requireNonZeroAddress(address account) internal pure {
+        _checkArgument(account != address(0));
+    }
+
+    function _requirePositiveAmount(uint256 amount) internal pure {
+        _checkArgument(amount > 0);
+    }
+
+    function _requireDepositsEnabledAndSolvent() internal view {
+        _checkState(!depositsPaused);
+        _checkState(!_isProtocolInBadDebt());
+    }
+
+    function _requireLoansEnabled() internal view {
+        _checkState(!loansPaused);
+    }
+
+    function _requireTokenOwner(uint256 tokenId, address user) internal view {
+        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), user);
+    }
+
+    function _earmarkAndSyncAccount(uint256 tokenId, bool enforceNoBadDebt) internal {
+        _earmark();
+        if (enforceNoBadDebt) {
+            _checkState(!_isProtocolInBadDebt());
+        }
+        _sync(tokenId);
     }
 
     /// @dev Checks an expression and reverts with an {IllegalArgument} error if the expression is {false}.
@@ -1438,19 +1468,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             account.collateralBalance -= sharesToDebit;
         }
 
-        // advance checkpoints even if redeemedTotal==0
-        account.lastTotalRedeemedDebt = _totalRedeemedDebt;
-        account.lastTotalRedeemedSharesOut = _totalRedeemedSharesOut;
-
         account.earmarked = newEarmarked;
         account.debt = newDebt;
-
-        // Advance account checkpoint
-        account.lastAccruedEarmarkWeight = _earmarkWeight;
-        account.lastAccruedRedemptionWeight = _redemptionWeight;
-
-        // Snapshot G for this account
-        account.lastSurvivalAccumulator = _survivalAccumulator;
+        _checkpointAccountState(account);
     }
 
     /// @dev Computes the account debt/earmark state at a given global weight snapshot.
@@ -1614,7 +1634,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @param tokenId The id of the account owner.
     ///
     /// @return The amount of debt that the account owned by `owner` will have after an update.
-    /// @return The amount of debt which is currently earmarked fro redemption.
+    /// @return The amount of debt which is currently earmarked for redemption.
     /// @return The amount of collateral that has yet to be redeemed.
     function _calculateUnrealizedDebt(uint256 tokenId)
         internal
@@ -1731,9 +1751,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return FixedPointMath.divQ128(newIdx, oldIdx);
     }
 
-    /// @dev Computes redemption survival ratio between two redemption weights.
-    ///      Uses division when survivals are representable, and falls back to delta-weight
-    ///      when SurvivalFromWeight() underflows to 0 for both endpoints.
+    /// @dev Computes redemption survival ratio between two packed redemption states.
     function _redemptionSurvivalRatio(uint256 oldPacked, uint256 newPacked) internal pure returns (uint256) {
         if (newPacked == oldPacked) return ONE_Q128;
         if (oldPacked == 0) return ONE_Q128;
