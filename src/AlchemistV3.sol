@@ -781,30 +781,19 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @dev Pokes the account owned by `tokenId` to sync the state.
     /// @param tokenId The tokenId of the account to poke.
     function _poke(uint256 tokenId) internal {
-        _earmark();
-        _sync(tokenId);
+        _earmarkAndSyncAccount(tokenId, false);
     }
 
     /// @inheritdoc IAlchemistV3Actions
     function approveMint(uint256 tokenId, address spender, uint256 amount) external {
-        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), msg.sender);
+        _requireOwnedAccount(tokenId, msg.sender);
         _approveMint(tokenId, spender, amount);
     }
 
     /// @inheritdoc IAlchemistV3Actions
     function resetMintAllowances(uint256 tokenId) external {
-        // Allow calls from either the token owner or the NFT contract
-        if (msg.sender != address(alchemistPositionNFT)) {
-            // Direct call - verify caller is current owner
-            address tokenOwner = IERC721(alchemistPositionNFT).ownerOf(tokenId);
-            if (msg.sender != tokenOwner) {
-                revert Unauthorized();
-            }
-        }
-        // increment version to start the mapping from a fresh state
-        _accounts[tokenId].allowancesVersion += 1;
-        // Emit event to notify allowance clearing
-        emit MintAllowancesReset(tokenId);
+        _requireMintAllowanceResetAuthorized(tokenId, msg.sender);
+        _resetMintAllowances(tokenId);
     }
 
     /// @inheritdoc IAlchemistV3State
@@ -1282,6 +1271,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         emit ApproveMint(ownerTokenId, spender, amount);
     }
 
+    function _resetMintAllowances(uint256 tokenId) internal {
+        _accounts[tokenId].allowancesVersion += 1;
+        emit MintAllowancesReset(tokenId);
+    }
+
     /// @dev Decrease the mint allowance for `spender` by `amount` for the account owned by `ownerTokenId`.
     ///
     /// @param ownerTokenId The id of the account owner.
@@ -1311,6 +1305,22 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     function _requireTokenOwner(uint256 tokenId, address user) internal view {
         _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), user);
+    }
+
+    function _requireOwnedAccount(uint256 tokenId, address user) internal view {
+        _checkForValidAccountId(tokenId);
+        _requireTokenOwner(tokenId, user);
+    }
+
+    function _requireMintAllowanceResetAuthorized(uint256 tokenId, address caller) internal view {
+        if (caller == address(alchemistPositionNFT)) {
+            return;
+        }
+
+        address tokenOwner = IERC721(alchemistPositionNFT).ownerOf(tokenId);
+        if (caller != tokenOwner) {
+            revert Unauthorized();
+        }
     }
 
     function _earmarkAndSyncAccount(uint256 tokenId, bool enforceNoBadDebt) internal {
