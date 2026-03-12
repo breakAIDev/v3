@@ -106,6 +106,10 @@ contract MoonwellWETHStrategy is MYTStrategy {
         return idleUnderlying + (mTokenBalance * exchangeRate) / 1e18;
     }
 
+    function _idleAssets() internal view override returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(weth), address(this));
+    }
+
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
         uint256 sharesNoFee = (amount * 1e18) / _rate();
         uint256 sharesWithFee = _previewMTokensForUnderlying(amount, false);

@@ -84,9 +84,9 @@ abstract contract BaseStrategySimple is StrategyOps {
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(strategy).adapterId(), "adapter id not in strategyIds");
         uint256 finalRealAssets = IMYTStrategy(strategy).realAssets();
-        //assertEqApprox(TokenUtils.safeBalanceOf(testConfig.vaultAsset, address(strategy)), finalRealAssets);
-        assertApproxEqRel(TokenUtils.safeBalanceOf(testConfig.vaultAsset, address(strategy)), finalRealAssets, 1e16);
-        //require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        uint256 idleAssets = TokenUtils.safeBalanceOf(testConfig.vaultAsset, address(strategy));
+        assertGe(idleAssets, amountToDeallocate, "Strategy idle assets should cover deallocated amount");
+        assertGe(finalRealAssets, idleAssets, "Real assets should include idle assets");
         vm.stopPrank();
     }
 
