@@ -568,14 +568,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3Actions
     function liquidate(uint256 accountId) external override returns (uint256 yieldAmount, uint256 feeInYield, uint256 feeInUnderlying) {
         _checkForValidAccountId(accountId);
-        uint256 debtBefore = _accounts[accountId].debt;
-        (yieldAmount, feeInYield, feeInUnderlying) = _liquidate(accountId);
-        if (yieldAmount > 0 || feeInYield > 0 || feeInUnderlying > 0 || _accounts[accountId].debt < debtBefore) {
-            return (yieldAmount, feeInYield, feeInUnderlying);
-        } else {
-            // no liquidation amount returned, so no liquidation happened
-            revert LiquidationError();
-        }
+        bool progressed;
+        (yieldAmount, feeInYield, feeInUnderlying, progressed) = _executeLiquidation(accountId);
+        if (!progressed) revert LiquidationError();
+        return (yieldAmount, feeInYield, feeInUnderlying);
     }
 
     /// @inheritdoc IAlchemistV3Actions
@@ -593,16 +589,15 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             if (accountId == 0 || !_tokenExists(alchemistPositionNFT, accountId)) {
                 continue;
             }
-            uint256 debtBefore = _accounts[accountId].debt;
-            (uint256 underlyingAmount, uint256 feeInYield, uint256 feeInUnderlying) = _liquidate(accountId);
+            uint256 underlyingAmount;
+            uint256 feeInYield;
+            uint256 feeInUnderlying;
+            bool progressed;
+            (underlyingAmount, feeInYield, feeInUnderlying, progressed) = _executeLiquidation(accountId);
             totalAmountLiquidated += underlyingAmount;
             totalFeesInYield += feeInYield;
             totalFeesInUnderlying += feeInUnderlying;
-            if (
-                underlyingAmount > 0 || feeInYield > 0 || feeInUnderlying > 0 || _accounts[accountId].debt < debtBefore
-            ) {
-                anyProgress = true;
-            }
+            if (progressed) anyProgress = true;
         }
 
         if (anyProgress) {
@@ -694,9 +689,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function selfLiquidate(uint256 accountId, address recipient) public returns (uint256 amountLiquidated) {
-        _checkArgument(recipient != address(0));
+        _requireNonZeroAddress(recipient);
         _checkForValidAccountId(accountId);
-        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(accountId), msg.sender);
+        _requireTokenOwner(accountId, msg.sender);
         _poke(accountId);
         _checkState(_accounts[accountId].debt > 0);
         if (!_isAccountHealthy(accountId, false)) {
@@ -1287,6 +1282,27 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         account.lastAccruedEarmarkWeight = _earmarkWeight;
         account.lastAccruedRedemptionWeight = _redemptionWeight;
         account.lastSurvivalAccumulator = _survivalAccumulator;
+    }
+
+    function _executeLiquidation(uint256 accountId)
+        internal
+        returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying, bool progressed)
+    {
+        uint256 debtBefore = _accounts[accountId].debt;
+        (amountLiquidated, feeInYield, feeInUnderlying) = _liquidate(accountId);
+        progressed = _didLiquidationProgress(
+            debtBefore, _accounts[accountId].debt, amountLiquidated, feeInYield, feeInUnderlying
+        );
+    }
+
+    function _didLiquidationProgress(
+        uint256 debtBefore,
+        uint256 debtAfter,
+        uint256 amountLiquidated,
+        uint256 feeInYield,
+        uint256 feeInUnderlying
+    ) internal pure returns (bool) {
+        return amountLiquidated > 0 || feeInYield > 0 || feeInUnderlying > 0 || debtAfter < debtBefore;
     }
 
     /// @dev Set the mint allowance for `spender` to `amount` for the account owned by `tokenId`.
