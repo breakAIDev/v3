@@ -421,25 +421,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function deposit(uint256 amount, address recipient, uint256 tokenId) external returns (uint256) {
-        _requireNonZeroAddress(recipient);
-        _requirePositiveAmount(amount);
-        _requireDepositsEnabledAndSolvent();
-        _checkState(_mytSharesDeposited + amount <= depositCap);
-
-        // Only mint a new position if the id is 0
-        if (tokenId == 0) {
-            tokenId = IAlchemistV3Position(alchemistPositionNFT).mint(recipient);
-            emit AlchemistV3PositionNFTMinted(recipient, tokenId);
-        } else {
-            _checkForValidAccountId(tokenId);
-            _earmarkAndSyncAccount(tokenId, false);
-        }
-
-        _accounts[tokenId].collateralBalance += amount;
-
-        // Transfer tokens from msg.sender now that the internal storage updates have been committed.
-        TokenUtils.safeTransferFrom(myt, msg.sender, address(this), amount);
-        _mytSharesDeposited += amount;
+        _validateDepositRequest(amount, recipient);
+        tokenId = _resolveDepositAccount(tokenId, recipient);
+        _depositCollateral(tokenId, amount);
 
         emit Deposit(amount, tokenId);
 
@@ -448,26 +432,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function withdraw(uint256 amount, address recipient, uint256 tokenId) external returns (uint256) {
-        _requireNonZeroAddress(recipient);
-        _checkForValidAccountId(tokenId);
-        _requirePositiveAmount(amount);
-        _requireTokenOwner(tokenId, msg.sender);
-        _earmarkAndSyncAccount(tokenId, false);
-
-        if (_accounts[tokenId].collateralBalance > _mytSharesDeposited) {
-            _accounts[tokenId].collateralBalance = _mytSharesDeposited;
-        }
-
-        uint256 debtShares = convertDebtTokensToYield(_accounts[tokenId].debt);
-        uint256 lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
-        _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
-        uint256 transferred = _subCollateralBalance(amount, tokenId);
-
-        // Assure that the collateralization invariant is still held.
-        _validate(tokenId);
-
-        // Transfer the yield tokens to msg.sender
-        TokenUtils.safeTransfer(myt, recipient, transferred);
+        _validateWithdrawRequest(tokenId, amount, recipient);
+        uint256 transferred = _withdrawCollateral(tokenId, amount, recipient);
 
         emit Withdraw(transferred, tokenId, recipient);
 
@@ -1376,6 +1342,61 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _executeMintRequest(uint256 tokenId, uint256 amount, address recipient) internal {
         _earmarkAndSyncAccount(tokenId, true);
         _mint(tokenId, amount, recipient);
+    }
+
+    function _validateDepositRequest(uint256 amount, address recipient) internal view {
+        _requireNonZeroAddress(recipient);
+        _requirePositiveAmount(amount);
+        _requireDepositsEnabledAndSolvent();
+        _checkState(_mytSharesDeposited + amount <= depositCap);
+    }
+
+    function _resolveDepositAccount(uint256 tokenId, address recipient) internal returns (uint256) {
+        if (tokenId == 0) {
+            tokenId = IAlchemistV3Position(alchemistPositionNFT).mint(recipient);
+            emit AlchemistV3PositionNFTMinted(recipient, tokenId);
+            return tokenId;
+        }
+
+        _checkForValidAccountId(tokenId);
+        _earmarkAndSyncAccount(tokenId, false);
+        return tokenId;
+    }
+
+    function _depositCollateral(uint256 tokenId, uint256 amount) internal {
+        _accounts[tokenId].collateralBalance += amount;
+
+        // Transfer tokens from msg.sender now that the internal storage updates have been committed.
+        TokenUtils.safeTransferFrom(myt, msg.sender, address(this), amount);
+        _mytSharesDeposited += amount;
+    }
+
+    function _validateWithdrawRequest(uint256 tokenId, uint256 amount, address recipient) internal {
+        _requireNonZeroAddress(recipient);
+        _checkForValidAccountId(tokenId);
+        _requirePositiveAmount(amount);
+        _requireTokenOwner(tokenId, msg.sender);
+        _earmarkAndSyncAccount(tokenId, false);
+    }
+
+    function _withdrawCollateral(uint256 tokenId, uint256 amount, address recipient) internal returns (uint256 transferred) {
+        _reconcileCollateralBalance(tokenId);
+
+        uint256 debtShares = convertDebtTokensToYield(_accounts[tokenId].debt);
+        uint256 lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
+        _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
+        transferred = _subCollateralBalance(amount, tokenId);
+
+        // Assure that the collateralization invariant is still held.
+        _validate(tokenId);
+
+        TokenUtils.safeTransfer(myt, recipient, transferred);
+    }
+
+    function _reconcileCollateralBalance(uint256 tokenId) internal {
+        if (_accounts[tokenId].collateralBalance > _mytSharesDeposited) {
+            _accounts[tokenId].collateralBalance = _mytSharesDeposited;
+        }
     }
 
     /// @dev Checks an expression and reverts with an {IllegalArgument} error if the expression is {false}.
