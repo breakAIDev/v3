@@ -56,6 +56,7 @@ contract CrucibleTest is InvariantsTest {
     bool public lossAfterLastLiquidation; // tracks if a loss occurred after the most recent cascade
 
     uint256 internal constant MAX_TEST_VALUE = 1e28;
+    bytes4 internal constant ILLEGAL_STATE_SELECTOR = bytes4(keccak256("IllegalState()"));
 
     function setUp() public virtual override {
         // Position-building handlers
@@ -128,6 +129,26 @@ contract CrucibleTest is InvariantsTest {
         return a > b ? a : b;
     }
 
+    function _handleExpectedBadDebtRevert(bytes memory reason) internal {
+        bytes4 selector;
+        if (reason.length >= 4) {
+            assembly {
+                selector := mload(add(reason, 32))
+            }
+        }
+
+        // Handlers are allowed to no-op when deposit/mint are blocked by protocol bad debt.
+        if (_isBadDebt() && selector == ILLEGAL_STATE_SELECTOR) {
+            handlerSkips++;
+            return;
+        }
+
+        if (reason.length == 0) revert();
+        assembly {
+            revert(add(reason, 32), mload(reason))
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  BAD DEBT HELPERS
     // ═══════════════════════════════════════════════════════════════
@@ -137,14 +158,12 @@ contract CrucibleTest is InvariantsTest {
         if (totalSynthetics == 0) return false;
 
         address myt = alchemist.myt();
-        uint256 yieldTokenBalance = IERC20(myt).balanceOf(address(transmuterLogic));
+        uint256 transmuterShares = IERC20(myt).balanceOf(address(transmuterLogic));
         uint256 backingUnderlying = alchemist.getTotalLockedUnderlyingValue()
-            + alchemist.convertYieldTokensToUnderlying(yieldTokenBalance);
+            + alchemist.convertYieldTokensToUnderlying(transmuterShares);
+        uint256 backingDebt = alchemist.normalizeUnderlyingTokensToDebt(backingUnderlying);
 
-        if (backingUnderlying == 0) return true;
-
-        uint256 badDebtRatio = (totalSynthetics * 1e18) / backingUnderlying;
-        return badDebtRatio > 1e18;
+        return totalSynthetics > backingDebt;
     }
 
     function _checkBadDebtState() internal {
@@ -171,8 +190,12 @@ contract CrucibleTest is InvariantsTest {
         vm.startPrank(onBehalf);
         IERC20(mockVaultCollateral).approve(address(vault), underlyingNeeded);
         vault.mint(amount, onBehalf);
-        alchemist.deposit(amount, onBehalf, tokenId);
-        vm.stopPrank();
+        try alchemist.deposit(amount, onBehalf, tokenId) returns (uint256) {
+            vm.stopPrank();
+        } catch (bytes memory reason) {
+            vm.stopPrank();
+            _handleExpectedBadDebtRevert(reason);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -197,7 +220,11 @@ contract CrucibleTest is InvariantsTest {
         amount = bound(amount, 1, maxBorrow);
 
         vm.prank(onBehalf);
-        alchemist.mint(tokenId, amount, onBehalf);
+        try alchemist.mint(tokenId, amount, onBehalf) {
+            // no-op
+        } catch (bytes memory reason) {
+            _handleExpectedBadDebtRevert(reason);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -278,7 +305,12 @@ contract CrucibleTest is InvariantsTest {
 
             uint256 borrowAmt = bound(amount, 1, maxBorrow);
             vm.prank(minter);
-            alchemist.mint(tokenId, borrowAmt, minter);
+            try alchemist.mint(tokenId, borrowAmt, minter) {
+                // no-op
+            } catch (bytes memory reason) {
+                _handleExpectedBadDebtRevert(reason);
+                return;
+            }
 
             staker = minter;
             available = alToken.balanceOf(staker);
@@ -504,7 +536,12 @@ contract CrucibleTest is InvariantsTest {
 
                 uint256 borrowAmt = bound(stakeAmount, 1, maxBorrow);
                 vm.prank(minter);
-                alchemist.mint(tokenId, borrowAmt, minter);
+                try alchemist.mint(tokenId, borrowAmt, minter) {
+                    // no-op
+                } catch (bytes memory reason) {
+                    _handleExpectedBadDebtRevert(reason);
+                    return;
+                }
 
                 staker = minter;
                 available = alToken.balanceOf(staker);

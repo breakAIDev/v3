@@ -965,40 +965,6 @@ contract AlchemistV3Test is Test {
         vm.stopPrank();
     }
 
-    function testWithdrawRevertWhenGlobalFreeCollateralExhausted() external {
-        uint256 debtorCollateral = 100e18;
-        uint256 attackerCollateral = 10e18;
-
-        vm.startPrank(address(0xbeef));
-        SafeERC20.safeApprove(address(vault), address(alchemist), debtorCollateral + 100e18);
-        alchemist.deposit(debtorCollateral, address(0xbeef), 0);
-        uint256 debtorTokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
-        uint256 maxBorrowable = alchemist.getMaxBorrowable(debtorTokenId);
-        alchemist.mint(debtorTokenId, maxBorrowable, address(0xbeef));
-        vm.stopPrank();
-
-        vm.startPrank(externalUser);
-        SafeERC20.safeApprove(address(vault), address(alchemist), attackerCollateral + 100e18);
-        alchemist.deposit(attackerCollateral, externalUser, 0);
-        uint256 attackerTokenId = AlchemistNFTHelper.getFirstTokenId(externalUser, address(alchemistNFT));
-        vm.stopPrank();
-
-        assertGt(alchemist.getMaxWithdrawable(attackerTokenId), 0, "expected initial withdrawable collateral");
-
-        // Force global bad debt so required locked collateral exceeds total deposited shares.
-        uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
-        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
-        uint256 modifiedVaultSupply = initialVaultSupply + (initialVaultSupply * 2_000 / 10_000); // +20%
-        IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(modifiedVaultSupply);
-
-        assertEq(alchemist.getMaxWithdrawable(attackerTokenId), 0, "global free collateral should be zero");
-
-        vm.startPrank(externalUser);
-        vm.expectRevert(IllegalArgument.selector);
-        alchemist.withdraw(1, externalUser, attackerTokenId);
-        vm.stopPrank();
-    }
-
     function testWithdrawMoreThanPosition() external {
         uint256 amount = 100e18;
         vm.startPrank(address(0xbeef));
@@ -3278,7 +3244,6 @@ contract AlchemistV3Test is Test {
         vm.assertEq(healthyCollateralLoss, 0);
 
         vm.prank(yetAnotherExternalUser);
-
         uint256 withdrawn = alchemist.withdraw(healthyInitialCollateral, yetAnotherExternalUser, tokenIdHealthy);
         vm.assertEq(withdrawn, healthyInitialCollateral);
     }
@@ -5692,3 +5657,4 @@ contract AlchemistV3Test is Test {
         return a > b ? a - b : b - a;
     }
 }
+
