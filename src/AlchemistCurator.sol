@@ -20,13 +20,7 @@ contract AlchemistCurator is IAlchemistCurator, PermissionedProxy {
     mapping(address => address) public adapterToMYT;
 
     constructor(address _admin, address _operator) PermissionedProxy(_admin, _operator) {
-        // every onlyAdmin call is blacklisted from the proxy as morhpho does not
-        // differentiate between a curator operator and a curator admin
-        permissionedCalls[IVaultV2.increaseAbsoluteCap.selector] = true;
-        permissionedCalls[IVaultV2.decreaseAbsoluteCap.selector] = true;
-        permissionedCalls[IVaultV2.increaseRelativeCap.selector] = true;
-        permissionedCalls[IVaultV2.decreaseRelativeCap.selector] = true;
-        permissionedCalls[IVaultV2.setIsAllocator.selector] = true;
+        
     }
 
     function submitSetStrategy(address adapter, address myt) external onlyOperator {
