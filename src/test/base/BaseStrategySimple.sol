@@ -61,7 +61,12 @@ abstract contract BaseStrategySimple is StrategyOps {
                 IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         }
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
-        uint256 amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToAllocate);
+        uint256 targetDeallocate = _effectiveDeallocateAmount(amountToAllocate);
+        if (targetDeallocate == 0) {
+            vm.stopPrank();
+            return;
+        }
+        uint256 amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
         amountToDeallocate = bound(amountToDeallocate, 0, IMYTStrategy(strategy).realAssets());
         if (amountToDeallocate == 0) return; // we are not interested in deallocating from empty vaults
 
@@ -141,6 +146,10 @@ abstract contract BaseStrategySimple is StrategyOps {
         uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
 
         uint256 targetDeallocate = _effectiveDeallocateAmount(amountToAllocate);
+        if (targetDeallocate == 0) {
+            vm.stopPrank();
+            return;
+        }
         amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
         bool deallocated = _deallocateOrSkipWhitelisted(amountToDeallocate, RevertContext.FuzzDeallocate);
         if (!deallocated) {

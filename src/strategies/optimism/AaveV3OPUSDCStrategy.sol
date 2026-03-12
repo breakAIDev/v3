@@ -56,20 +56,23 @@ contract AaveV3OPUSDCStrategy is MYTStrategy {
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
         IAavePool pool = IAavePool(poolProvider.getPool());
-        uint256 usdcBalanceBefore = TokenUtils.safeBalanceOf(address(usdc), address(this));
-        // withdraw exact underlying amount back to this adapter
-        pool.withdraw(address(usdc), amount, address(this));
-        require(
-            TokenUtils.safeBalanceOf(address(usdc), address(this)) >= usdcBalanceBefore + amount,
-            "Strategy balance is less than the amount needed"
-        );
+        uint256 idleBalance = TokenUtils.safeBalanceOf(address(usdc), address(this));
+        if (idleBalance < amount) {
+            uint256 shortfall = amount - idleBalance;
+            uint256 usdcBalanceBefore = idleBalance;
+            pool.withdraw(address(usdc), shortfall, address(this));
+            require(
+                TokenUtils.safeBalanceOf(address(usdc), address(this)) >= usdcBalanceBefore + shortfall,
+                "Strategy balance is less than the amount needed"
+            );
+        }
         TokenUtils.safeApprove(address(usdc), msg.sender, amount);
         return amount;
     }
 
     function _totalValue() internal view override returns (uint256) {
         // aToken balance reflects principal + interest in underlying units
-        return aUSDC.balanceOf(address(this));
+        return aUSDC.balanceOf(address(this)) + TokenUtils.safeBalanceOf(address(usdc), address(this));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
