@@ -24,9 +24,9 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
         vault = IVaultV2(_vault);
         strategyClassifier = IStrategyClassifier(_classifier);
         // allocate(address adapter, bytes memory data, uint256 assets)
-        permissionedCalls[0x5c9ce04d] = true;
+        permissionedCalls[IVaultV2.allocate.selector] = true;
         // deallocate(address adapter, bytes memory data, uint256 assets)
-        permissionedCalls[0x4b219d16] = true;
+        permissionedCalls[IVaultV2.deallocate.selector] = true;
         // allocate and deallocate cannot be proxied in a straightforward
         // way directly to the vault as we implement additional cap/risk controls
         // below for these two functions. every other morpho vault call can be

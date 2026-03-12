@@ -22,11 +22,11 @@ contract AlchemistCurator is IAlchemistCurator, PermissionedProxy {
     constructor(address _admin, address _operator) PermissionedProxy(_admin, _operator) {
         // every onlyAdmin call is blacklisted from the proxy as morhpho does not
         // differentiate between a curator operator and a curator admin
-        permissionedCalls[0xf6f98fd5] = true; // increaseAbsoluteCap(bytes memory, uint256)
-        permissionedCalls[0x8c54519b] = true; // decreaseAbsoluteCap(bytes memory, uint256)
-        permissionedCalls[0x2438525b] = true; // increaseRelativeCap(bytes memory idData, uint256 newRelativeCap)
-        permissionedCalls[0x57975270] = true; // decreaseRelativeCap(bytes memory idData, uint256 newRelativeCap)
-        permissionedCalls[0xb192a84a] = true; // setIsAllocator(address account, bool newIsAllocator)
+        permissionedCalls[IVaultV2.increaseAbsoluteCap.selector] = true;
+        permissionedCalls[IVaultV2.decreaseAbsoluteCap.selector] = true;
+        permissionedCalls[IVaultV2.increaseRelativeCap.selector] = true;
+        permissionedCalls[IVaultV2.decreaseRelativeCap.selector] = true;
+        permissionedCalls[IVaultV2.setIsAllocator.selector] = true;
     }
 
     function submitSetStrategy(address adapter, address myt) external onlyOperator {
