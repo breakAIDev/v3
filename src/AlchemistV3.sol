@@ -491,17 +491,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function burn(uint256 amount, uint256 recipientId) external returns (uint256) {
-        _checkArgument(amount > 0);
-        _checkForValidAccountId(recipientId);
-        // Check that the user did not mint in this same block
-        // This is used to prevent flash loan repayments
-        if (block.number == _accounts[recipientId].lastMintBlock) revert CannotRepayOnMintBlock();
-
-        // Query transmuter and earmark global debt
-        _earmark();
-
-        // Sync current user debt before more is taken
-        _sync(recipientId);
+        _prepareDebtRepayment(recipientId, amount);
 
         uint256 debt;
         // Burning alAssets can only repay unearmarked debt
@@ -534,18 +524,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
     /// @inheritdoc IAlchemistV3Actions
     function repay(uint256 amount, uint256 recipientTokenId) public returns (uint256) {
-        _checkArgument(amount > 0);
-        _checkForValidAccountId(recipientTokenId);
+        _prepareDebtRepayment(recipientTokenId, amount);
         Account storage account = _accounts[recipientTokenId];
-        // Check that the user did not mint in this same block
-        // This is used to prevent flash loan repayments
-        if (block.number == account.lastMintBlock) revert CannotRepayOnMintBlock();
-
-        // Query transmuter and earmark global debt
-        _earmark();
-
-        // Sync current user debt before deciding how much is available to be repaid
-        _sync(recipientTokenId);
 
         uint256 debt;
 
@@ -1357,6 +1337,17 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             _checkState(!_isProtocolInBadDebt());
         }
         _sync(tokenId);
+    }
+
+    function _prepareDebtRepayment(uint256 tokenId, uint256 amount) internal {
+        _requirePositiveAmount(amount);
+        _checkForValidAccountId(tokenId);
+        _requireNotMintedThisBlock(tokenId);
+        _earmarkAndSyncAccount(tokenId, false);
+    }
+
+    function _requireNotMintedThisBlock(uint256 tokenId) internal view {
+        if (block.number == _accounts[tokenId].lastMintBlock) revert CannotRepayOnMintBlock();
     }
 
     function _validateMintRequest(uint256 tokenId, uint256 amount, address recipient) internal view {
