@@ -1491,24 +1491,67 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @dev Update the user's earmarked and redeemed debt amounts.
     function _sync(uint256 tokenId) internal {
         Account storage account = _accounts[tokenId];
-        (uint256 newDebt, uint256 newEarmarked, uint256 redeemedTotal) =
-            _computeUnrealizedAccount(account, _earmarkWeight, _redemptionWeight, _survivalAccumulator);
+        (uint256 newDebt, uint256 newEarmarked, uint256 collateralBalance,) = _computeCommittedAccountState(account);
 
-        // Calculate collateral to remove
-        uint256 globalDebtDelta = _totalRedeemedDebt - account.lastTotalRedeemedDebt;
-        if (globalDebtDelta != 0 && redeemedTotal != 0) {
-            uint256 globalSharesDelta = _totalRedeemedSharesOut - account.lastTotalRedeemedSharesOut;
-
-            // sharesToDebit = redeemedTotal * globalSharesDelta / globalDebtDelta
-            uint256 sharesToDebit = FixedPointMath.mulDivUp(redeemedTotal, globalSharesDelta, globalDebtDelta);
-
-            if (sharesToDebit > account.collateralBalance) sharesToDebit = account.collateralBalance;
-            account.collateralBalance -= sharesToDebit;
-        }
-
+        account.collateralBalance = collateralBalance;
         account.earmarked = newEarmarked;
         account.debt = newDebt;
         _checkpointAccountState(account);
+    }
+
+    /// @dev Computes account state against committed globals only.
+    /// @return newDebt The debt after applying committed earmark + redemption.
+    /// @return newEarmarked The earmarked portion after applying committed globals.
+    /// @return collateralBalance The collateral after realized redemption debits.
+    /// @return redeemedDebt The debt redeemed from committed global state.
+    function _computeCommittedAccountState(Account storage account)
+        internal
+        view
+        returns (uint256 newDebt, uint256 newEarmarked, uint256 collateralBalance, uint256 redeemedDebt)
+    {
+        (newDebt, newEarmarked, redeemedDebt) =
+            _computeUnrealizedAccount(account, _earmarkWeight, _redemptionWeight, _survivalAccumulator);
+        collateralBalance = _applyRedeemedCollateralDelta(account, account.collateralBalance, redeemedDebt);
+    }
+
+    /// @dev Applies realized collateral debits from redemptions and protocol fees.
+    function _applyRedeemedCollateralDelta(
+        Account storage account,
+        uint256 collateralBalance,
+        uint256 redeemedDebt
+    ) internal view returns (uint256) {
+        uint256 globalDebtDelta = _totalRedeemedDebt - account.lastTotalRedeemedDebt;
+        if (globalDebtDelta == 0 || redeemedDebt == 0) {
+            return collateralBalance;
+        }
+
+        uint256 globalSharesDelta = _totalRedeemedSharesOut - account.lastTotalRedeemedSharesOut;
+        uint256 sharesToDebit = FixedPointMath.mulDivUp(redeemedDebt, globalSharesDelta, globalDebtDelta);
+        if (sharesToDebit > collateralBalance) sharesToDebit = collateralBalance;
+        return collateralBalance - sharesToDebit;
+    }
+
+    /// @dev Applies one simulated, uncommitted earmark window on top of committed account state.
+    function _applyProspectiveEarmark(
+        uint256 debt,
+        uint256 earmarked,
+        uint256 committedEarmarkWeight,
+        uint256 simulatedEarmarkWeight
+    ) internal pure returns (uint256) {
+        if (simulatedEarmarkWeight == committedEarmarkWeight) {
+            return earmarked;
+        }
+
+        uint256 exposure = debt > earmarked ? debt - earmarked : 0;
+        if (exposure == 0) {
+            return earmarked;
+        }
+
+        uint256 unearmarkedRatio = _earmarkSurvivalRatio(committedEarmarkWeight, simulatedEarmarkWeight);
+        uint256 unearmarkedRemaining = FixedPointMath.mulQ128(exposure, unearmarkedRatio);
+        uint256 newlyEarmarked = exposure - unearmarkedRemaining;
+        earmarked += newlyEarmarked;
+        return earmarked > debt ? debt : earmarked;
     }
 
     /// @dev Computes the account debt/earmark state at a given global weight snapshot.
@@ -1685,32 +1728,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         (uint256 earmarkWeightCopy,) = _simulateUnrealizedEarmark();
 
         // First, compute account state against committed globals only.
-        (uint256 newDebt, uint256 newEarmarked, uint256 redeemedTotalSim) =
-            _computeUnrealizedAccount(account, _earmarkWeight, _redemptionWeight, _survivalAccumulator);
+        (uint256 newDebt, uint256 newEarmarked, uint256 collateralBalanceCopy,) = _computeCommittedAccountState(account);
 
-        // Then, apply the simulated earmark-only delta.
-        // Important: this prospective earmark happens "now", so historical redemptions must not
-        // reduce debt again through this simulated step.
-        if (earmarkWeightCopy != _earmarkWeight) {
-            uint256 exposure = newDebt > newEarmarked ? newDebt - newEarmarked : 0;
-            if (exposure != 0) {
-                uint256 unearmarkedRatio = _earmarkSurvivalRatio(_earmarkWeight, earmarkWeightCopy);
-                uint256 unearmarkedRemaining = FixedPointMath.mulQ128(exposure, unearmarkedRatio);
-                uint256 newlyEarmarked = exposure - unearmarkedRemaining;
-                newEarmarked += newlyEarmarked;
-                if (newEarmarked > newDebt) newEarmarked = newDebt;
-            }
-        }
-
-        // Calculate collateral to remove from fees and redemptions
-        uint256 collateralBalanceCopy = account.collateralBalance;
-        uint256 globalDebtDelta = _totalRedeemedDebt - account.lastTotalRedeemedDebt;
-        if (globalDebtDelta != 0 && redeemedTotalSim != 0) {
-            uint256 globalSharesDelta = _totalRedeemedSharesOut - account.lastTotalRedeemedSharesOut;
-            uint256 sharesToDebit = FixedPointMath.mulDivUp(redeemedTotalSim, globalSharesDelta, globalDebtDelta);
-            if (sharesToDebit > collateralBalanceCopy) sharesToDebit = collateralBalanceCopy;
-            collateralBalanceCopy -= sharesToDebit;
-        }
+        // Then, apply the simulated earmark-only delta. Historical redemptions are already accounted for.
+        newEarmarked = _applyProspectiveEarmark(newDebt, newEarmarked, _earmarkWeight, earmarkWeightCopy);
 
         return (newDebt, newEarmarked, collateralBalanceCopy);
     }
