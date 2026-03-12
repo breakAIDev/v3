@@ -11,8 +11,8 @@ interface IERC4626MaxWithdraw {
 }
 
 contract MockEulerWETHStrategy is EulerWETHStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _weth, address _eulerVault)
-        EulerWETHStrategy(_myt, _params, _weth, _eulerVault)
+    constructor(address _myt, StrategyParams memory _params, address _eulerVault)
+        EulerWETHStrategy(_myt, _params, _eulerVault)
     {}
 }
 
@@ -45,7 +45,7 @@ contract EulerWETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockEulerWETHStrategy(vault, params, WETH, EULER_WETH_VAULT));
+        return address(new MockEulerWETHStrategy(vault, params, EULER_WETH_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

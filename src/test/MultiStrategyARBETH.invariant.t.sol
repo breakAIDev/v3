@@ -540,7 +540,6 @@ contract MultiStrategyARBETHInvariantTest is Test {
         return address(new EulerARBWETHStrategy(
             address(vault),
             params,
-            WETH,
             EULER_WETH_VAULT_ARB
         ));
     }

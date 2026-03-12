@@ -530,7 +530,6 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
         return address(new EulerARBUSDCStrategy(
             address(vault),
             params,
-            USDC,
             EULER_USDC_VAULT_ARB
         ));
     }
@@ -551,7 +550,6 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
         return address(new FluidARBUSDCStrategy(
             address(vault),
             params,
-            USDC,
             FLUID_USDC_VAULT_ARB
         ));
     }

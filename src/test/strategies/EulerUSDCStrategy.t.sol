@@ -11,8 +11,8 @@ interface IERC4626MaxWithdraw {
 }
 
 contract MockEulerUSDCStrategy is EulerUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _vault, address _usdc)
-        EulerUSDCStrategy(_myt, _params, _vault, _usdc)
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        EulerUSDCStrategy(_myt, _params, _vault)
     {}
 }
 
@@ -45,7 +45,7 @@ contract EulerUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockEulerUSDCStrategy(vault, params, USDC, EULER_USDC_VAULT));
+        return address(new MockEulerUSDCStrategy(vault, params, EULER_USDC_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

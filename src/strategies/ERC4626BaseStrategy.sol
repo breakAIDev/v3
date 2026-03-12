@@ -7,20 +7,20 @@ import {MYTStrategy} from "../MYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 
 abstract contract ERC4626BaseStrategy is MYTStrategy {
-    IERC20 public immutable assetToken;
+    IERC20 public immutable mytAsset;
     IERC4626 public immutable vault;
 
-    constructor(address _myt, StrategyParams memory _params, address _asset, address _vault)
+    constructor(address _myt, StrategyParams memory _params, address _vault)
         MYTStrategy(_myt, _params)
     {
-        assetToken = IERC20(_asset);
+        mytAsset = IERC20(MYT.asset());
         vault = IERC4626(_vault);
-        require(vault.asset() == _asset, "Vault asset != strategy asset");
+        require(vault.asset() == MYT.asset(), "Vault asset != MYT asset");
     }
 
     function _allocate(uint256 amount) internal virtual override returns (uint256) {
-        require(TokenUtils.safeBalanceOf(address(assetToken), address(this)) >= amount, "Strategy balance is less than amount");
-        TokenUtils.safeApprove(address(assetToken), address(vault), amount);
+        require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Strategy balance is less than amount");
+        TokenUtils.safeApprove(address(mytAsset), address(vault), amount);
         uint256 shares = vault.deposit(amount, address(this));
         return amount;
     }
@@ -34,11 +34,11 @@ abstract contract ERC4626BaseStrategy is MYTStrategy {
         }
 
         require(
-            TokenUtils.safeBalanceOf(address(assetToken), address(this)) >= amount,
+            TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount,
             "Strategy balance is less than the amount needed"
         );
 
-        TokenUtils.safeApprove(address(assetToken), msg.sender, amount);
+        TokenUtils.safeApprove(address(mytAsset), msg.sender, amount);
         return amount;
     }
 
@@ -47,7 +47,7 @@ abstract contract ERC4626BaseStrategy is MYTStrategy {
     }
 
     function _idleAssets() internal view virtual override returns (uint256) {
-        return TokenUtils.safeBalanceOf(address(assetToken), address(this));
+        return TokenUtils.safeBalanceOf(address(mytAsset), address(this));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view virtual override returns (uint256) {

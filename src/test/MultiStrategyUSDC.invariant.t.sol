@@ -613,7 +613,7 @@ contract MultiStrategyUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new EulerUSDCStrategy(address(vault), params, USDC, EULER_USDC_VAULT));
+        return address(new EulerUSDCStrategy(address(vault), params, EULER_USDC_VAULT));
     }
     
     function _deployPeapodsStrategy() internal returns (address) {
@@ -629,7 +629,7 @@ contract MultiStrategyUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new PeapodsUSDCStrategy(address(vault), params, PEAPODS_USDC_VAULT, USDC));
+        return address(new PeapodsUSDCStrategy(address(vault), params, PEAPODS_USDC_VAULT));
     }
     
     function _deployTokeStrategy() internal returns (address) {

@@ -7,11 +7,7 @@ import {ERC4626BaseStrategy} from "../ERC4626BaseStrategy.sol";
  * @notice This strategy is used to allocate and deallocate usdc to the Euler USDC vault on Mainnet
  */
 contract EulerUSDCStrategy is ERC4626BaseStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _usdc, address _eulerVault)
-        ERC4626BaseStrategy(_myt, _params, _usdc, _eulerVault)
+    constructor(address _myt, StrategyParams memory _params, address _eulerVault)
+        ERC4626BaseStrategy(_myt, _params, _eulerVault)
     {}
-
-    function usdc() external view returns (address) {
-        return address(assetToken);
-    }
 }

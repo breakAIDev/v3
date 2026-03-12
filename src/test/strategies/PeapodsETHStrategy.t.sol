@@ -11,8 +11,8 @@ interface IERC4626MaxWithdraw {
 }
 
 contract MockPeapodsETHStrategy is PeapodsETHStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _vault, address _weth)
-        PeapodsETHStrategy(_myt, _params, _vault, _weth)
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        PeapodsETHStrategy(_myt, _params, _vault)
     {}
 }
 
@@ -42,7 +42,7 @@ contract PeapodsETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockPeapodsETHStrategy(vault, params, PEAPODS_ETH_VAULT, WETH));
+        return address(new MockPeapodsETHStrategy(vault, params, PEAPODS_ETH_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

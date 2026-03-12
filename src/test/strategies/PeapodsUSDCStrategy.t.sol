@@ -7,8 +7,8 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 contract MockPeapodsUSDCStrategy is PeapodsUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _vault, address _usdc)
-        PeapodsUSDCStrategy(_myt, _params, _vault, _usdc)
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        PeapodsUSDCStrategy(_myt, _params, _vault)
     {}
 }
 
@@ -35,7 +35,7 @@ contract PeapodsUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockPeapodsUSDCStrategy(vault, params, PEAPODS_USDC_VAULT, USDC));
+        return address(new MockPeapodsUSDCStrategy(vault, params, PEAPODS_USDC_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

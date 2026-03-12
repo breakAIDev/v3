@@ -7,8 +7,8 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 contract MockFluidARBUSDCStrategy is FluidARBUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _usdc, address _vault)
-        FluidARBUSDCStrategy(_myt, _params, _usdc, _vault)
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        FluidARBUSDCStrategy(_myt, _params, _vault)
     {}
 }
 
@@ -40,7 +40,7 @@ contract FluidARBUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockFluidARBUSDCStrategy(vault, params, USDC, FLUID_USDC_VAULT));
+        return address(new MockFluidARBUSDCStrategy(vault, params, FLUID_USDC_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

@@ -644,7 +644,7 @@ contract MultiStrategyETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new EulerWETHStrategy(address(vault), params, WETH, EULER_WETH_VAULT));
+        return address(new EulerWETHStrategy(address(vault), params, EULER_WETH_VAULT));
     }
     
     function _deployPeapodsStrategy() internal returns (address) {
@@ -660,7 +660,7 @@ contract MultiStrategyETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new PeapodsETHStrategy(address(vault), params, PEAPODS_ETH_VAULT, WETH));
+        return address(new PeapodsETHStrategy(address(vault), params, PEAPODS_ETH_VAULT));
     }
     
     function _deployTokeStrategy() internal returns (address) {

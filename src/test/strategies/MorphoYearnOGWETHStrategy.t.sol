@@ -7,8 +7,8 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 contract MockMorphoYearnOGWETHStrategy is MorphoYearnOGWETHStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _vault, address _weth)
-        MorphoYearnOGWETHStrategy(_myt, _params, _vault, _weth)
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        MorphoYearnOGWETHStrategy(_myt, _params, _vault)
     {}
 }
 
@@ -54,7 +54,7 @@ contract MorphoYearnOGWETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockMorphoYearnOGWETHStrategy(vault, params, MORPHO_YEARN_OG_VAULT, WETH));
+        return address(new MockMorphoYearnOGWETHStrategy(vault, params, MORPHO_YEARN_OG_VAULT));
     }
 
     function test_strategy_deallocate_reverts_due_to_slippage(uint256 amountToAllocate, uint256 amountToDeallocate) public {
