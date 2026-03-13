@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {AaveV3OPUSDCStrategy} from "../../strategies/optimism/AaveV3OPUSDCStrategy.sol";
+import {AaveStrategy} from "../../strategies/AaveStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
@@ -51,12 +51,6 @@ contract MockSwapExecutor {
     }
 }
 
-contract MockAaveV3OPUSDCStrategy is AaveV3OPUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _usdc, address _mUSDC, address _pool)
-        AaveV3OPUSDCStrategy(_myt, _params, _usdc, _mUSDC, _pool)
-    {}
-}
-
 contract AaveV3OPUSDCStrategyTest is BaseStrategyTest {
     address public constant AAVE_V3_USDC_ATOKEN = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5;
     address public constant AAVE_V3_USDC_POOL = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb; // pool provider to query
@@ -86,7 +80,7 @@ contract AaveV3OPUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockAaveV3OPUSDCStrategy(vault, params, USDC, AAVE_V3_USDC_ATOKEN, AAVE_V3_USDC_POOL));
+        return address(new AaveStrategy(vault, params, USDC, AAVE_V3_USDC_ATOKEN, AAVE_V3_USDC_POOL, REWARDS_CONTROLLER, OP));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

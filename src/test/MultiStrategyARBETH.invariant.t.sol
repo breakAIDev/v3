@@ -11,7 +11,7 @@ import {AlchemistCurator} from "../AlchemistCurator.sol";
 import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
-import {AaveV3ARBWETHStrategy} from "../strategies/arbitrum/AaveV3ARBWETHStrategy.sol";
+import {AaveStrategy} from "../strategies/AaveStrategy.sol";
 import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
 
 /// @title MultiStrategyARBETHHandler
@@ -430,6 +430,8 @@ contract MultiStrategyARBETHInvariantTest is Test {
     address public constant WETH = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
     address public constant AAVE_POOL_ARB = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
     address public constant AWETH_ARB = 0xe50fA9b3c56FfB159cB0FCA61F5c9D750e8128c8;
+    address public constant AAVE_REWARDS_CONTROLLER = 0x929EC64c34a17401F460460D4B9390518E5B473e;
+    address public constant ARB = 0x912CE59144191C1204E64559FE8253a0e49E6548;
     address public constant EULER_WETH_VAULT_ARB = 0x78E3E051D32157AACD550fBB78458762d8f7edFF;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000 ether;
@@ -515,12 +517,14 @@ contract MultiStrategyARBETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new AaveV3ARBWETHStrategy(
+        return address(new AaveStrategy(
             address(vault),
             params,
-            AWETH_ARB,
             WETH,
-            AAVE_POOL_ARB
+            AWETH_ARB,
+            AAVE_POOL_ARB,
+            AAVE_REWARDS_CONTROLLER,
+            ARB
         ));
     }
     
