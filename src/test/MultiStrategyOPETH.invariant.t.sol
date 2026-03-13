@@ -11,7 +11,7 @@ import {AlchemistCurator} from "../AlchemistCurator.sol";
 import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
-import {MoonwellWETHStrategy} from "../strategies/optimism/MoonwellWETHStrategy.sol";
+import {MoonwellStrategy} from "../strategies/MoonwellStrategy.sol";
 
 /// @title MultiStrategyOPETHHandler
 /// @notice Handler for invariant testing ETH strategies on Optimism
@@ -403,6 +403,8 @@ contract MultiStrategyOPETHInvariantTest is Test {
     // Optimism addresses
     address public constant WETH = 0x4200000000000000000000000000000000000006;
     address public constant MOONWELL_MWETH = 0xb4104C02BBf4E9be85AAa41a62974E4e28D59A33;
+    address public constant MOONWELL_COMPTROLLER = 0xCa889f40aae37FFf165BccF69aeF1E82b5C511B9;
+    address public constant WELL = 0xA88594D404727625A9437C3f886C7643872296AE;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000 ether;
     uint256 public constant ABSOLUTE_CAP = 50_000 ether;
@@ -483,11 +485,14 @@ contract MultiStrategyOPETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new MoonwellWETHStrategy(
+        return address(new MoonwellStrategy(
             address(vault),
             params,
+            WETH,
             MOONWELL_MWETH,
-            WETH
+            MOONWELL_COMPTROLLER,
+            WELL,
+            true
         ));
     }
     

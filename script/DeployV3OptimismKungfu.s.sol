@@ -20,8 +20,7 @@ import {AlchemistV3Position} from "../src/AlchemistV3Position.sol";
 
 // Optimism Strategy Imports
 import {AaveStrategy} from "../src/strategies/AaveStrategy.sol";
-import {MoonwellUSDCStrategy} from "../src/strategies/optimism/MoonwellUSDCStrategy.sol";
-import {MoonwellWETHStrategy} from "../src/strategies/optimism/MoonwellWETHStrategy.sol";
+import {MoonwellStrategy} from "../src/strategies/MoonwellStrategy.sol";
 
 // AlAsset
 //import {CrossChainCanonicalAlchemicTokenV2} from "../lib/v2-foundry/src/CrossChainCanonicalAlchemicTokenV2.sol";
@@ -79,6 +78,8 @@ contract DeployV3OptimismKungfuScript is Script {
     address public usdtOP = 0x94b008aA00579c1307B0EF2c499aD98a8ce58e58;
     address public moonwellMUSDC = 0x8E08617b0d66359D73Aa11E11017834C29155525;
     address public moonwellMWETH = 0xb4104C02BBf4E9be85AAa41a62974E4e28D59A33;
+    address public moonwellComptroller = 0xCa889f40aae37FFf165BccF69aeF1E82b5C511B9;
+    address public wellToken = 0xA88594D404727625A9437C3f886C7643872296AE;
     address public aaveRewardsController = 0x929EC64c34a17401F460460D4B9390518E5B473e;
     address public opToken = 0x4200000000000000000000000000000000000042;
     address public wstETHOP = 0x1F32b1c2345538c0c6f582fCB022739c4A194Ebb;
@@ -184,13 +185,16 @@ contract DeployV3OptimismKungfuScript is Script {
     }
 
 
-    function deployMoonwellUSDCStrategy(address myt) internal returns (MoonwellUSDCStrategy) {
+    function deployMoonwellUSDCStrategy(address myt) internal returns (MoonwellStrategy) {
         // Create the strategy
-        MoonwellUSDCStrategy moonwellUSDCStrategy = new MoonwellUSDCStrategy(
+        MoonwellStrategy moonwellUSDCStrategy = new MoonwellStrategy(
             myt,
             moonwellUSDCParams,
+            USDC,
             moonwellMUSDC,
-            USDC
+            moonwellComptroller,
+            wellToken,
+            false
         );
     
         // Register strategy with curator
@@ -211,13 +215,16 @@ contract DeployV3OptimismKungfuScript is Script {
         return moonwellUSDCStrategy;
     }
 
-    function deployMoonwellWETHStrategy(address myt) internal returns (MoonwellWETHStrategy) {
+    function deployMoonwellWETHStrategy(address myt) internal returns (MoonwellStrategy) {
         // Create the strategy
-        MoonwellWETHStrategy moonwellWETHStrategy = new MoonwellWETHStrategy(
+        MoonwellStrategy moonwellWETHStrategy = new MoonwellStrategy(
             myt,
             moonwellWETHParams,
+            wethOP,
             moonwellMWETH,
-            wethOP
+            moonwellComptroller,
+            wellToken,
+            true
         );
     
         // Register strategy with curator
@@ -241,7 +248,7 @@ contract DeployV3OptimismKungfuScript is Script {
     function deployUSDCStrategies(address myt) public {
         // Deploy Optimism USDC Strategies
         AaveStrategy aaveUSDCStrategy = deployAaveV3OPUSDCStrategy(myt);
-        MoonwellUSDCStrategy moonwellUSDCStrategy = deployMoonwellUSDCStrategy(myt);
+        MoonwellStrategy moonwellUSDCStrategy = deployMoonwellUSDCStrategy(myt);
 
         console.log("AaveV3 OP USDC Strategy deployed at:", address(aaveUSDCStrategy));
         //console.log("Velodrome OP USDC/USDT LP Strategy deployed at:", address(velodromeUSDCStrategy));
@@ -250,7 +257,7 @@ contract DeployV3OptimismKungfuScript is Script {
 
     function deployETHStrategies(address myt) public {
         // Deploy Optimism USDC Strategies
-        MoonwellWETHStrategy moonwellWETHStrategy = deployMoonwellWETHStrategy(myt);
+        MoonwellStrategy moonwellWETHStrategy = deployMoonwellWETHStrategy(myt);
         console.log("Moonwell OP WETH Strategy deployed at:", address(moonwellWETHStrategy));
     }
 
