@@ -5,9 +5,8 @@ import "./interfaces/IAlchemistV3.sol";
 import {ITransmuter} from "./interfaces/ITransmuter.sol";
 import {IAlchemistV3Position} from "./interfaces/IAlchemistV3Position.sol";
 import {IFeeVault} from "./interfaces/IFeeVault.sol";
-import {AlchemistV3Storage} from "./modules/AlchemistV3Storage.sol";
+import {AlchemistV3BaseModule} from "./modules/AlchemistV3BaseModule.sol";
 import {TokenUtils} from "./libraries/TokenUtils.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {Unauthorized, IllegalArgument, IllegalState, MissingInputData} from "./base/Errors.sol";
 import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IVaultV2} from "../lib/vault-v2/src/interfaces/IVaultV2.sol";
@@ -17,7 +16,7 @@ import {FixedPointMath} from "./libraries/FixedPointMath.sol";
 /// @author Alchemix Finance
 ///
 /// For Juris, Graham, and Marcus
-contract AlchemistV3 is AlchemistV3Storage {
+contract AlchemistV3 is AlchemistV3BaseModule {
     function initialize(AlchemistInitializationParams memory params) external initializer {
         _checkArgument(params.protocolFee <= BPS);
         _checkArgument(params.liquidatorFee <= BPS);
@@ -685,51 +684,6 @@ contract AlchemistV3 is AlchemistV3Storage {
         return creditToYield;
     }
 
-    /// @dev Subtracts the earmarked debt by `amount` for the account owned by `accountId`.
-    /// @param amountInDebtTokens The amount of debt tokens to subtract from the earmarked debt.
-    /// @param accountId The tokenId of the account to subtract the earmarked debt from.
-    /// @return The amount of debt tokens subtracted from the earmarked debt.
-    function _subEarmarkedDebt(uint256 amountInDebtTokens, uint256 accountId) internal returns (uint256) {
-        Account storage account = _accounts[accountId];
-
-        uint256 debt = account.debt;
-        uint256 earmarkedDebt = account.earmarked;
-
-        uint256 credit = amountInDebtTokens > debt ? debt : amountInDebtTokens;
-        uint256 earmarkToRemove = credit > earmarkedDebt ? earmarkedDebt : credit;
-
-        // Always reduce local earmark by the full local repay amount.
-        account.earmarked = earmarkedDebt - earmarkToRemove;
-
-        // Global can lag local by rounding; clamp only the global subtraction.
-        uint256 remove = earmarkToRemove > cumulativeEarmarked ? cumulativeEarmarked : earmarkToRemove;
-        cumulativeEarmarked -= remove;
-
-        return earmarkToRemove;
-    }
-
-
-    /// @dev Subtracts the collateral balance by `amount` for the account owned by `accountId`.
-    /// @param amountInYieldTokens The amount of yield tokens to subtract from the collateral balance.
-    /// @param accountId The tokenId of the account to subtract the collateral balance from.
-    /// @return The amount of yield tokens subtracted from the collateral balance.
-    function _subCollateralBalance(uint256 amountInYieldTokens, uint256 accountId) internal returns (uint256) {
-        Account storage account = _accounts[accountId];
-        uint256 collateralBalance = account.collateralBalance;
-
-        // Reconcile local collateral against global tracked shares before subtraction.
-        // This prevents underflow if rounding/drift made local storage exceed global storage.
-        if (collateralBalance > _mytSharesDeposited) {
-            collateralBalance = _mytSharesDeposited;
-            account.collateralBalance = collateralBalance;
-        }
-
-        uint256 amountToRemove = amountInYieldTokens > collateralBalance ? collateralBalance : amountInYieldTokens;
-        account.collateralBalance = collateralBalance - amountToRemove;
-        _mytSharesDeposited -= amountToRemove;
-        return amountToRemove;
-    }
-
     /// @dev Fetches and applies the liquidation amount to account `tokenId` if the account collateral ratio touches `collateralizationLowerBound`.
     /// @dev Repays earmarked debt if it exists
     /// @dev If earmarked repayment restores account to healthy collateralization, no liquidation is performed. Caller receives a repayment fee.
@@ -985,47 +939,6 @@ contract AlchemistV3 is AlchemistV3Storage {
         totalDebt += amount;
     }
 
-    /// @dev Subtracts the debt by `amount` for the account owned by `tokenId`.
-    ///
-    /// @param tokenId   The account owned by tokenId.
-    /// @param amount  The amount to decrease the debt by.
-    function _subDebt(uint256 tokenId, uint256 amount) internal {
-        Account storage account = _accounts[tokenId];
-
-        account.debt -= amount;
-        totalDebt -= amount;
-
-        if (account.debt == 0) {
-            account.earmarked = 0;
-            _checkpointAccountState(account);
-        }
-
-        if (cumulativeEarmarked > totalDebt) {
-            cumulativeEarmarked = totalDebt;
-        }
-    }
-
-    /// @dev Caps a debt-denominated credit against account debt and global debt.
-    function _capDebtCredit(uint256 requested, uint256 accountDebt) internal view returns (uint256) {
-        uint256 credit = requested > accountDebt ? accountDebt : requested;
-        if (credit > totalDebt) credit = totalDebt;
-        return credit;
-    }
-
-    /// @dev Returns debt that can be safely cleared against global debt accounting.
-    function _clearableDebt(uint256 accountDebt) internal view returns (uint256) {
-        return accountDebt > totalDebt ? totalDebt : accountDebt;
-    }
-
-    /// @dev Snapshots an account against the current global accounting state.
-    function _checkpointAccountState(Account storage account) internal {
-        account.lastTotalRedeemedDebt = _totalRedeemedDebt;
-        account.lastTotalRedeemedSharesOut = _totalRedeemedSharesOut;
-        account.lastAccruedEarmarkWeight = _earmarkWeight;
-        account.lastAccruedRedemptionWeight = _redemptionWeight;
-        account.lastSurvivalAccumulator = _survivalAccumulator;
-    }
-
     function _executeLiquidation(uint256 accountId)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying, bool progressed)
@@ -1047,69 +960,6 @@ contract AlchemistV3 is AlchemistV3Storage {
         return amountLiquidated > 0 || feeInYield > 0 || feeInUnderlying > 0 || debtAfter < debtBefore;
     }
 
-    /// @dev Set the mint allowance for `spender` to `amount` for the account owned by `tokenId`.
-    ///
-    /// @param ownerTokenId   The id of the account granting approval.
-    /// @param spender The address of the spender.
-    /// @param amount  The amount of debt tokens to set the mint allowance to.
-    function _approveMint(uint256 ownerTokenId, address spender, uint256 amount) internal {
-        Account storage account = _accounts[ownerTokenId];
-        account.mintAllowances[account.allowancesVersion][spender] = amount;
-        emit ApproveMint(ownerTokenId, spender, amount);
-    }
-
-    function _resetMintAllowances(uint256 tokenId) internal {
-        _accounts[tokenId].allowancesVersion += 1;
-        emit MintAllowancesReset(tokenId);
-    }
-
-    /// @dev Decrease the mint allowance for `spender` by `amount` for the account owned by `ownerTokenId`.
-    ///
-    /// @param ownerTokenId The id of the account owner.
-    /// @param spender The address of the spender.
-    /// @param amount  The amount of debt tokens to decrease the mint allowance by.
-    function _decreaseMintAllowance(uint256 ownerTokenId, address spender, uint256 amount) internal {
-        Account storage account = _accounts[ownerTokenId];
-        account.mintAllowances[account.allowancesVersion][spender] -= amount;
-    }
-
-    function _requireNonZeroAddress(address account) internal pure {
-        _checkArgument(account != address(0));
-    }
-
-    function _requirePositiveAmount(uint256 amount) internal pure {
-        _checkArgument(amount > 0);
-    }
-
-    function _requireDepositsEnabledAndSolvent() internal view {
-        _checkState(!depositsPaused);
-        _checkState(!_isProtocolInBadDebt());
-    }
-
-    function _requireLoansEnabled() internal view {
-        _checkState(!loansPaused);
-    }
-
-    function _requireTokenOwner(uint256 tokenId, address user) internal view {
-        _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), user);
-    }
-
-    function _requireOwnedAccount(uint256 tokenId, address user) internal view {
-        _checkForValidAccountId(tokenId);
-        _requireTokenOwner(tokenId, user);
-    }
-
-    function _requireMintAllowanceResetAuthorized(uint256 tokenId, address caller) internal view {
-        if (caller == address(alchemistPositionNFT)) {
-            return;
-        }
-
-        address tokenOwner = IERC721(alchemistPositionNFT).ownerOf(tokenId);
-        if (caller != tokenOwner) {
-            revert Unauthorized();
-        }
-    }
-
     function _earmarkAndSyncAccount(uint256 tokenId, bool enforceNoBadDebt) internal {
         _earmark();
         if (enforceNoBadDebt) {
@@ -1123,10 +973,6 @@ contract AlchemistV3 is AlchemistV3Storage {
         _checkForValidAccountId(tokenId);
         _requireNotMintedThisBlock(tokenId);
         _earmarkAndSyncAccount(tokenId, false);
-    }
-
-    function _requireNotMintedThisBlock(uint256 tokenId) internal view {
-        if (block.number == _accounts[tokenId].lastMintBlock) revert CannotRepayOnMintBlock();
     }
 
     function _validateMintRequest(uint256 tokenId, uint256 amount, address recipient) internal view {
@@ -1194,71 +1040,6 @@ contract AlchemistV3 is AlchemistV3Storage {
         if (_accounts[tokenId].collateralBalance > _mytSharesDeposited) {
             _accounts[tokenId].collateralBalance = _mytSharesDeposited;
         }
-    }
-
-    /// @dev Checks an expression and reverts with an {IllegalArgument} error if the expression is {false}.
-    ///
-    /// @param expression The expression to check.
-    function _checkArgument(bool expression) internal pure {
-        if (!expression) {
-            revert IllegalArgument();
-        }
-    }
-
-    /// @dev Checks if owner == sender and reverts with an {UnauthorizedAccountAccessError} error if the result is {false}.
-    ///
-    /// @param owner The address of the owner of an account.
-    /// @param user The address of the user attempting to access an account.
-    function _checkAccountOwnership(address owner, address user) internal pure {
-        if (owner != user) {
-            revert UnauthorizedAccountAccessError();
-        }
-    }
-
-    /// @dev Reverts with {UnknownAccountOwnerIDError} if the token id does not exist.
-    ///
-    /// @param tokenId The id of an account.
-    function _checkForValidAccountId(uint256 tokenId) internal view {
-        if (!_tokenExists(alchemistPositionNFT, tokenId)) {
-            revert UnknownAccountOwnerIDError();
-        }
-    }
-
-    /**
-     * @notice Checks whether a token id is linked to an owner. Non blocking / no reverts.
-     * @param nft The address of the ERC721 based contract.
-     * @param tokenId The token id to check.
-     * @return exists A boolean that is true if the token exists.
-     */
-    function _tokenExists(address nft, uint256 tokenId) internal view returns (bool exists) {
-        if (tokenId == 0) {
-            // token ids start from 1
-            return false;
-        }
-        try IERC721(nft).ownerOf(tokenId) {
-            // If the call succeeds, the token exists.
-            exists = true;
-        } catch {
-            // If the call fails, then the token does not exist.
-            exists = false;
-        }
-    }
-
-    /// @dev Checks an expression and reverts with an {IllegalState} error if the expression is {false}.
-    ///
-    /// @param expression The expression to check.
-    function _checkState(bool expression) internal pure {
-        if (!expression) {
-            revert IllegalState();
-        }
-    }
-
-    /// @dev Checks that the account owned by `tokenId` is properly collateralized.
-    /// @dev If the account is undercollateralized then this will revert with an {Undercollateralized} error.
-    ///
-    /// @param tokenId The id of the account owner.
-    function _validate(uint256 tokenId) internal view {
-        if (_isUnderCollateralized(tokenId)) revert Undercollateralized();
     }
 
     /// @dev Realizes committed global earmark/redemption state for an account.
@@ -1493,7 +1274,7 @@ contract AlchemistV3 is AlchemistV3Storage {
     /// @dev Returns true only if the account is undercollateralized at minimum collateralization.
     ///
     /// @param tokenId The id of the account owner.
-    function _isUnderCollateralized(uint256 tokenId) internal view returns (bool) {
+    function _isUnderCollateralized(uint256 tokenId) internal view override returns (bool) {
         uint256 debt = _accounts[tokenId].debt;
         if (debt == 0) return false;
 
@@ -1562,7 +1343,7 @@ contract AlchemistV3 is AlchemistV3Storage {
     }
     /// @dev Returns true if issued synthetics exceed protocol backing used by redemption haircut logic.
     ///      Backing is locked collateral in the Alchemist plus MYT shares currently held by the Transmuter.
-    function _isProtocolInBadDebt() internal view returns (bool) {
+    function _isProtocolInBadDebt() internal view override returns (bool) {
         if (totalSyntheticsIssued == 0) return false;
 
         return totalSyntheticsIssued > _protocolBackingDebtValue();

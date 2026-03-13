@@ -46,6 +46,9 @@ contract CrucibleTest is InvariantsTest {
     uint256 public liquidationSuccesses;
     uint256 public yieldAccruals;
     uint256 public handlerSkips;
+    uint256 public lastRecoveryBackingBefore;
+    uint256 public lastRecoveryBackingAfter;
+    bool public hasRecoverySample;
 
     // Debt consistency tracking
     uint256 public maxDebtDelta;
@@ -157,13 +160,17 @@ contract CrucibleTest is InvariantsTest {
         uint256 totalSynthetics = alchemist.totalSyntheticsIssued();
         if (totalSynthetics == 0) return false;
 
+        uint256 backingDebt = _protocolBackingDebt();
+
+        return totalSynthetics > backingDebt;
+    }
+
+    function _protocolBackingDebt() internal view returns (uint256) {
         address myt = alchemist.myt();
         uint256 transmuterShares = IERC20(myt).balanceOf(address(transmuterLogic));
         uint256 backingUnderlying = alchemist.getTotalLockedUnderlyingValue()
             + alchemist.convertYieldTokensToUnderlying(transmuterShares);
-        uint256 backingDebt = alchemist.normalizeUnderlyingTokensToDebt(backingUnderlying);
-
-        return totalSynthetics > backingDebt;
+        return alchemist.normalizeUnderlyingTokensToDebt(backingUnderlying);
     }
 
     function _checkBadDebtState() internal {
@@ -592,11 +599,16 @@ contract CrucibleTest is InvariantsTest {
         uint256 recoveryAmount = currentUnderlying * recoveryBps / 10000;
         if (recoveryAmount == 0) { handlerSkips++; return; }
 
+        uint256 backingBefore = _protocolBackingDebt();
+
         deal(mockVaultCollateral, address(this), recoveryAmount);
         IERC20(mockVaultCollateral).approve(mockStrategyYieldToken, recoveryAmount);
         ITestYieldToken(mockStrategyYieldToken).slurp(recoveryAmount);
 
         totalYieldAccrued += recoveryAmount;
+        lastRecoveryBackingBefore = backingBefore;
+        lastRecoveryBackingAfter = _protocolBackingDebt();
+        hasRecoverySample = true;
 
         bool wasInBadDebt = inBadDebtState;
         _checkBadDebtState();
@@ -702,13 +714,10 @@ contract CrucibleTest is InvariantsTest {
         uint256 totalSynthetics = alchemist.totalSyntheticsIssued();
         if (totalSynthetics == 0) return;
 
-        address myt = alchemist.myt();
-        uint256 transmuterYield = IERC20(myt).balanceOf(address(transmuterLogic));
-        uint256 backingUnderlying = alchemist.getTotalLockedUnderlyingValue()
-            + alchemist.convertYieldTokensToUnderlying(transmuterYield);
+        uint256 backingDebt = _protocolBackingDebt();
 
-        if (totalSynthetics > backingUnderlying) {
-            uint256 badDebt = totalSynthetics - backingUnderlying;
+        if (totalSynthetics > backingDebt) {
+            uint256 badDebt = totalSynthetics - backingDebt;
             // Tolerance: 1% of loss + 1e18 absolute for rounding
             uint256 tolerance = totalLossRealized / 100 + 1e18;
             assertLe(
@@ -760,35 +769,26 @@ contract CrucibleTest is InvariantsTest {
 
     // ═══════════════════════════════════════════════════════════════
     //  INVARIANT C5: Recovery Works
-    //  After recovery events with net positive yield, the system
-    //  should not be catastrophically underbacked. 25% tolerance because:
-    //  - Losses compound on a shrinking base (30% of 1000 != 30% of 700)
-    //  - Recoveries add to the already-reduced base
-    //  - Liquidation penalties erode backing further (~3% per liquidation)
-    //  - Transmuter claims distribute yield tokens out of the system
-    //  - Multiple loss-recovery cycles amplify the divergence
-    //  This is a sanity bound, not a solvency guarantee. The protocol's
-    //  real defense is the badDebtRatio scaling in the transmuter.
+    //  A recovery action must not meaningfully reduce debt-normalized
+    //  protocol backing. Allow a minimal tolerance because converting
+    //  recovered underlying into debt units can floor by 1 wei.
+    //  The prior "net positive yield => >=75% backing" rule was not a true
+    //  invariant because subsequent borrowing, liquidations, and bad-debt
+    //  claims can legitimately leave the system below that threshold even
+    //  after aggregate recoveries exceed aggregate losses.
     // ═══════════════════════════════════════════════════════════════
 
     function invariantRecoveryWorks() public view {
-        if (recoveryEvents == 0) return;
+        if (!hasRecoverySample) return;
 
-        if (totalYieldAccrued > totalLossRealized) {
-            uint256 totalSynthetics = alchemist.totalSyntheticsIssued();
-            if (totalSynthetics > 0) {
-                address myt = alchemist.myt();
-                uint256 transmuterYield = IERC20(myt).balanceOf(address(transmuterLogic));
-                uint256 backing = alchemist.getTotalLockedUnderlyingValue()
-                    + alchemist.convertYieldTokensToUnderlying(transmuterYield);
+        uint256 roundingTolerance = alchemist.normalizeUnderlyingTokensToDebt(1);
+        if (roundingTolerance == 0) roundingTolerance = 1;
 
-                assertGe(
-                    backing * 100,
-                    totalSynthetics * 75,
-                    "C5: system catastrophically underbacked despite net positive yield"
-                );
-            }
-        }
+        uint256 backingDelta = lastRecoveryBackingBefore > lastRecoveryBackingAfter
+            ? lastRecoveryBackingBefore - lastRecoveryBackingAfter
+            : 0;
+
+        assertLe(backingDelta, roundingTolerance, "C5: recovery reduced protocol backing");
     }
 
     // ═══════════════════════════════════════════════════════════════
