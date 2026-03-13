@@ -427,7 +427,10 @@ abstract contract BaseStrategyMulti is StrategyOps {
         }
         uint256 realAssetsAfterDealloc1 = IMYTStrategy(strategy).realAssets();
         assertLe(realAssetsAfterDealloc1, realAssetsAfterAlloc2, "Real assets should decrease after deallocation");
-        assertApproxEqAbs(IVaultV2(vault).allocation(allocationId), alloc1 + alloc2 - dealloc1, 1 * 10 ** testConfig.decimals);
+        // Deallocation is executed using the preview-adjusted amount, not the raw target.
+        assertApproxEqAbs(
+            IVaultV2(vault).allocation(allocationId), alloc1 + alloc2 - dealloc1Preview, 1 * 10 ** testConfig.decimals
+        );
 
         _warpWithHook(30 days);
 

@@ -46,12 +46,32 @@ interface IERC4626Like is IERC4626 {
  * @notice Also stakes all amounts allocated to the shares in the rewarder
  */
 contract TokeAutoEthStrategy is MYTStrategy {
+    uint256 internal constant BASIS_POINTS = 10_000;
+    // Extra cushion for one-shot deallocation to absorb rewarder/vault conversion drift.
+    uint256 internal constant DEFAULT_DEALLOC_SHORTFALL_BUFFER_BPS = 105;
+
     IERC4626Like public immutable autoEth;
     IMainRewarder public immutable rewarder;
     WETH public immutable weth;
     RootOracle public immutable oracle;
+    uint256 public deallocShortfallBufferBPS;
 
     event TokeAutoETHStrategyTestLog(string message, uint256 value);
+    event DeallocShortfallBufferBPSUpdated(uint256 newValue);
+
+    function _ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a == 0 ? 0 : 1 + ((a - 1) / b);
+    }
+
+    function _deallocateShortfallBps() internal view returns (uint256) {
+        return deallocShortfallBufferBPS;
+    }
+
+    function _bufferedShortfall(uint256 shortfall) internal view returns (uint256) {
+        uint256 shortfallBps = _deallocateShortfallBps();
+        require(shortfallBps < BASIS_POINTS, "Invalid dealloc slippage");
+        return _ceilDiv(shortfall * BASIS_POINTS, BASIS_POINTS - shortfallBps);
+    }
 
     constructor(
         address _myt,
@@ -65,6 +85,13 @@ contract TokeAutoEthStrategy is MYTStrategy {
         rewarder = IMainRewarder(_rewarder);
         weth = WETH(_weth);
         oracle = RootOracle(_oracle);
+        deallocShortfallBufferBPS = DEFAULT_DEALLOC_SHORTFALL_BUFFER_BPS;
+    }
+
+    function setDeallocShortfallBufferBPS(uint256 newValue) external onlyOwner {
+        require(newValue < BASIS_POINTS, "Invalid dealloc slippage");
+        deallocShortfallBufferBPS = newValue;
+        emit DeallocShortfallBufferBPSUpdated(newValue);
     }
     
     // Deposit weth into the autoEth vault, stake the shares in the rewarder
@@ -88,16 +115,15 @@ contract TokeAutoEthStrategy is MYTStrategy {
         return assetsReceived;
     }
 
-    // Withdraws auto eth shares from the rewarder
-    // redeems same amount of shares from auto eth vault to weth
     function _deallocate(uint256 amount) internal override returns (uint256) {
-        uint256 wethBalance = TokenUtils.safeBalanceOf(address(weth), address(this));
+        uint256 wethBalance = _idleAssets();
         if (wethBalance < amount) {
             uint256 totalAssetsForWithdraw = autoEth.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw);
-            uint256 totalSupply = autoEth.totalSupply();
+            uint256 totalSupply = autoEth.totalSupply() ;
             uint256 shortfall = amount - wethBalance;
+            uint256 bufferedShortfall = _bufferedShortfall(shortfall);
             uint256 sharesNeeded =
-                autoEth.convertToShares(shortfall, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Up);
+                autoEth.convertToShares(bufferedShortfall, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Up);
 
             uint256 directShares = autoEth.balanceOf(address(this));
             uint256 stakedShares = rewarder.balanceOf(address(this));
@@ -118,7 +144,7 @@ contract TokeAutoEthStrategy is MYTStrategy {
     }
 
     function _totalValue() internal view override returns (uint256) {
-        uint256 idleAssets = TokenUtils.safeBalanceOf(address(weth), address(this));
+        uint256 idleAssets = _idleAssets();
         uint256 shares = rewarder.balanceOf(address(this)) + autoEth.balanceOf(address(this));
         uint256 assets = autoEth.convertToAssets(
             shares,
@@ -127,6 +153,10 @@ contract TokeAutoEthStrategy is MYTStrategy {
             IERC4626Like.Rounding.Down
         );
         return idleAssets + assets;
+    }
+
+    function _idleAssets() internal view override returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(weth), address(this));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
