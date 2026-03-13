@@ -2,23 +2,25 @@
 pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IAlchemistV3} from "../interfaces/IAlchemistV3.sol";
 import {IAlchemistV3Position} from "../interfaces/IAlchemistV3Position.sol";
 import {IWETH} from "../interfaces/IWETH.sol";
 import {IVaultV2} from "../../lib/vault-v2/src/interfaces/IVaultV2.sol";
+import {ITransmuter} from "../interfaces/ITransmuter.sol";
 
 /// @title  AlchemistRouter
 /// @notice Batches wrap + deposit + borrow into a single transaction for EOA users.
 /// @dev    Stateless — never holds tokens or NFTs between transactions.
 ///         Uses before/after balance check to identify the newly minted NFT,
 ///         immune to donation griefing.
-contract AlchemistRouter is ReentrancyGuard {
+contract AlchemistRouter is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     /// @dev Flag to allow receiving ETH from WETH unwrap during withdraw flows.
-    bool private _ethExpected;
+    bool private transient _ethExpected;
 
     /// @notice Deposit underlying token into MYT vault + Alchemist, optionally borrow.
     /// @dev    Caller must have approved this contract for `amount` of underlying.
@@ -394,6 +396,97 @@ contract AlchemistRouter is ReentrancyGuard {
         _ethExpected = false;
         (bool success, ) = msg.sender.call{value: assets}("");
         require(success, "ETH transfer failed");
+    }
+
+    // ─── Transmuter Claim ────────────────────────────────────────────────
+
+    /// @notice Claim a matured transmuter position, redeem MYT shares to underlying, send to caller.
+    /// @dev    Caller must approve this contract for the transmuter position NFT (ERC721 approve).
+    ///         The transmuter burns the NFT on claim. Any untransmuted synthetic tokens
+    ///         are forwarded to the caller as-is.
+    /// @param  alchemist       The Alchemist contract address (used to resolve transmuter + MYT vault).
+    /// @param  positionId      The transmuter position NFT token ID to claim.
+    /// @param  minAmountOut    Minimum underlying tokens to receive from redeeming MYT shares (slippage protection).
+    /// @param  deadline        Timestamp after which the transaction reverts.
+    function claimRedemptionUnderlying(
+        address alchemist,
+        uint256 positionId,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external nonReentrant {
+        require(block.timestamp <= deadline, "Expired");
+
+        address transmuter = IAlchemistV3(alchemist).transmuter();
+        address mytVault = IAlchemistV3(alchemist).myt();
+        address syntheticToken = IAlchemistV3(alchemist).debtToken();
+
+        // Take custody of transmuter NFT (caller must have approved router)
+        IERC721(transmuter).transferFrom(msg.sender, address(this), positionId);
+
+        // Claim — transmuter burns the NFT, sends MYT shares + synthetic refund to this contract
+        ITransmuter(transmuter).claimRedemption(positionId);
+
+        // Redeem MYT shares → underlying, sent directly to caller
+        uint256 mytBalance = IERC20(mytVault).balanceOf(address(this));
+        uint256 assets;
+        if (mytBalance > 0) {
+            assets = IVaultV2(mytVault).redeem(mytBalance, msg.sender, address(this));
+        }
+        require(assets >= minAmountOut, "Slippage");
+
+        // Forward any returned synthetic tokens to caller
+        uint256 synthBalance = IERC20(syntheticToken).balanceOf(address(this));
+        if (synthBalance > 0) {
+            IERC20(syntheticToken).safeTransfer(msg.sender, synthBalance);
+        }
+    }
+
+    /// @notice Claim a matured transmuter position, redeem MYT shares to WETH, unwrap to ETH, send to caller.
+    /// @dev    Caller must approve this contract for the transmuter position NFT (ERC721 approve).
+    ///         The transmuter burns the NFT on claim. Any untransmuted synthetic tokens
+    ///         are forwarded to the caller as-is.
+    /// @param  alchemist       The Alchemist contract address (used to resolve transmuter + MYT vault).
+    /// @param  positionId      The transmuter position NFT token ID to claim.
+    /// @param  minAmountOut    Minimum ETH to receive from redeeming MYT shares (slippage protection).
+    /// @param  deadline        Timestamp after which the transaction reverts.
+    function claimRedemptionETH(
+        address alchemist,
+        uint256 positionId,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external nonReentrant {
+        require(block.timestamp <= deadline, "Expired");
+
+        address transmuter = IAlchemistV3(alchemist).transmuter();
+        address mytVault = IAlchemistV3(alchemist).myt();
+        address underlying = IAlchemistV3(alchemist).underlyingToken();
+        address syntheticToken = IAlchemistV3(alchemist).debtToken();
+
+        // Take custody of transmuter NFT (caller must have approved router)
+        IERC721(transmuter).transferFrom(msg.sender, address(this), positionId);
+
+        // Claim — transmuter burns the NFT, sends MYT shares + synthetic refund to this contract
+        ITransmuter(transmuter).claimRedemption(positionId);
+
+        // Redeem MYT shares → WETH → ETH, send to caller
+        uint256 mytBalance = IERC20(mytVault).balanceOf(address(this));
+        uint256 assets;
+        if (mytBalance > 0) {
+            assets = IVaultV2(mytVault).redeem(mytBalance, address(this), address(this));
+
+            _ethExpected = true;
+            IWETH(underlying).withdraw(assets);
+            _ethExpected = false;
+            (bool success, ) = msg.sender.call{value: assets}("");
+            require(success, "ETH transfer failed");
+        }
+        require(assets >= minAmountOut, "Slippage");
+
+        // Forward any returned synthetic tokens to caller
+        uint256 synthBalance = IERC20(syntheticToken).balanceOf(address(this));
+        if (synthBalance > 0) {
+            IERC20(syntheticToken).safeTransfer(msg.sender, synthBalance);
+        }
     }
 
     // ─── Internal ────────────────────────────────────────────────────────
