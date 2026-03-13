@@ -57,14 +57,18 @@ contract AaveV3ARBWETHStrategy is MYTStrategy {
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
         IAavePool pool = IAavePool(poolProvider.getPool());
-        uint256 wethBalanceBefore = TokenUtils.safeBalanceOf(address(weth), address(this));
-        // withdraw exact underlying amount back to this adapter
-        uint256 withdrawnAmount = pool.withdraw(address(weth), amount, address(this));
-        require(
-            TokenUtils.safeBalanceOf(address(weth), address(this)) >= wethBalanceBefore + withdrawnAmount,
-            "Strategy balance is less than the amount needed"
-        );
-        TokenUtils.safeApprove(address(weth), msg.sender, withdrawnAmount);
+        uint256 idleBalance = _idleAssets();
+        uint256 withdrawnAmount = amount;
+        if (idleBalance < amount) {
+            uint256 shortfall = amount - idleBalance;
+            uint256 balanceBefore = TokenUtils.safeBalanceOf(address(weth), address(this));
+            withdrawnAmount = pool.withdraw(address(weth), shortfall, address(this));
+            uint256 balanceAfter = TokenUtils.safeBalanceOf(address(weth), address(this));
+            require(withdrawnAmount >= shortfall, "Withdraw amount insufficient");
+            require(balanceAfter >= balanceBefore + shortfall, "Withdraw balance delta insufficient");
+        }
+        //require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than the amount needed");
+        TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return withdrawnAmount;
     }
 
@@ -74,8 +78,13 @@ contract AaveV3ARBWETHStrategy is MYTStrategy {
     }
 
     function _totalValue() internal view override returns (uint256) {
+        uint256 idleUnderlying = _idleAssets();
         // aToken balance reflects principal + interest in underlying units
-        return aWETH.balanceOf(address(this)) + TokenUtils.safeBalanceOf(address(weth), address(this));
+        return aWETH.balanceOf(address(this)) + idleUnderlying;
+    }
+
+    function _idleAssets() internal view override returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(weth), address(this));
     }
 
     function _claimRewards(address token, bytes memory quote, uint256 minAmountOut) internal override returns (uint256) {
