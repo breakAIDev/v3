@@ -56,20 +56,29 @@ contract AaveV3OPUSDCStrategy is MYTStrategy {
 
     function _deallocate(uint256 amount) internal override returns (uint256) {
         IAavePool pool = IAavePool(poolProvider.getPool());
-        uint256 usdcBalanceBefore = TokenUtils.safeBalanceOf(address(usdc), address(this));
-        // withdraw exact underlying amount back to this adapter
-        uint256 withdrawnAmount = pool.withdraw(address(usdc), amount, address(this));
-        require(
-            TokenUtils.safeBalanceOf(address(usdc), address(this)) >= usdcBalanceBefore + withdrawnAmount,
-            "Strategy balance is less than the amount needed"
-        );
-        TokenUtils.safeApprove(address(usdc), msg.sender, withdrawnAmount);
+        uint256 idleBalance = _idleAssets();
+        uint256 withdrawnAmount = amount;
+        if (idleBalance < amount) {
+            uint256 shortfall = amount - idleBalance;
+            uint256 balanceBefore = TokenUtils.safeBalanceOf(address(usdc), address(this));
+            withdrawnAmount = pool.withdraw(address(usdc), shortfall, address(this));
+            uint256 balanceAfter = TokenUtils.safeBalanceOf(address(usdc), address(this));
+            require(withdrawnAmount >= shortfall, "Withdraw amount insufficient");
+            require(balanceAfter >= balanceBefore + shortfall, "Withdraw balance delta insufficient");
+        }
+        //require(TokenUtils.safeBalanceOf(address(usdc), address(this)) >= amount, "Strategy balance is less than the amount needed");
+        TokenUtils.safeApprove(address(usdc), msg.sender, amount);
         return withdrawnAmount;
     }
 
     function _totalValue() internal view override returns (uint256) {
+        uint256 idleUnderlying = _idleAssets();
         // aToken balance reflects principal + interest in underlying units
-        return aUSDC.balanceOf(address(this));
+        return aUSDC.balanceOf(address(this)) + idleUnderlying;
+    }
+
+    function _idleAssets() internal view override returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(usdc), address(this));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {

@@ -2,13 +2,13 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {PeapodsUSDCStrategy} from "../../strategies/mainnet/PeapodsUSDCStrategy.sol";
+import {ERC4626Strategy} from "../../strategies/ERC4626Strategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
-contract MockPeapodsUSDCStrategy is PeapodsUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _vault, address _usdc)
-        PeapodsUSDCStrategy(_myt, _params, _vault, _usdc)
+contract MockPeapodsUSDCStrategy is ERC4626Strategy {
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        ERC4626Strategy(_myt, _params, _vault)
     {}
 }
 
@@ -35,7 +35,7 @@ contract PeapodsUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockPeapodsUSDCStrategy(vault, params, PEAPODS_USDC_VAULT, USDC));
+        return address(new MockPeapodsUSDCStrategy(vault, params, PEAPODS_USDC_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {
@@ -57,7 +57,8 @@ contract PeapodsUSDCStrategyTest is BaseStrategyTest {
         require(initialRealAssets > 0, "Initial real assets is 0");
         IMYTStrategy(strategy).deallocate(params, amountToAllocate, "", address(vault));
         uint256 finalRealAssets = IMYTStrategy(strategy).realAssets();
-        require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        // require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        assertApproxEqRel(TokenUtils.safeBalanceOf(testConfig.vaultAsset, address(strategy)), finalRealAssets, 1e16);
         vm.stopPrank();
     }
 

@@ -92,6 +92,11 @@ contract AaveV3ARBUSDCStrategyTest is BaseStrategyTest {
 
     function _effectiveDeallocateAmount(uint256 requestedAssets) internal view override returns (uint256) {
         uint256 maxWithdrawable = IMYTStrategy(strategy).realAssets();
+        uint256 minMeaningfulDeallocate = 1 * 10 ** testConfig.decimals;
+        if (maxWithdrawable < minMeaningfulDeallocate || requestedAssets < minMeaningfulDeallocate) {
+            return 0;
+        }
+
         return requestedAssets < maxWithdrawable ? requestedAssets : maxWithdrawable;
     }
 

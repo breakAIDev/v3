@@ -112,7 +112,9 @@ contract TokeAutoUSDStrategyTest is BaseStrategyTest {
         require(initialRealAssets > 0, "Initial real assets is 0");
         IMYTStrategy(strategy).deallocate(params, amountToAllocate, "", address(vault));
         uint256 finalRealAssets = IMYTStrategy(strategy).realAssets();
-        require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        uint256 idleUsdc = IERC20(USDC).balanceOf(strategy);
+        assertGt(idleUsdc, 0, "Idle USDC should remain on strategy after direct deallocate");
+        assertApproxEqRel(finalRealAssets, idleUsdc, 1e16);
         vm.stopPrank();
     }
 

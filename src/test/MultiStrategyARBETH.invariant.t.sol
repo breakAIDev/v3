@@ -12,7 +12,7 @@ import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {AaveV3ARBWETHStrategy} from "../strategies/arbitrum/AaveV3ARBWETHStrategy.sol";
-import {EulerARBWETHStrategy} from "../strategies/arbitrum/EulerARBWETHStrategy.sol";
+import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
 
 /// @title MultiStrategyARBETHHandler
 /// @notice Handler for invariant testing multiple ETH strategies on Arbitrum
@@ -537,10 +537,9 @@ contract MultiStrategyARBETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new EulerARBWETHStrategy(
+        return address(new ERC4626Strategy(
             address(vault),
             params,
-            WETH,
             EULER_WETH_VAULT_ARB
         ));
     }

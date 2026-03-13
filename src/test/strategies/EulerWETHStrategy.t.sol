@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {EulerWETHStrategy} from "../../strategies/mainnet/EulerWETHStrategy.sol";
+import {ERC4626Strategy} from "../../strategies/ERC4626Strategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
@@ -10,9 +10,9 @@ interface IERC4626MaxWithdraw {
     function maxWithdraw(address owner) external view returns (uint256);
 }
 
-contract MockEulerWETHStrategy is EulerWETHStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _weth, address _eulerVault)
-        EulerWETHStrategy(_myt, _params, _weth, _eulerVault)
+contract MockEulerWETHStrategy is ERC4626Strategy {
+    constructor(address _myt, StrategyParams memory _params, address _eulerVault)
+        ERC4626Strategy(_myt, _params, _eulerVault)
     {}
 }
 
@@ -45,7 +45,7 @@ contract EulerWETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockEulerWETHStrategy(vault, params, WETH, EULER_WETH_VAULT));
+        return address(new MockEulerWETHStrategy(vault, params, EULER_WETH_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

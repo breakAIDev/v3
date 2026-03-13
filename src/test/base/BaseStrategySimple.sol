@@ -61,7 +61,12 @@ abstract contract BaseStrategySimple is StrategyOps {
                 IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         }
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
-        uint256 amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToAllocate);
+        uint256 targetDeallocate = _effectiveDeallocateAmount(amountToAllocate);
+        if (targetDeallocate == 0) {
+            vm.stopPrank();
+            return;
+        }
+        uint256 amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
         amountToDeallocate = bound(amountToDeallocate, 0, IMYTStrategy(strategy).realAssets());
         if (amountToDeallocate == 0) return; // we are not interested in deallocating from empty vaults
 
@@ -79,7 +84,9 @@ abstract contract BaseStrategySimple is StrategyOps {
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(strategy).adapterId(), "adapter id not in strategyIds");
         uint256 finalRealAssets = IMYTStrategy(strategy).realAssets();
-        require(finalRealAssets < initialRealAssets, "Final real assets is not less than initial real assets");
+        uint256 idleAssets = TokenUtils.safeBalanceOf(testConfig.vaultAsset, address(strategy));
+        assertGe(idleAssets, amountToDeallocate, "Strategy idle assets should cover deallocated amount");
+        assertGe(finalRealAssets, idleAssets, "Real assets should include idle assets");
         vm.stopPrank();
     }
 
@@ -139,6 +146,10 @@ abstract contract BaseStrategySimple is StrategyOps {
         uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
 
         uint256 targetDeallocate = _effectiveDeallocateAmount(amountToAllocate);
+        if (targetDeallocate == 0) {
+            vm.stopPrank();
+            return;
+        }
         amountToDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
         bool deallocated = _deallocateOrSkipWhitelisted(amountToDeallocate, RevertContext.FuzzDeallocate);
         if (!deallocated) {

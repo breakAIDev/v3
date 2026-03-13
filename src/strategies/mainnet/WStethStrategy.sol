@@ -114,11 +114,6 @@ contract WstethMainnetStrategy is MYTStrategy {
         uint256 stEthNotional = wsteth.getStETHByWstETH(wstBal);
         return _idleAssets() + _stEthToWeth(stEthNotional);
     }
-
-    function _idleAssets() internal view returns (uint256) {
-        return TokenUtils.safeBalanceOf(address(weth), address(this));
-    }
-
     function _previewAdjustedWithdraw(uint256 amount) 
         internal 
         view 

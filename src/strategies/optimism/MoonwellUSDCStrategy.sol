@@ -86,10 +86,6 @@ contract MoonwellUSDCStrategy is MYTStrategy {
         return amount;
     }
 
-    function _idleAssets() internal view returns (uint256) {
-        return TokenUtils.safeBalanceOf(address(usdc), address(this));
-    }
-
     function _totalValue() internal view override returns (uint256) {
         uint256 idleUnderlying = _idleAssets();
         // Use stored exchange rate and mToken balance to avoid state changes during static calls
@@ -98,6 +94,10 @@ contract MoonwellUSDCStrategy is MYTStrategy {
         uint256 exchangeRate = mUSDC.exchangeRateStored();
         // Exchange rate is scaled by 1e18, so we need to divide by 1e18
         return idleUnderlying + (mTokenBalance * exchangeRate) / 1e18;
+    }
+
+    function _idleAssets() internal view override returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(usdc), address(this));
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {

@@ -77,37 +77,42 @@ contract TokeAutoUSDStrategy is MYTStrategy {
     // Withdraws auto usdc shares from the rewarder
     // redeems same amount of shares from auto usd vault to usdc
     function _deallocate(uint256 amount) internal override returns (uint256) {
-        uint256 sharesNeeded = autoUSD.convertToShares(
-            amount,
-            autoUSD.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
-            autoUSD.totalSupply(),
-            IERC4626Like.Rounding.Up  // Round UP when calculating shares to withdraw
-        );
-        
-        // Cap to actual balance (handles rounding)
-        uint256 actualShares = rewarder.balanceOf(address(this));
-        if (sharesNeeded > actualShares) sharesNeeded = actualShares;
-        
-        // Withdraw shares from rewarder
-        rewarder.withdraw(address(this), sharesNeeded, false);
-        
-        autoUSD.redeem(sharesNeeded, address(this), address(this));
-        uint256 usdcBalance = TokenUtils.safeBalanceOf(address(usdc), address(this));   
-        
+        uint256 usdcBalance = TokenUtils.safeBalanceOf(address(usdc), address(this));
+        if (usdcBalance < amount) {
+            uint256 totalAssetsForWithdraw = autoUSD.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw);
+            uint256 totalSupply = autoUSD.totalSupply();
+            uint256 shortfall = amount - usdcBalance;
+            uint256 sharesNeeded =
+                autoUSD.convertToShares(shortfall, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Up);
+
+            uint256 directShares = autoUSD.balanceOf(address(this));
+            uint256 stakedShares = rewarder.balanceOf(address(this));
+            uint256 totalShares = directShares + stakedShares;
+            if (sharesNeeded > totalShares) sharesNeeded = totalShares;
+
+            if (sharesNeeded > directShares) {
+                rewarder.withdraw(address(this), sharesNeeded - directShares, false);
+            }
+
+            autoUSD.redeem(sharesNeeded, address(this), address(this));
+            usdcBalance = TokenUtils.safeBalanceOf(address(usdc), address(this));
+        }
+
         require(usdcBalance >= amount, "Withdraw amount insufficient");
         TokenUtils.safeApprove(address(usdc), msg.sender, amount);
         return amount;
     }
 
     function _totalValue() internal view override returns (uint256) {
-        uint256 shares = rewarder.balanceOf(address(this));
+        uint256 idleAssets = TokenUtils.safeBalanceOf(address(usdc), address(this));
+        uint256 shares = rewarder.balanceOf(address(this)) + autoUSD.balanceOf(address(this));
         uint256 assets = autoUSD.convertToAssets(
             shares,
             autoUSD.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
             autoUSD.totalSupply(),
             IERC4626Like.Rounding.Down
         );
-        return assets;
+        return idleAssets + assets;
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
@@ -117,6 +122,8 @@ contract TokeAutoUSDStrategy is MYTStrategy {
             autoUSD.totalSupply(),
             IERC4626Like.Rounding.Up
         );
+        uint256 totalShares = rewarder.balanceOf(address(this)) + autoUSD.balanceOf(address(this));
+        if (sharesNeeded > totalShares) sharesNeeded = totalShares;
         uint256 assets = autoUSD.convertToAssets(
             sharesNeeded,
             autoUSD.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),

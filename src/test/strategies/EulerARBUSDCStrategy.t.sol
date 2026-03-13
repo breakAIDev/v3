@@ -2,16 +2,16 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {EulerARBUSDCStrategy} from "../../strategies/arbitrum/EulerARBUSDCStrategy.sol";
+import {ERC4626Strategy} from "../../strategies/ERC4626Strategy.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 interface IERC4626MaxWithdraw {
     function maxWithdraw(address owner) external view returns (uint256);
 }
 
-contract MockEulerARBUSDCStrategy is EulerARBUSDCStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _usdc, address _vault)
-        EulerARBUSDCStrategy(_myt, _params, _usdc, _vault)
+contract MockEulerARBUSDCStrategy is ERC4626Strategy {
+    constructor(address _myt, StrategyParams memory _params, address _vault)
+        ERC4626Strategy(_myt, _params, _vault)
     {}
 }
 
@@ -44,7 +44,7 @@ contract EulerARBUSDCStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockEulerARBUSDCStrategy(vault, params, USDC, EULER_USDC_VAULT));
+        return address(new MockEulerARBUSDCStrategy(vault, params, EULER_USDC_VAULT));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {
