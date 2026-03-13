@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {MoonwellWETHStrategy} from "../../strategies/optimism/MoonwellWETHStrategy.sol";
+import {MoonwellStrategy} from "../../strategies/MoonwellStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
@@ -40,12 +40,6 @@ contract MockSwapExecutor {
     }
 }
 
-contract MockMoonwellWETHStrategy is MoonwellWETHStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _mWETH, address _weth)
-        MoonwellWETHStrategy(_myt, _params, _mWETH, _weth)
-    {}
-}
-
 contract MoonwellWETHStrategyTest is BaseStrategyTest {
     address public constant MOONWELL_WETH_MTOKEN = 0xb4104C02BBf4E9be85AAa41a62974E4e28D59A33;
     address public constant WETH = 0x4200000000000000000000000000000000000006;
@@ -76,7 +70,7 @@ contract MoonwellWETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockMoonwellWETHStrategy(vault, params, MOONWELL_WETH_MTOKEN, WETH));
+        return address(new MoonwellStrategy(vault, params, WETH, MOONWELL_WETH_MTOKEN, COMPTROLLER, WELL, true));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {
@@ -313,8 +307,8 @@ contract MoonwellWETHStrategyTest is BaseStrategyTest {
             abi.encode(errorCode)
         );
         
-        // Expect the allocation to revert with MoonwellWETHStrategyMintFailed
-        vm.expectRevert(abi.encodeWithSignature("MoonwellWETHStrategyMintFailed(uint256)", errorCode));
+        // Expect the allocation to revert with MoonwellStrategyMintFailed
+        vm.expectRevert(abi.encodeWithSignature("MoonwellStrategyMintFailed(uint256)", errorCode));
         IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         
         vm.clearMockedCalls();
@@ -343,8 +337,8 @@ contract MoonwellWETHStrategyTest is BaseStrategyTest {
             abi.encode(errorCode)
         );
         
-        // Expect the deallocation to revert with MoonwellWETHStrategyRedeemUnderlyingFailed
-        vm.expectRevert(abi.encodeWithSignature("MoonwellWETHStrategyRedeemUnderlyingFailed(uint256)", errorCode));
+        // Expect the deallocation to revert with MoonwellStrategyRedeemFailed
+        vm.expectRevert(abi.encodeWithSignature("MoonwellStrategyRedeemFailed(uint256)", errorCode));
         IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
         
         vm.clearMockedCalls();

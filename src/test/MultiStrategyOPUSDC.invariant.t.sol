@@ -12,7 +12,7 @@ import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {AaveStrategy} from "../strategies/AaveStrategy.sol";
-import {MoonwellUSDCStrategy} from "../strategies/optimism/MoonwellUSDCStrategy.sol";
+import {MoonwellStrategy} from "../strategies/MoonwellStrategy.sol";
 
 /// @title MultiStrategyOPUSDCHandler
 /// @notice Handler for invariant testing USDC strategies on Optimism
@@ -406,6 +406,8 @@ contract MultiStrategyOPUSDCInvariantTest is Test {
     address public constant AAVE_REWARDS_CONTROLLER = 0x929EC64c34a17401F460460D4B9390518E5B473e;
     address public constant OP = 0x4200000000000000000000000000000000000042;
     address public constant MOONWELL_MUSDC = 0x8E08617b0d66359D73Aa11E11017834C29155525;
+    address public constant MOONWELL_COMPTROLLER = 0xCa889f40aae37FFf165BccF69aeF1E82b5C511B9;
+    address public constant WELL = 0xA88594D404727625A9437C3f886C7643872296AE;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000_000e6; // 10M USDC
     uint256 public constant ABSOLUTE_CAP = 50_000_000e6; // 50M USDC per strategy
@@ -514,11 +516,14 @@ contract MultiStrategyOPUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new MoonwellUSDCStrategy(
+        return address(new MoonwellStrategy(
             address(vault),
             params,
+            USDC,
             MOONWELL_MUSDC,
-            USDC
+            MOONWELL_COMPTROLLER,
+            WELL,
+            false
         ));
     }
     
