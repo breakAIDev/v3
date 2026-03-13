@@ -11,7 +11,7 @@ import {AlchemistCurator} from "../AlchemistCurator.sol";
 import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
-import {AaveV3ARBUSDCStrategy} from "../strategies/arbitrum/AaveV3ARBUSDCStrategy.sol";
+import {AaveStrategy} from "../strategies/AaveStrategy.sol";
 import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
 
 /// @title MultiStrategyARBUSDCCHandler
@@ -418,6 +418,8 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
     address public constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address public constant AAVE_POOL_ARB = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
     address public constant AUSDC_ARB = 0x625E7708f30cA75bfd92586e17077590C60eb4cD;
+    address public constant AAVE_REWARDS_CONTROLLER = 0x929EC64c34a17401F460460D4B9390518E5B473e;
+    address public constant ARB = 0x912CE59144191C1204E64559FE8253a0e49E6548;
     address public constant EULER_USDC_VAULT_ARB = 0x0a1eCC5Fe8C9be3C809844fcBe615B46A869b899;
     address public constant FLUID_USDC_VAULT_ARB = 0x1A996cb54bb95462040408C06122D45D6Cdb6096;
     
@@ -504,12 +506,14 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new AaveV3ARBUSDCStrategy(
+        return address(new AaveStrategy(
             address(vault),
             params,
             USDC,
             AUSDC_ARB,
-            AAVE_POOL_ARB
+            AAVE_POOL_ARB,
+            AAVE_REWARDS_CONTROLLER,
+            ARB
         ));
     }
     

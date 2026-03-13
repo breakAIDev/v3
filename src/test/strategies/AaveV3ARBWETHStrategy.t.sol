@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {AaveV3ARBWETHStrategy} from "../../strategies/arbitrum/AaveV3ARBWETHStrategy.sol";
+import {AaveStrategy} from "../../strategies/AaveStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
@@ -47,12 +47,6 @@ contract MockSwapExecutor {
     }
 }
 
-contract MockAaveV3ARBWETHStrategy is AaveV3ARBWETHStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _aWETH, address _weth, address _pool)
-        AaveV3ARBWETHStrategy(_myt, _params, _aWETH, _weth, _pool)
-    {}
-}
-
 contract AaveV3ARBWETHStrategyTest is BaseStrategyTest {
     address public constant AAVE_V3_ARB_WETH_ATOKEN = 0xe50fA9b3c56FfB159cB0FCA61F5c9D750e8128c8;
     address public constant AAVE_V3_ARB_WETH_POOL = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
@@ -85,7 +79,9 @@ contract AaveV3ARBWETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockAaveV3ARBWETHStrategy(vault, params, AAVE_V3_ARB_WETH_ATOKEN, WETH, AAVE_V3_ARB_WETH_POOL));
+        return address(
+            new AaveStrategy(vault, params, WETH, AAVE_V3_ARB_WETH_ATOKEN, AAVE_V3_ARB_WETH_POOL, REWARDS_CONTROLLER, ARB)
+        );
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

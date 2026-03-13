@@ -19,7 +19,7 @@ import {AlchemistTokenVault} from "../src/AlchemistTokenVault.sol";
 import {AlchemistV3Position} from "../src/AlchemistV3Position.sol";
 
 // Optimism Strategy Imports
-import {AaveV3OPUSDCStrategy} from "../src/strategies/optimism/AaveV3OPUSDCStrategy.sol";
+import {AaveStrategy} from "../src/strategies/AaveStrategy.sol";
 import {MoonwellUSDCStrategy} from "../src/strategies/optimism/MoonwellUSDCStrategy.sol";
 import {MoonwellWETHStrategy} from "../src/strategies/optimism/MoonwellWETHStrategy.sol";
 
@@ -79,6 +79,8 @@ contract DeployV3OptimismKungfuScript is Script {
     address public usdtOP = 0x94b008aA00579c1307B0EF2c499aD98a8ce58e58;
     address public moonwellMUSDC = 0x8E08617b0d66359D73Aa11E11017834C29155525;
     address public moonwellMWETH = 0xb4104C02BBf4E9be85AAa41a62974E4e28D59A33;
+    address public aaveRewardsController = 0x929EC64c34a17401F460460D4B9390518E5B473e;
+    address public opToken = 0x4200000000000000000000000000000000000042;
     address public wstETHOP = 0x1F32b1c2345538c0c6f582fCB022739c4A194Ebb;
     address public velodromePool = 0xbF30Ff33CF9C6b0c48702Ff17891293b002DfeA4;
 
@@ -152,14 +154,16 @@ contract DeployV3OptimismKungfuScript is Script {
     function setUp() public {
     }
 
-    function deployAaveV3OPUSDCStrategy(address myt) internal returns (AaveV3OPUSDCStrategy) {
+    function deployAaveV3OPUSDCStrategy(address myt) internal returns (AaveStrategy) {
         // Create the strategy
-        AaveV3OPUSDCStrategy aaveUSDCStrategy = new AaveV3OPUSDCStrategy(
+        AaveStrategy aaveUSDCStrategy = new AaveStrategy(
             myt,
             aaveUSDCParams,
             USDC,
             aUSDC,
-            aavePoolProvider
+            aavePoolProvider,
+            aaveRewardsController,
+            opToken
         );
     
         // Register strategy with curator
@@ -236,7 +240,7 @@ contract DeployV3OptimismKungfuScript is Script {
 
     function deployUSDCStrategies(address myt) public {
         // Deploy Optimism USDC Strategies
-        AaveV3OPUSDCStrategy aaveUSDCStrategy = deployAaveV3OPUSDCStrategy(myt);
+        AaveStrategy aaveUSDCStrategy = deployAaveV3OPUSDCStrategy(myt);
         MoonwellUSDCStrategy moonwellUSDCStrategy = deployMoonwellUSDCStrategy(myt);
 
         console.log("AaveV3 OP USDC Strategy deployed at:", address(aaveUSDCStrategy));

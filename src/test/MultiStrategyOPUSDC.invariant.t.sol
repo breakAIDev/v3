@@ -11,7 +11,7 @@ import {AlchemistCurator} from "../AlchemistCurator.sol";
 import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
-import {AaveV3OPUSDCStrategy} from "../strategies/optimism/AaveV3OPUSDCStrategy.sol";
+import {AaveStrategy} from "../strategies/AaveStrategy.sol";
 import {MoonwellUSDCStrategy} from "../strategies/optimism/MoonwellUSDCStrategy.sol";
 
 /// @title MultiStrategyOPUSDCHandler
@@ -403,6 +403,8 @@ contract MultiStrategyOPUSDCInvariantTest is Test {
     address public constant USDC = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
     address public constant AUSDC = 0x625E7708f30cA75bfd92586e17077590C60eb4cD;
     address public constant AAVE_POOL_PROVIDER = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
+    address public constant AAVE_REWARDS_CONTROLLER = 0x929EC64c34a17401F460460D4B9390518E5B473e;
+    address public constant OP = 0x4200000000000000000000000000000000000042;
     address public constant MOONWELL_MUSDC = 0x8E08617b0d66359D73Aa11E11017834C29155525;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000_000e6; // 10M USDC
@@ -488,12 +490,14 @@ contract MultiStrategyOPUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new AaveV3OPUSDCStrategy(
+        return address(new AaveStrategy(
             address(vault),
             params,
             USDC,
             AUSDC,
-            AAVE_POOL_PROVIDER
+            AAVE_POOL_PROVIDER,
+            AAVE_REWARDS_CONTROLLER,
+            OP
         ));
     }
     
