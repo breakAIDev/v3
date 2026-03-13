@@ -13,8 +13,7 @@ import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IAllocator} from "../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
-import {EulerWETHStrategy} from "../strategies/mainnet/EulerWETHStrategy.sol";
-import {PeapodsETHStrategy} from "../strategies/mainnet/PeapodsETHStrategy.sol";
+import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
 import {TokeAutoEthStrategy} from "../strategies/mainnet/TokeAutoETHStrategy.sol";
 
 /// @title MultiStrategyETHHandler
@@ -500,7 +499,7 @@ contract MultiStrategyETHHandler is Test {
         // Try to get the underlying vault from the strategy and query its maxDeposit
         // EulerWETHStrategy exposes `vault` as an IERC4626
         if (keccak256(bytes(strategyNames[strategy])) == keccak256("Euler Mainnet WETH")) {
-            try EulerWETHStrategy(strategy).vault().maxDeposit(strategy) returns (uint256 max) {
+            try ERC4626Strategy(strategy).vault().maxDeposit(strategy) returns (uint256 max) {
                 return max;
             } catch {
                 return type(uint256).max; // If call fails, don't constrain
@@ -644,7 +643,7 @@ contract MultiStrategyETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new EulerWETHStrategy(address(vault), params, EULER_WETH_VAULT));
+        return address(new ERC4626Strategy(address(vault), params, EULER_WETH_VAULT));
     }
     
     function _deployPeapodsStrategy() internal returns (address) {
@@ -660,7 +659,7 @@ contract MultiStrategyETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new PeapodsETHStrategy(address(vault), params, PEAPODS_ETH_VAULT));
+        return address(new ERC4626Strategy(address(vault), params, PEAPODS_ETH_VAULT));
     }
     
     function _deployTokeStrategy() internal returns (address) {

@@ -6,7 +6,11 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MYTStrategy} from "../MYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 
-abstract contract ERC4626BaseStrategy is MYTStrategy {
+/**
+ * @title ERC4626Strategy
+ * @notice Generic deployable strategy for vanilla ERC4626 vault integrations.
+ */
+contract ERC4626Strategy is MYTStrategy {
     IERC20 public immutable mytAsset;
     IERC4626 public immutable vault;
 
@@ -21,7 +25,7 @@ abstract contract ERC4626BaseStrategy is MYTStrategy {
     function _allocate(uint256 amount) internal virtual override returns (uint256) {
         require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Strategy balance is less than amount");
         TokenUtils.safeApprove(address(mytAsset), address(vault), amount);
-        uint256 shares = vault.deposit(amount, address(this));
+        vault.deposit(amount, address(this));
         return amount;
     }
 

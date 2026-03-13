@@ -12,8 +12,7 @@ import {IAllocator} from "../interfaces/IAllocator.sol";
 import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {AaveV3ARBUSDCStrategy} from "../strategies/arbitrum/AaveV3ARBUSDCStrategy.sol";
-import {EulerARBUSDCStrategy} from "../strategies/arbitrum/EulerARBUSDCStrategy.sol";
-import {FluidARBUSDCStrategy} from "../strategies/arbitrum/FluidARBUSDCStrategy.sol";
+import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
 
 /// @title MultiStrategyARBUSDCCHandler
 /// @notice Handler for invariant testing multiple USDC strategies on Arbitrum
@@ -527,7 +526,7 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new EulerARBUSDCStrategy(
+        return address(new ERC4626Strategy(
             address(vault),
             params,
             EULER_USDC_VAULT_ARB
@@ -547,7 +546,7 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new FluidARBUSDCStrategy(
+        return address(new ERC4626Strategy(
             address(vault),
             params,
             FLUID_USDC_VAULT_ARB

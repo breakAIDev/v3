@@ -2,16 +2,16 @@
 pragma solidity 0.8.28;
 
 import "../BaseStrategyTest.sol";
-import {EulerARBUSDCStrategy} from "../../strategies/arbitrum/EulerARBUSDCStrategy.sol";
+import {ERC4626Strategy} from "../../strategies/ERC4626Strategy.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 interface IERC4626MaxWithdraw {
     function maxWithdraw(address owner) external view returns (uint256);
 }
 
-contract MockEulerARBUSDCStrategy is EulerARBUSDCStrategy {
+contract MockEulerARBUSDCStrategy is ERC4626Strategy {
     constructor(address _myt, StrategyParams memory _params, address _vault)
-        EulerARBUSDCStrategy(_myt, _params, _vault)
+        ERC4626Strategy(_myt, _params, _vault)
     {}
 }
 

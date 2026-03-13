@@ -13,8 +13,7 @@ import {AlchemistStrategyClassifier} from "../AlchemistStrategyClassifier.sol";
 import {IAllocator} from "../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
-import {EulerUSDCStrategy} from "../strategies/mainnet/EulerUSDCStrategy.sol";
-import {PeapodsUSDCStrategy} from "../strategies/mainnet/PeapodsUSDCStrategy.sol";
+import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
 import {TokeAutoUSDStrategy} from "../strategies/mainnet/TokeAutoUSDStrategy.sol";
 
 /// @title MultiStrategyUSDCHandler
@@ -459,7 +458,7 @@ contract MultiStrategyUSDCHandler is Test {
         // Try to get the underlying vault from the strategy and query its maxDeposit
         // EulerUSDCStrategy exposes `vault` as an IERC4626
         if (keccak256(bytes(strategyNames[strategy])) == keccak256("Euler Mainnet USDC")) {
-            try EulerUSDCStrategy(strategy).vault().maxDeposit(strategy) returns (uint256 max) {
+            try ERC4626Strategy(strategy).vault().maxDeposit(strategy) returns (uint256 max) {
                 return max;
             } catch {
                 return type(uint256).max; // If call fails, don't constrain
@@ -613,7 +612,7 @@ contract MultiStrategyUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new EulerUSDCStrategy(address(vault), params, EULER_USDC_VAULT));
+        return address(new ERC4626Strategy(address(vault), params, EULER_USDC_VAULT));
     }
     
     function _deployPeapodsStrategy() internal returns (address) {
@@ -629,7 +628,7 @@ contract MultiStrategyUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new PeapodsUSDCStrategy(address(vault), params, PEAPODS_USDC_VAULT));
+        return address(new ERC4626Strategy(address(vault), params, PEAPODS_USDC_VAULT));
     }
     
     function _deployTokeStrategy() internal returns (address) {
