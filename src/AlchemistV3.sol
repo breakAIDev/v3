@@ -5,7 +5,7 @@ import "./interfaces/IAlchemistV3.sol";
 import {ITransmuter} from "./interfaces/ITransmuter.sol";
 import {IAlchemistV3Position} from "./interfaces/IAlchemistV3Position.sol";
 import {IFeeVault} from "./interfaces/IFeeVault.sol";
-import {AlchemistV3AdminModule} from "./modules/AlchemistV3AdminModule.sol";
+import {AlchemistV3ViewModule} from "./modules/AlchemistV3ViewModule.sol";
 import {TokenUtils} from "./libraries/TokenUtils.sol";
 import {Unauthorized, IllegalArgument, IllegalState, MissingInputData} from "./base/Errors.sol";
 import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
@@ -16,61 +16,9 @@ import {FixedPointMath} from "./libraries/FixedPointMath.sol";
 /// @author Alchemix Finance
 ///
 /// For Juris, Graham, and Marcus
-contract AlchemistV3 is AlchemistV3AdminModule {
+contract AlchemistV3 is AlchemistV3ViewModule {
     function initialize(AlchemistInitializationParams memory params) external initializer {
         _initialize(params);
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function getCDP(uint256 tokenId) external view returns (uint256, uint256, uint256) {
-        (uint256 debt, uint256 earmarked, uint256 collateral) = _getAccountView(tokenId);
-        return (collateral, debt, earmarked);
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function getTotalDeposited() external view returns (uint256) {
-        return _mytSharesDeposited;
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function getMaxBorrowable(uint256 tokenId) external view returns (uint256) {
-        (uint256 debt,, uint256 collateral) = _getAccountView(tokenId);
-        return _maxBorrowableFromState(debt, collateral);
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function getMaxWithdrawable(uint256 tokenId) external view returns (uint256) {
-        (uint256 debt,, uint256 collateral) = _getAccountView(tokenId);
-        return _maxWithdrawableFromState(debt, collateral);
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function mintAllowance(uint256 ownerTokenId, address spender) external view returns (uint256) {
-        Account storage account = _accounts[ownerTokenId];
-        return account.mintAllowances[account.allowancesVersion][spender];
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function getTotalUnderlyingValue() external view returns (uint256) {
-        return _getTotalUnderlyingValue();
-    }
-
-    
-    /// @inheritdoc IAlchemistV3State
-    function getTotalLockedUnderlyingValue() external view returns (uint256) {
-        return _getTotalLockedUnderlyingValue();
-    }
-
-    /// @inheritdoc IAlchemistV3State
-    function totalValue(uint256 tokenId) public view returns (uint256) {
-        return _collateralValueInDebt(_accountCollateralBalance(tokenId, true));
-    }
-
-    /// @notice Returns cumulative earmarked debt including one simulated pending earmark window.
-    function getUnrealizedCumulativeEarmarked() external view returns (uint256) {
-        if (totalDebt == 0) return 0;
-        (, uint256 effectiveEarmarked) = _simulateUnrealizedEarmark();
-        return cumulativeEarmarked + effectiveEarmarked;
     }
 
     /// @inheritdoc IAlchemistV3Actions
@@ -1102,11 +1050,11 @@ contract AlchemistV3 is AlchemistV3AdminModule {
         return !_meetsCollateralization(debt, collateralValue, minimumCollateralization);
     }
 
-    function _getAccountView(uint256 tokenId) internal view returns (uint256 debt, uint256 earmarked, uint256 collateral) {
+    function _getAccountView(uint256 tokenId) internal view override returns (uint256 debt, uint256 earmarked, uint256 collateral) {
         return _calculateUnrealizedDebt(tokenId);
     }
 
-    function _accountCollateralBalance(uint256 tokenId, bool includeUnrealizedDebt) internal view returns (uint256 collateral) {
+    function _accountCollateralBalance(uint256 tokenId, bool includeUnrealizedDebt) internal view override returns (uint256 collateral) {
         if (!includeUnrealizedDebt) {
             return _accounts[tokenId].collateralBalance;
         }
@@ -1114,7 +1062,7 @@ contract AlchemistV3 is AlchemistV3AdminModule {
         (,, collateral) = _getAccountView(tokenId);
     }
 
-    function _collateralValueInDebt(uint256 collateralBalance) internal view returns (uint256) {
+    function _collateralValueInDebt(uint256 collateralBalance) internal view override returns (uint256) {
         return convertYieldTokensToDebt(collateralBalance);
     }
 
@@ -1124,12 +1072,12 @@ contract AlchemistV3 is AlchemistV3AdminModule {
         return FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
     }
 
-    function _maxBorrowableFromState(uint256 debt, uint256 collateral) internal view returns (uint256) {
+    function _maxBorrowableFromState(uint256 debt, uint256 collateral) internal view override returns (uint256) {
         uint256 capacity = _collateralValueInDebt(collateral) * FIXED_POINT_SCALAR / minimumCollateralization;
         return debt > capacity ? 0 : capacity - debt;
     }
 
-    function _maxWithdrawableFromState(uint256 debt, uint256 collateral) internal view returns (uint256) {
+    function _maxWithdrawableFromState(uint256 debt, uint256 collateral) internal view override returns (uint256) {
         uint256 lockedCollateral = _lockedCollateralForDebt(debt);
         uint256 positionFree = collateral > lockedCollateral ? collateral - lockedCollateral : 0;
         uint256 globalFree = _availableProtocolShares();
@@ -1153,12 +1101,12 @@ contract AlchemistV3 is AlchemistV3AdminModule {
     }
 
     /// @dev Returns the underlying value of MYT shares currently tracked by the Alchemist.
-    function _getTotalUnderlyingValue() internal view returns (uint256 totalUnderlyingValue) {
+    function _getTotalUnderlyingValue() internal view override returns (uint256 totalUnderlyingValue) {
         return _underlyingValueForShares(_mytSharesDeposited);
     }
 
     /// @dev Returns the underlying value of globally required locked shares, capped by held shares.
-    function _getTotalLockedUnderlyingValue() internal view returns (uint256) {
+    function _getTotalLockedUnderlyingValue() internal view override returns (uint256) {
         return _underlyingValueForShares(_lockedProtocolShares());
     }
     /// @dev Returns true if issued synthetics exceed protocol backing used by redemption haircut logic.
@@ -1247,7 +1195,7 @@ contract AlchemistV3 is AlchemistV3AdminModule {
     /// @dev Simulates one uncommitted earmark window using current on-chain state.
     /// @return earmarkWeightCopy Simulated earmark packed weight after the window.
     /// @return effectiveEarmarked The additional earmarked debt from this simulated window.
-    function _simulateUnrealizedEarmark() internal view returns (uint256 earmarkWeightCopy, uint256 effectiveEarmarked) {
+    function _simulateUnrealizedEarmark() internal view override returns (uint256 earmarkWeightCopy, uint256 effectiveEarmarked) {
         earmarkWeightCopy = _earmarkWeight;
         if (block.number <= lastEarmarkBlock || totalDebt == 0) return (earmarkWeightCopy, 0);
 
