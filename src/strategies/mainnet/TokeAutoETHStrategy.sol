@@ -69,7 +69,6 @@ contract TokeAutoEthStrategy is MYTStrategy {
 
     function _bufferedShortfall(uint256 shortfall) internal view returns (uint256) {
         uint256 shortfallBps = _deallocateShortfallBps();
-        require(shortfallBps < BASIS_POINTS, "Invalid dealloc slippage");
         return _ceilDiv(shortfall * BASIS_POINTS, BASIS_POINTS - shortfallBps);
     }
 
