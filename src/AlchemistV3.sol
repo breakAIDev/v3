@@ -424,6 +424,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkArgument(recipient != address(0));
         _checkArgument(amount > 0);
         _checkState(!depositsPaused);
+        _checkState(!_isProtocolInBadDebt());
         _checkState(_mytSharesDeposited + amount <= depositCap);
 
         // Only mint a new position if the id is 0
@@ -454,7 +455,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkArgument(amount > 0);
         _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(tokenId), msg.sender);
         _earmark();
-
         _sync(tokenId);
 
         if (_accounts[tokenId].collateralBalance > _mytSharesDeposited) {
@@ -463,15 +463,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 debtShares = convertDebtTokensToYield(_accounts[tokenId].debt);
         uint256 lockedCollateral = FixedPointMath.mulDivUp(debtShares, minimumCollateralization, FIXED_POINT_SCALAR);
-        uint256 collateral = _accounts[tokenId].collateralBalance;
-        uint256 positionFree = collateral > lockedCollateral ? collateral - lockedCollateral : 0;
-
-        // Prevent zero-debt deposits from being withdrawn when global collateral is fully locked.
-        // This keeps bad-debt haircut accounting from being bypassed via temporary backing boosts.
-        uint256 required = _requiredLockedShares();
-        uint256 globalFree = _mytSharesDeposited > required ? _mytSharesDeposited - required : 0;
-        uint256 withdrawable = positionFree < globalFree ? positionFree : globalFree;
-        _checkArgument(amount <= withdrawable);
+        _checkArgument(_accounts[tokenId].collateralBalance - lockedCollateral >= amount);
         uint256 transferred = _subCollateralBalance(amount, tokenId);
 
         // Assure that the collateralization invariant is still held.
@@ -495,7 +487,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Query transmuter and earmark global debt
         _earmark();
-
+        _checkState(!_isProtocolInBadDebt());
         // Sync current user debt before more is taken
         _sync(tokenId);
 
@@ -514,7 +506,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         // Query transmuter and earmark global debt
         _earmark();
-
+        _checkState(!_isProtocolInBadDebt());
         // Sync current user debt before more is taken
         _sync(tokenId);
 
@@ -1699,6 +1691,18 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 lockedShares = required > held ? held : required;
         return convertYieldTokensToUnderlying(lockedShares);
     }
+    /// @dev Returns true if issued synthetics exceed global backing.
+    ///      Backing mirrors Transmuter claim math:
+    ///      locked collateral in Alchemist + MYT shares currently held by Transmuter.
+    function _isProtocolInBadDebt() internal view returns (bool) {
+        if (totalSyntheticsIssued == 0) return false;
+
+        uint256 transmuterShares = TokenUtils.safeBalanceOf(myt, address(transmuter));
+        uint256 backingUnderlying = _getTotalLockedUnderlyingValue() + convertYieldTokensToUnderlying(transmuterShares);
+        uint256 backingDebt = normalizeUnderlyingTokensToDebt(backingUnderlying);
+
+        return totalSyntheticsIssued > backingDebt;
+    }
 
     /// @dev Calculates locked collateral based on share price
     function _requiredLockedShares() internal view returns (uint256) {
@@ -1844,3 +1848,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
 }
+
+
+
+
+

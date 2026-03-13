@@ -12,7 +12,6 @@ contract PermissionedProxy {
         require(_admin != address(0), "zero");
         require(_operator != address(0), "zero");
         admin = _admin;
-        permissionedCalls[0xac9650d8] = true;
         operators[_operator] = true;
     }
 
@@ -66,7 +65,7 @@ contract PermissionedProxy {
         assembly {
           selector := mload(add(data, 32))
         }
-        require(!permissionedCalls[selector], "PD");
+        require(permissionedCalls[selector], "PD");
 
         (bool success, ) = vault.call{value: msg.value}(data);
         require(success, "failed");
