@@ -40,6 +40,7 @@ interface IERC4626Like is IERC4626 {
 contract TokeAutoStrategy is MYTStrategy {
     uint256 internal constant BASIS_POINTS = 10_000;
     uint256 internal constant MAX_DEALLOC_SHORTFALL_BUFFER_BPS = 200;
+    uint256 internal constant MIN_DEALLOC_SHORTFALL_BUFFER_BPS = 105;
 
     IERC20 public immutable mytAsset;
     IERC4626Like public immutable autoVault;
@@ -72,7 +73,7 @@ contract TokeAutoStrategy is MYTStrategy {
     }
 
     function setDeallocShortfallBufferBPS(uint256 newValue) external onlyOwner {
-        require(newValue <= MAX_DEALLOC_SHORTFALL_BUFFER_BPS, "Invalid dealloc slippage");
+        require(newValue >= MIN_DEALLOC_SHORTFALL_BUFFER_BPS && newValue <= MAX_DEALLOC_SHORTFALL_BUFFER_BPS, "Invalid dealloc slippage");
         deallocShortfallBufferBPS = newValue;
         emit DeallocShortfallBufferBPSUpdated(newValue);
     }
