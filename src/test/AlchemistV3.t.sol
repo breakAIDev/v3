@@ -294,6 +294,8 @@ contract AlchemistV3Test is Test {
         vm.stopPrank();
     }
 
+    
+
     function test_Liquidate_and_ForceRepay_Global_MYTSharesDeposited_Updated() external {
         uint256 amount = 200_000e18; // 200,000 yvdai
         // uint256 protocolFee = 100; // 10%
@@ -845,6 +847,34 @@ contract AlchemistV3Test is Test {
         assertEq(alchemist.getTotalUnderlyingValue(), alchemist.convertYieldTokensToUnderlying(amount));
 
         assertEq(alchemist.totalValue(tokenId), alchemist.getTotalUnderlyingValue());
+    }
+
+    function testDeposit_ReturnsTokenIdAndDebt() external {
+        uint256 amount = 100e18;
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        (uint256 tokenId, uint256 debtValue) = alchemist.deposit(amount, address(0xbeef), 0);
+        vm.stopPrank();
+
+        // Verify token id returned from deposit is the newly minted position id.
+        uint256 expectedTokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        assertEq(tokenId, expectedTokenId);
+        assertEq(debtValue, alchemist.convertYieldTokensToDebt(amount));
+    }
+
+    function testDeposit_ExistingPositionReturnsTokenIdAndDebt() external {
+        uint256 amount = 100e18;
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), (amount * 2) + 100e18);
+
+        (uint256 tokenId,) = alchemist.deposit(amount, address(0xbeef), 0);
+        (uint256 returnedTokenId, uint256 debtValue) = alchemist.deposit(amount, address(0xbeef), tokenId);
+        vm.stopPrank();
+
+        assertEq(returnedTokenId, tokenId);
+        assertEq(debtValue, alchemist.convertYieldTokensToDebt(amount));
     }
 
     function testDeposit_ExistingPosition(uint256 amount) external {

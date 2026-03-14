@@ -420,7 +420,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3Actions
-    function deposit(uint256 amount, address recipient, uint256 tokenId) external returns (uint256) {
+    function deposit(uint256 amount, address recipient, uint256 tokenId) external returns (uint256, uint256) {
         _checkArgument(recipient != address(0));
         _checkArgument(amount > 0);
         _checkState(!depositsPaused);
@@ -445,7 +445,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         emit Deposit(amount, tokenId);
 
-        return convertYieldTokensToDebt(amount);
+        return (tokenId, convertYieldTokensToDebt(amount));
     }
 
     /// @inheritdoc IAlchemistV3Actions
