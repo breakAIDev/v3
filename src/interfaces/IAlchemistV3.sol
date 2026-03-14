@@ -106,14 +106,15 @@ interface IAlchemistV3Actions {
     /// @notice address ydai = 0xdA816459F1AB5631232FE5e97a05BBBb94970c95;
     /// @notice uint256 amount = 50000;
     /// @notice IERC20(ydai).approve(alchemistAddress, amount);
-    /// @notice AlchemistV3(alchemistAddress).deposit(amount, msg.sender);
+    /// @notice (uint256 tokenId, uint256 debtValue) = AlchemistV3(alchemistAddress).deposit(amount, msg.sender, 0);
     /// @notice ```
     ///
     /// @param amount     The amount of yield tokens to deposit.
     /// @param recipient  The owner of the account that will receive the resulting shares.
     /// @param recipientId The id of account.
+    /// @return tokenId The id of the account.
     /// @return debtValue The value of deposited tokens normalized to debt token value.
-    function deposit(uint256 amount, address recipient, uint256 recipientId) external returns (uint256 debtValue);
+    function deposit(uint256 amount, address recipient, uint256 recipientId) external returns (uint256 tokenId, uint256 debtValue);
 
     /// @notice Withdraw `amount` yield tokens to `recipient`.
     ///
