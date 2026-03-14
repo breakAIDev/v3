@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 // Adjust these imports to your layout
 
-import {TokeAutoUSDStrategy} from "../../strategies/mainnet/TokeAutoUSDStrategy.sol";
+import {TokeAutoStrategy} from "../../strategies/TokeAutoStrategy.sol";
 import {BaseStrategyTest} from "../BaseStrategyTest.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
@@ -59,9 +59,17 @@ contract MockSwapExecutor {
     }
 }
 
-contract MockTokeAutoUSDStrategy is TokeAutoUSDStrategy {
-    constructor(address _myt, StrategyParams memory _params, address _autoUSD, address _rewarder, address _usdc)
-        TokeAutoUSDStrategy(_myt, _params, _autoUSD,  _rewarder, _usdc)
+contract MockTokeAutoUSDStrategy is TokeAutoStrategy {
+    constructor(
+        address _myt,
+        StrategyParams memory _params,
+        address _usdc,
+        address _autoUSD,
+        address _rewarder,
+        address _tokeRewardsToken,
+        uint256 _deallocShortfallBufferBPS
+    )
+        TokeAutoStrategy(_myt, _params, _usdc, _autoUSD, _rewarder, _tokeRewardsToken, _deallocShortfallBufferBPS)
     {}
 }
 
@@ -90,7 +98,7 @@ contract TokeAutoUSDStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockTokeAutoUSDStrategy(vault, params, USDC, TOKE_AUTO_USD_VAULT, REWARDER));
+        return address(new MockTokeAutoUSDStrategy(vault, params, USDC, TOKE_AUTO_USD_VAULT, REWARDER, TOKE, 0));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

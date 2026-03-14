@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {MYTStrategy} from "../MYTStrategy.sol";
+import {IMainRewarder} from "./interfaces/ITokemac.sol";
+import {TokenUtils} from "../libraries/TokenUtils.sol";
+
+interface IERC4626Like is IERC4626 {
+    function convertToShares(uint256 assets, uint256 totalAssetsForPurpose, uint256 supply, Rounding rounding)
+        external
+        view
+        returns (uint256 shares);
+
+    function convertToAssets(uint256 shares, uint256 totalAssetsForPurpose, uint256 supply, Rounding rounding)
+        external
+        view
+        returns (uint256 assets);
+
+    function totalAssets(TotalAssetPurpose purpose) external view returns (uint256);
+
+    enum Rounding {
+        Down, // Toward negative infinity
+        Up, // Toward infinity
+        Zero // Toward zero
+    }
+
+    enum TotalAssetPurpose {
+        Global,
+        Deposit,
+        Withdraw
+    }
+}
+
+/**
+ * @title TokeAutoStrategy
+ * @notice Generic Tokemak auto-vault strategy with rewarder staking.
+ */
+contract TokeAutoStrategy is MYTStrategy {
+    uint256 internal constant BASIS_POINTS = 10_000;
+    uint256 internal constant MAX_DEALLOC_SHORTFALL_BUFFER_BPS = 200;
+
+    IERC20 public immutable mytAsset;
+    IERC4626Like public immutable autoVault;
+    IMainRewarder public immutable rewarder;
+    address public immutable tokeRewardsToken;
+
+    // used in share redemption estimation in deallocate
+    uint256 public deallocShortfallBufferBPS;
+
+    event DeallocShortfallBufferBPSUpdated(uint256 newValue);
+
+    constructor(
+        address _myt,
+        StrategyParams memory _params,
+        address _asset,
+        address _autoVault,
+        address _rewarder,
+        address _tokeRewardsToken,
+        uint256 _deallocShortfallBufferBPS
+    ) MYTStrategy(_myt, _params) {
+        require(_deallocShortfallBufferBPS <= MAX_DEALLOC_SHORTFALL_BUFFER_BPS, "Invalid dealloc slippage");
+        require(_asset == MYT.asset(), "Vault asset != MYT asset");
+        require(_tokeRewardsToken != address(0), "Invalid rewards token");
+
+        mytAsset = IERC20(_asset);
+        autoVault = IERC4626Like(_autoVault);
+        rewarder = IMainRewarder(_rewarder);
+        tokeRewardsToken = _tokeRewardsToken;
+        deallocShortfallBufferBPS = _deallocShortfallBufferBPS;
+    }
+
+    function setDeallocShortfallBufferBPS(uint256 newValue) external onlyOwner {
+        require(newValue <= MAX_DEALLOC_SHORTFALL_BUFFER_BPS, "Invalid dealloc slippage");
+        deallocShortfallBufferBPS = newValue;
+        emit DeallocShortfallBufferBPSUpdated(newValue);
+    }
+
+    function _allocate(uint256 amount) internal virtual override returns (uint256) {
+        require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Strategy balance is less than amount");
+
+        TokenUtils.safeApprove(address(mytAsset), address(autoVault), amount);
+        uint256 shares = autoVault.deposit(amount, address(this));
+
+        uint256 assetsReceived = autoVault.convertToAssets(
+            shares,
+            autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
+            autoVault.totalSupply(),
+            IERC4626Like.Rounding.Down
+        );
+        require(assetsReceived >= amount * (BASIS_POINTS - params.slippageBPS) / BASIS_POINTS, "Deposit value below minimum");
+
+        TokenUtils.safeApprove(address(autoVault), address(rewarder), shares);
+        rewarder.stake(address(this), shares);
+        return assetsReceived;
+    }
+
+    function _deallocate(uint256 amount) internal virtual override returns (uint256) {
+        uint256 assetBalance = _idleAssets();
+        if (assetBalance < amount) {
+            uint256 totalAssetsForWithdraw = autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw);
+            uint256 totalSupply = autoVault.totalSupply();
+            uint256 shortfall = amount - assetBalance;
+            uint256 bufferedShortfall = _bufferedShortfall(shortfall);
+            uint256 sharesNeeded =
+                autoVault.convertToShares(bufferedShortfall, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Up);
+
+            uint256 directShares = autoVault.balanceOf(address(this));
+            uint256 stakedShares = rewarder.balanceOf(address(this));
+            uint256 totalShares = directShares + stakedShares;
+            if (sharesNeeded > totalShares) sharesNeeded = totalShares;
+
+            if (sharesNeeded > directShares) {
+                rewarder.withdraw(address(this), sharesNeeded - directShares, false);
+            }
+            autoVault.redeem(sharesNeeded, address(this), address(this));
+        }
+
+        require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Withdraw amount insufficient");
+        TokenUtils.safeApprove(address(mytAsset), msg.sender, amount);
+        return amount;
+    }
+
+    function _totalValue() internal view virtual override returns (uint256) {
+        uint256 shares = rewarder.balanceOf(address(this)) + autoVault.balanceOf(address(this));
+        uint256 assets = autoVault.convertToAssets(
+            shares,
+            autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
+            autoVault.totalSupply(),
+            IERC4626Like.Rounding.Down
+        );
+        return _idleAssets() + assets;
+    }
+
+    function _idleAssets() internal view virtual override returns (uint256) {
+        return TokenUtils.safeBalanceOf(address(mytAsset), address(this));
+    }
+
+    function _previewAdjustedWithdraw(uint256 amount) internal view virtual override returns (uint256) {
+        uint256 sharesNeeded = autoVault.convertToShares(
+            amount,
+            autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
+            autoVault.totalSupply(),
+            IERC4626Like.Rounding.Up
+        );
+        uint256 totalShares = rewarder.balanceOf(address(this)) + autoVault.balanceOf(address(this));
+        if (sharesNeeded > totalShares) sharesNeeded = totalShares;
+
+        uint256 assets = autoVault.convertToAssets(
+            sharesNeeded,
+            autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw),
+            autoVault.totalSupply(),
+            IERC4626Like.Rounding.Down
+        );
+        return assets - (assets * params.slippageBPS / BASIS_POINTS);
+    }
+
+    function _claimRewards(address token, bytes memory quote, uint256 minAmountOut)
+        internal
+        virtual
+        override
+        returns (uint256 rewardsClaimed)
+    {
+        require(token == tokeRewardsToken && quote.length > 0, "params");
+        uint256 rewardsBalanceBefore = TokenUtils.safeBalanceOf(token, address(this));
+        bool claimExtra = rewarder.allowExtraRewards();
+        rewarder.getReward(address(this), address(this), claimExtra);
+        uint256 rewardsReceived = TokenUtils.safeBalanceOf(token, address(this)) - rewardsBalanceBefore;
+        if (rewardsReceived == 0) return 0;
+
+        bool stakingDisabled = rewarder.rewardToken() != tokeRewardsToken || rewarder.tokeLockDuration() == 0;
+        if (!stakingDisabled) return 0;
+
+        emit RewardsClaimed(address(token), rewardsReceived);
+        uint256 amountOut = dexSwap(MYT.asset(), token, IERC20(token).balanceOf(address(this)), minAmountOut, quote);
+        TokenUtils.safeTransfer(address(MYT.asset()), address(MYT), amountOut);
+        return amountOut;
+    }
+
+    function _isProtectedToken(address token) internal view virtual override returns (bool) {
+        return token == MYT.asset() || token == address(autoVault);
+    }
+
+    function _bufferedShortfall(uint256 shortfall) internal view returns (uint256) {
+        uint256 shortfallBps = deallocShortfallBufferBPS;
+        return _ceilDiv(shortfall * BASIS_POINTS, BASIS_POINTS - shortfallBps);
+    }
+
+    function _ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a == 0 ? 0 : 1 + ((a - 1) / b);
+    }
+}

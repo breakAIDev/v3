@@ -14,7 +14,7 @@ import {IAllocator} from "../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
-import {TokeAutoEthStrategy} from "../strategies/mainnet/TokeAutoETHStrategy.sol";
+import {TokeAutoStrategy} from "../strategies/TokeAutoStrategy.sol";
 
 /// @title MultiStrategyETHHandler
 /// @notice Handler for invariant testing multiple ETH strategies attached to a single vault
@@ -551,6 +551,7 @@ contract MultiStrategyETHInvariantTest is Test {
     address public constant PEAPODS_ETH_VAULT = 0x9a42e1bEA03154c758BeC4866ec5AD214D4F2191;
     address public constant TOKE_AUTO_ETH_VAULT = 0x0A2b94F6871c1D7A32Fe58E1ab5e6deA2f114E56;
     address public constant TOKE_REWARDER_ETH = 0x60882D6f70857606Cdd37729ccCe882015d1755E;
+    address public constant TOKE = 0x2e9d63788249371f1DFC918a52f8d799F4a38C94;
     address public constant TOKE_ORACLE = 0x61F8BE7FD721e80C0249829eaE6f0DAf21bc2CaC;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000 ether;
@@ -675,13 +676,14 @@ contract MultiStrategyETHInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new TokeAutoEthStrategy(
+        return address(new TokeAutoStrategy(
             address(vault),
             params,
+            WETH,
             TOKE_AUTO_ETH_VAULT,
             TOKE_REWARDER_ETH,
-            WETH,
-            TOKE_ORACLE
+            TOKE,
+            105
         ));
     }
     
