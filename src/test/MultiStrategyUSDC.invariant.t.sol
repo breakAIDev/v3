@@ -14,7 +14,7 @@ import {IAllocator} from "../interfaces/IAllocator.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {ERC4626Strategy} from "../strategies/ERC4626Strategy.sol";
-import {TokeAutoUSDStrategy} from "../strategies/mainnet/TokeAutoUSDStrategy.sol";
+import {TokeAutoStrategy} from "../strategies/TokeAutoStrategy.sol";
 
 /// @title MultiStrategyUSDCHandler
 /// @notice Handler for invariant testing multiple USDC strategies attached to a single vault
@@ -522,6 +522,7 @@ contract MultiStrategyUSDCInvariantTest is Test {
     address public constant PEAPODS_USDC_VAULT = 0x3717e340140D30F3A077Dd21fAc39A86ACe873AA;
     address public constant TOKE_AUTO_USD_VAULT = 0xa7569A44f348d3D70d8ad5889e50F78E33d80D35;
     address public constant TOKE_REWARDER_USD = 0x726104CfBd7ece2d1f5b3654a19109A9e2b6c27B;
+    address public constant TOKE = 0x2e9d63788249371f1DFC918a52f8d799F4a38C94;
     
     uint256 public constant INITIAL_VAULT_DEPOSIT = 10_000_000e6; // 10M USDC
     uint256 public constant ABSOLUTE_CAP = 50_000_000e6; // 50M USDC per strategy
@@ -644,12 +645,14 @@ contract MultiStrategyUSDCInvariantTest is Test {
             slippageBPS: 50
         });
         
-        return address(new TokeAutoUSDStrategy(
+        return address(new TokeAutoStrategy(
             address(vault),
             params,
             USDC,
             TOKE_AUTO_USD_VAULT,
-            TOKE_REWARDER_USD
+            TOKE_REWARDER_USD,
+            TOKE,
+            0
         ));
     }
     

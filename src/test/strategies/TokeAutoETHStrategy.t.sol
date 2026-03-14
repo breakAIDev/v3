@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 // Adjust these imports to your layout
 
-import {TokeAutoEthStrategy} from "../../strategies/mainnet/TokeAutoETHStrategy.sol";
+import {TokeAutoStrategy} from "../../strategies/TokeAutoStrategy.sol";
 import {BaseStrategyTest, RevertContext} from "../BaseStrategyTest.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
@@ -88,15 +88,16 @@ contract MockSwapExecutor {
     }
 }
 
-contract MockTokeAutoEthStrategy is TokeAutoEthStrategy {
+contract MockTokeAutoEthStrategy is TokeAutoStrategy {
     constructor(
         address _myt,
         StrategyParams memory _params,
         address _autoEth,
         address _rewarder,
         address _weth,
-        address _oracle
-    ) TokeAutoEthStrategy(_myt, _params, _autoEth, _rewarder, _weth, _oracle) {}
+        address _tokeRewardsToken,
+        uint256 _deallocShortfallBufferBPS
+    ) TokeAutoStrategy(_myt, _params, _weth, _autoEth, _rewarder, _tokeRewardsToken, _deallocShortfallBufferBPS) {}
 }
 
 contract TokeAutoETHStrategyTest is BaseStrategyTest {
@@ -122,7 +123,7 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
             globalCap: 1e18,
             estimatedYield: 100e18,
             additionalIncentives: false,
-            slippageBPS: 100
+            slippageBPS: 30
         });
     }
 
@@ -131,7 +132,7 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockTokeAutoEthStrategy(vault, params, TOKE_AUTO_ETH_VAULT, REWARDER, WETH, ORACLE));
+        return address(new MockTokeAutoEthStrategy(vault, params, TOKE_AUTO_ETH_VAULT, REWARDER, WETH, TOKE, 105));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {
