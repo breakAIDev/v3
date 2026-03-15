@@ -5058,6 +5058,22 @@ contract AlchemistV3Test is Test {
         uint256 cumulativeEarmarked;
     }
 
+    struct DriftPathState {
+        ReplayState target;
+        PrecisionAggregate aggregate;
+        uint256 totalDeposited;
+    }
+
+    struct CollateralDriftMetrics {
+        uint256 collateralDrift;
+        uint256 debtDrift;
+        uint256 earmarkDrift;
+        uint256 aggregateCollateralDelta;
+        uint256 aggregateDebtDelta;
+        uint256 aggregateEarmarkDelta;
+        uint256 totalDeposited;
+    }
+
     /// @dev Cross-check stale sync math across many epoch crossings:
     ///      path A syncs the account every cycle; path B leaves it stale and syncs once at the end.
     ///      Results should match up to tiny rounding noise.
@@ -5121,6 +5137,81 @@ contract AlchemistV3Test is Test {
         assertApproxEqAbs(split.sumDebt, unsplit.sumDebt, tol, "split-vs-unsplit debt mismatch");
         assertApproxEqAbs(split.sumEarmarked, unsplit.sumEarmarked, tol, "split-vs-unsplit earmarked mismatch");
         assertApproxEqAbs(split.sumCollateral, unsplit.sumCollateral, tol, "split-vs-unsplit collateral mismatch");
+    }
+
+    function test_Regression_CollateralDriftBound_LossShocks() external {
+        uint256 root = vm.snapshotState();
+
+        CollateralDriftMetrics memory severe = _measureCollateralDriftScenario(80, 2_500, 2_000, 4, 2_000, 1);
+        _assertCollateralDriftMetrics(severe, 1e12, "loss_shocks_severe");
+
+        vm.revertTo(root);
+
+        CollateralDriftMetrics memory frequent = _measureCollateralDriftScenario(120, 1_500, 1_000, 3, 500, 1);
+        _assertCollateralDriftMetrics(frequent, 1e12, "loss_shocks_frequent");
+    }
+
+    function test_Regression_CollateralDriftBound_GainShocks() external {
+        uint256 root = vm.snapshotState();
+
+        CollateralDriftMetrics memory severe = _measureCollateralDriftScenario(80, 2_500, 2_000, 4, 2_000, 2);
+        _assertCollateralDriftMetrics(severe, 1e12, "gain_shocks_severe");
+
+        vm.revertTo(root);
+
+        CollateralDriftMetrics memory frequent = _measureCollateralDriftScenario(120, 1_500, 1_000, 3, 300, 2);
+        _assertCollateralDriftMetrics(frequent, 1e12, "gain_shocks_frequent");
+    }
+
+    function test_Regression_CollateralDriftBound_AlternatingShocks() external {
+        CollateralDriftMetrics memory alternating = _measureCollateralDriftScenario(100, 2_000, 1_500, 2, 1_000, 3);
+        _assertCollateralDriftMetrics(alternating, 1e12, "alternating_shocks");
+    }
+
+    function test_Regression_CollateralDriftBound_AlternatingShocksWithInterleavedBorrow() external {
+        CollateralDriftMetrics memory alternating = _measureCollateralDriftScenarioWithInterleavedBorrow(
+            120,
+            2_000,
+            1_500,
+            2,
+            1_000,
+            3,
+            3,
+            500
+        );
+        _assertCollateralDriftMetrics(alternating, 1e12, "alternating_shocks_with_borrow");
+    }
+
+    function test_Regression_CollateralDriftBound_LongRunAlternatingShocksWithBorrow() external {
+        CollateralDriftMetrics memory alternating = _measureCollateralDriftScenarioWithInterleavedBorrow(
+            240,
+            1_500,
+            1_000,
+            2,
+            500,
+            3,
+            4,
+            250
+        );
+        _assertCollateralDriftMetrics(alternating, 1e12, "long_run_alternating_shocks_with_borrow");
+    }
+
+    /// @dev Document the still-open claim path where interleaved fresh borrowing
+    ///      between claim windows can produce a materially larger stale residual.
+    function test_PoC_ClaimPathCollateralResidualCanGrow_WithInterleavedBorrow() external {
+        CollateralDriftMetrics memory claimPath = _measureClaimPathResidualScenario(true);
+
+        emit log_named_string("driftScenario", "claim_path_residual_with_borrow_poc");
+        emit log_named_uint("collateralDrift", claimPath.collateralDrift);
+        emit log_named_uint("aggregateCollateralDelta", claimPath.aggregateCollateralDelta);
+
+        assertGt(claimPath.collateralDrift, 1e18, "expected materially non-zero claim-path residual");
+        assertGt(claimPath.aggregateCollateralDelta, 1e18, "expected materially non-zero aggregate residual");
+    }
+
+    function test_Regression_ClaimPathCollateralResidualBound() external {
+        CollateralDriftMetrics memory claimPath = _measureClaimPathResidualScenario(false);
+        _assertCollateralDriftMetrics(claimPath, 1e12, "claim_path_residual");
     }
 
     function _assertStaleEpochReplayEquivalence(uint256 staleEpochs) internal {
@@ -5273,6 +5364,358 @@ contract AlchemistV3Test is Test {
         }
         s.totalDebt = alchemist.totalDebt();
         s.cumulativeEarmarked = alchemist.cumulativeEarmarked();
+    }
+
+    function _measureCollateralDriftScenario(
+        uint256 steps,
+        uint256 earmarkBps,
+        uint256 redeemBps,
+        uint256 shockEvery,
+        uint256 shockBps,
+        uint256 shockMode
+    ) internal returns (CollateralDriftMetrics memory m) {
+        uint256 root = vm.snapshotState();
+
+        DriftPathState memory replay = _runCollateralDriftPath(steps, earmarkBps, redeemBps, shockEvery, shockBps, shockMode, true);
+
+        vm.revertToState(root);
+
+        DriftPathState memory stale = _runCollateralDriftPath(steps, earmarkBps, redeemBps, shockEvery, shockBps, shockMode, false);
+
+        m.collateralDrift = _abs(stale.target.collateral, replay.target.collateral);
+        m.debtDrift = _abs(stale.target.debt, replay.target.debt);
+        m.earmarkDrift = _abs(stale.target.earmarked, replay.target.earmarked);
+        m.aggregateCollateralDelta = _abs(stale.aggregate.sumCollateral, stale.totalDeposited);
+        m.aggregateDebtDelta = _abs(stale.aggregate.sumDebt, stale.aggregate.totalDebt);
+        m.aggregateEarmarkDelta = _abs(stale.aggregate.sumEarmarked, stale.aggregate.cumulativeEarmarked);
+        m.totalDeposited = stale.totalDeposited;
+    }
+
+    function _measureCollateralDriftScenarioWithInterleavedBorrow(
+        uint256 steps,
+        uint256 earmarkBps,
+        uint256 redeemBps,
+        uint256 shockEvery,
+        uint256 shockBps,
+        uint256 shockMode,
+        uint256 borrowEvery,
+        uint256 borrowBpsOfMax
+    ) internal returns (CollateralDriftMetrics memory m) {
+        uint256 root = vm.snapshotState();
+
+        DriftPathState memory replay = _runCollateralDriftPathWithInterleavedBorrow(
+            steps,
+            earmarkBps,
+            redeemBps,
+            shockEvery,
+            shockBps,
+            shockMode,
+            true,
+            borrowEvery,
+            borrowBpsOfMax
+        );
+
+        vm.revertToState(root);
+
+        DriftPathState memory stale = _runCollateralDriftPathWithInterleavedBorrow(
+            steps,
+            earmarkBps,
+            redeemBps,
+            shockEvery,
+            shockBps,
+            shockMode,
+            false,
+            borrowEvery,
+            borrowBpsOfMax
+        );
+
+        m.collateralDrift = _abs(stale.target.collateral, replay.target.collateral);
+        m.debtDrift = _abs(stale.target.debt, replay.target.debt);
+        m.earmarkDrift = _abs(stale.target.earmarked, replay.target.earmarked);
+        m.aggregateCollateralDelta = _abs(stale.aggregate.sumCollateral, stale.totalDeposited);
+        m.aggregateDebtDelta = _abs(stale.aggregate.sumDebt, stale.aggregate.totalDebt);
+        m.aggregateEarmarkDelta = _abs(stale.aggregate.sumEarmarked, stale.aggregate.cumulativeEarmarked);
+        m.totalDeposited = stale.totalDeposited;
+    }
+
+    function _measureClaimPathResidualScenario(bool withInterleavedBorrow)
+        internal
+        returns (CollateralDriftMetrics memory m)
+    {
+        uint256 beefId = _openPrecisionPosition(address(0xbeef), 150_000e18, 0);
+        uint256 dadId = _openPrecisionPosition(address(0xdad), 150_000e18, 0);
+
+        vm.prank(address(0xbeef));
+        alchemist.mint(beefId, 20_000e18, externalUser);
+        vm.prank(address(0xbeef));
+        alchemist.mint(beefId, 12_000e18, yetAnotherExternalUser);
+        vm.prank(address(0xdad));
+        alchemist.mint(dadId, 5_000e18, address(0xdad));
+
+        vm.startPrank(externalUser);
+        IERC20(address(alToken)).approve(address(transmuterLogic), type(uint256).max);
+        transmuterLogic.createRedemption(20_000e18);
+        vm.stopPrank();
+
+        vm.startPrank(yetAnotherExternalUser);
+        IERC20(address(alToken)).approve(address(transmuterLogic), type(uint256).max);
+        transmuterLogic.createRedemption(12_000e18);
+        vm.stopPrank();
+
+        uint256 root = vm.snapshotState();
+
+        DriftPathState memory replay = _runClaimPathResidualPath(beefId, dadId, true, withInterleavedBorrow);
+
+        vm.revertToState(root);
+
+        DriftPathState memory stale = _runClaimPathResidualPath(beefId, dadId, false, withInterleavedBorrow);
+
+        m.collateralDrift = _abs(stale.target.collateral, replay.target.collateral);
+        m.debtDrift = _abs(stale.target.debt, replay.target.debt);
+        m.earmarkDrift = _abs(stale.target.earmarked, replay.target.earmarked);
+        m.aggregateCollateralDelta = _abs(stale.aggregate.sumCollateral, stale.totalDeposited);
+        m.aggregateDebtDelta = _abs(stale.aggregate.sumDebt, stale.aggregate.totalDebt);
+        m.aggregateEarmarkDelta = _abs(stale.aggregate.sumEarmarked, stale.aggregate.cumulativeEarmarked);
+        m.totalDeposited = stale.totalDeposited;
+    }
+
+    function _runCollateralDriftPath(
+        uint256 steps,
+        uint256 earmarkBps,
+        uint256 redeemBps,
+        uint256 shockEvery,
+        uint256 shockBps,
+        uint256 shockMode,
+        bool syncTargetEveryStep
+    ) internal returns (DriftPathState memory s) {
+        uint256 beefId = _openPrecisionPosition(address(0xbeef), 100_000e18, 25_000e18);
+        uint256 dadId = _openPrecisionPosition(address(0xdad), 100_000e18, 5_000e18);
+
+        address mytToken = alchemist.myt();
+        uint256[] memory tokenIds = new uint256[](2);
+        tokenIds[0] = beefId;
+        tokenIds[1] = dadId;
+
+        for (uint256 i = 0; i < steps; ++i) {
+            uint256 totalDebtBefore = alchemist.totalDebt();
+            if (totalDebtBefore == 0) break;
+
+            vm.roll(block.number + 1);
+
+            uint256 transmuterMytBalance = IERC20(mytToken).balanceOf(address(transmuterLogic));
+            vm.prank(address(transmuterLogic));
+            alchemist.setTransmuterTokenBalance(transmuterMytBalance);
+
+            uint256 liveUnearmarked = totalDebtBefore - alchemist.cumulativeEarmarked();
+            uint256 earmarkAmount = liveUnearmarked * earmarkBps / BPS;
+            if (liveUnearmarked != 0 && earmarkAmount == 0) earmarkAmount = 1;
+
+            vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(earmarkAmount));
+
+            alchemist.poke(dadId);
+
+            uint256 liveEarmarked = alchemist.cumulativeEarmarked();
+            if (liveEarmarked != 0) {
+                uint256 redeemAmount = liveEarmarked * redeemBps / BPS;
+                if (redeemAmount == 0) redeemAmount = 1;
+
+                vm.prank(address(transmuterLogic));
+                alchemist.redeem(redeemAmount);
+            }
+
+            if (shockEvery != 0 && (i + 1) % shockEvery == 0) {
+                _applyCollateralShock(shockBps, shockMode, i);
+            }
+
+            if (syncTargetEveryStep) {
+                alchemist.poke(beefId);
+            }
+        }
+
+        alchemist.poke(beefId);
+        alchemist.poke(dadId);
+
+        s.target = _captureReplayState(beefId);
+        s.aggregate = _capturePrecisionAggregate(tokenIds);
+        s.totalDeposited = alchemist.getTotalDeposited();
+    }
+
+    function _runCollateralDriftPathWithInterleavedBorrow(
+        uint256 steps,
+        uint256 earmarkBps,
+        uint256 redeemBps,
+        uint256 shockEvery,
+        uint256 shockBps,
+        uint256 shockMode,
+        bool syncTargetEveryStep,
+        uint256 borrowEvery,
+        uint256 borrowBpsOfMax
+    ) internal returns (DriftPathState memory s) {
+        uint256 beefId = _openPrecisionPosition(address(0xbeef), 100_000e18, 25_000e18);
+        uint256 dadId = _openPrecisionPosition(address(0xdad), 100_000e18, 5_000e18);
+
+        address mytToken = alchemist.myt();
+        uint256[] memory tokenIds = new uint256[](2);
+        tokenIds[0] = beefId;
+        tokenIds[1] = dadId;
+
+        for (uint256 i = 0; i < steps; ++i) {
+            uint256 totalDebtBefore = alchemist.totalDebt();
+            if (totalDebtBefore == 0) break;
+
+            vm.roll(block.number + 1);
+
+            uint256 transmuterMytBalance = IERC20(mytToken).balanceOf(address(transmuterLogic));
+            vm.prank(address(transmuterLogic));
+            alchemist.setTransmuterTokenBalance(transmuterMytBalance);
+
+            uint256 liveUnearmarked = totalDebtBefore - alchemist.cumulativeEarmarked();
+            uint256 earmarkAmount = liveUnearmarked * earmarkBps / BPS;
+            if (liveUnearmarked != 0 && earmarkAmount == 0) earmarkAmount = 1;
+
+            vm.mockCall(address(transmuterLogic), abi.encodeWithSelector(ITransmuter.queryGraph.selector), abi.encode(earmarkAmount));
+
+            alchemist.poke(dadId);
+
+            uint256 liveEarmarked = alchemist.cumulativeEarmarked();
+            if (liveEarmarked != 0) {
+                uint256 redeemAmount = liveEarmarked * redeemBps / BPS;
+                if (redeemAmount == 0) redeemAmount = 1;
+
+                vm.prank(address(transmuterLogic));
+                alchemist.redeem(redeemAmount);
+            }
+
+            if (shockEvery != 0 && (i + 1) % shockEvery == 0) {
+                _applyCollateralShock(shockBps, shockMode, i);
+            }
+
+            if (borrowEvery != 0 && (i + 1) % borrowEvery == 0) {
+                uint256 maxBorrowable = alchemist.getMaxBorrowable(dadId);
+                uint256 borrowAmount = maxBorrowable * borrowBpsOfMax / BPS;
+                if (borrowAmount != 0) {
+                    vm.prank(address(0xdad));
+                    alchemist.mint(dadId, borrowAmount, address(0xdad));
+                }
+            }
+
+            if (syncTargetEveryStep) {
+                alchemist.poke(beefId);
+            }
+        }
+
+        alchemist.poke(beefId);
+        alchemist.poke(dadId);
+
+        s.target = _captureReplayState(beefId);
+        s.aggregate = _capturePrecisionAggregate(tokenIds);
+        s.totalDeposited = alchemist.getTotalDeposited();
+    }
+
+    function _runClaimPathResidualPath(uint256 beefId, uint256 dadId, bool syncTargetEveryEvent, bool withInterleavedBorrow)
+        internal
+        returns (DriftPathState memory s)
+    {
+        uint256[] memory tokenIds = new uint256[](2);
+        tokenIds[0] = beefId;
+        tokenIds[1] = dadId;
+        uint256 transmuteWindow = transmuterLogic.timeToTransmute();
+
+        vm.roll(block.number + (transmuteWindow * 4 / 10));
+        alchemist.poke(dadId);
+        if (syncTargetEveryEvent) alchemist.poke(beefId);
+
+        vm.prank(externalUser);
+        transmuterLogic.claimRedemption(1);
+        if (syncTargetEveryEvent) alchemist.poke(beefId);
+
+        _applyCollateralShock(1_000, 1, 0);
+
+        if (withInterleavedBorrow) {
+            vm.roll(block.number + 1);
+            uint256 maxBorrowable = alchemist.getMaxBorrowable(dadId);
+            uint256 extraBorrow = maxBorrowable / 20;
+            if (extraBorrow != 0) {
+                vm.prank(address(0xdad));
+                alchemist.mint(dadId, extraBorrow, anotherExternalUser);
+
+                vm.startPrank(anotherExternalUser);
+                IERC20(address(alToken)).approve(address(transmuterLogic), type(uint256).max);
+                transmuterLogic.createRedemption(extraBorrow);
+                vm.stopPrank();
+            }
+            if (syncTargetEveryEvent) alchemist.poke(beefId);
+        }
+
+        vm.roll(block.number + (transmuteWindow * 3 / 10));
+        alchemist.poke(dadId);
+        if (syncTargetEveryEvent) alchemist.poke(beefId);
+
+        vm.prank(yetAnotherExternalUser);
+        transmuterLogic.claimRedemption(2);
+        if (syncTargetEveryEvent) alchemist.poke(beefId);
+
+        _applyCollateralShock(500, 2, 1);
+
+        if (withInterleavedBorrow) {
+            vm.roll(block.number + (transmuteWindow * 6 / 10));
+            alchemist.poke(dadId);
+            if (syncTargetEveryEvent) alchemist.poke(beefId);
+
+            vm.prank(anotherExternalUser);
+            transmuterLogic.claimRedemption(3);
+            if (syncTargetEveryEvent) alchemist.poke(beefId);
+        }
+
+        alchemist.poke(beefId);
+        alchemist.poke(dadId);
+
+        s.target = _captureReplayState(beefId);
+        s.aggregate = _capturePrecisionAggregate(tokenIds);
+        s.totalDeposited = alchemist.getTotalDeposited();
+    }
+
+    function _applyCollateralShock(uint256 shockBps, uint256 shockMode, uint256 step) internal {
+        if (shockMode == 0 || shockBps == 0) return;
+
+        bool applyLoss = shockMode == 1 || (shockMode == 3 && step % 2 == 0);
+        bool applyGain = shockMode == 2 || (shockMode == 3 && step % 2 == 1);
+        uint256 currentUnderlying = IERC20(mockVaultCollateral).balanceOf(mockStrategyYieldToken);
+        uint256 shockAmount = currentUnderlying * shockBps / BPS;
+        if (shockAmount == 0) return;
+
+        if (applyLoss) {
+            if ((currentUnderlying - shockAmount) > currentUnderlying / 10) {
+                ITestYieldToken(mockStrategyYieldToken).siphon(shockAmount);
+            }
+            return;
+        }
+
+        if (applyGain) {
+            deal(mockVaultCollateral, address(this), shockAmount);
+            IERC20(mockVaultCollateral).approve(mockStrategyYieldToken, shockAmount);
+            ITestYieldToken(mockStrategyYieldToken).slurp(shockAmount);
+        }
+    }
+
+    function _assertCollateralDriftMetrics(
+        CollateralDriftMetrics memory m,
+        uint256 collateralBound,
+        string memory label
+    ) internal {
+        emit log_named_string("driftScenario", label);
+        emit log_named_uint("collateralDrift", m.collateralDrift);
+        emit log_named_uint("debtDrift", m.debtDrift);
+        emit log_named_uint("earmarkDrift", m.earmarkDrift);
+        emit log_named_uint("aggregateCollateralDelta", m.aggregateCollateralDelta);
+        emit log_named_uint("aggregateDebtDelta", m.aggregateDebtDelta);
+        emit log_named_uint("aggregateEarmarkDelta", m.aggregateEarmarkDelta);
+        emit log_named_uint("totalDeposited", m.totalDeposited);
+
+        assertLe(m.collateralDrift, collateralBound, "stale-vs-replay collateral drift too large");
+        assertLe(m.aggregateCollateralDelta, collateralBound, "aggregate collateral drift too large");
+        assertLe(m.aggregateDebtDelta, 100, "aggregate debt drift too large");
+        assertLe(m.aggregateEarmarkDelta, 100, "aggregate earmark drift too large");
     }
 
     function test_QueryGraphBug_ConsecutiveBlocksUnderearmarksCausesRedemptionLoss() external {
