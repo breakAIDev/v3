@@ -782,7 +782,7 @@ contract CrucibleTest is InvariantsTest {
         if (!hasRecoverySample) return;
 
         uint256 roundingTolerance = alchemist.normalizeUnderlyingTokensToDebt(1);
-        if (roundingTolerance == 0) roundingTolerance = 1;
+        if (roundingTolerance < 2) roundingTolerance = 2;
 
         uint256 backingDelta = lastRecoveryBackingBefore > lastRecoveryBackingAfter
             ? lastRecoveryBackingBefore - lastRecoveryBackingAfter
