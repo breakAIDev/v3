@@ -170,8 +170,4 @@ contract TokeAutoStrategy is MYTStrategy {
     }
 
 
-    function _bufferedShortfall(uint256 shortfall) internal view returns (uint256) {
-        uint256 shortfallBps = deallocShortfallBufferBPS;
-        return Math.ceilDiv(shortfall * BASIS_POINTS, BASIS_POINTS - shortfallBps);
-    }
 }

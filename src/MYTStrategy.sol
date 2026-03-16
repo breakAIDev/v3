@@ -97,6 +97,9 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     {
         if (assets == 0) revert InvalidAmount(1, 0);
 
+        uint256 oldAllocation = allocation();
+        uint256 totalValueBefore = _totalValue();
+
         VaultAdapterParams memory adapterParams = abi.decode(data, (VaultAdapterParams));
         uint256 amountDeallocated;
 
@@ -110,11 +113,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
             revert ActionNotSupported();
         }
 
-        uint256 oldAllocation = allocation();
-        uint256 totalValue = _totalValue();
-        // TODO check if the assumption from below is correct!
-        // Can we actually try to deallocate more than oldAllocation (ie by yield contribution?)
-        uint256 newAllocation = totalValue > assets ? totalValue - assets : 0;
+        uint256 newAllocation = totalValueBefore > assets ? totalValueBefore - assets : 0;
         emit Deallocate(amountDeallocated, address(this));
         return (ids(), int256(newAllocation) - int256(oldAllocation));
     }

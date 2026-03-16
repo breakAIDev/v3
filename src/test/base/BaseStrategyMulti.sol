@@ -296,7 +296,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
 
         uint256 realAssetsHistoryMin = type(uint256).max;
         uint256 realAssetsHistoryMax = 0;
-
+        uint256 currentRealAssets = 0;
         for (uint8 i = 0; i < numOperations; i++) {
             bool isAllocate = i % 2 == 0;
             uint256 amount = baseAmount * (1 + (i % 5)) / 5;
@@ -308,7 +308,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
                     _allocateOrSkipWhitelisted(amount, RevertContext.FuzzAllocate);
                 }
             } else {
-                uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
+                currentRealAssets = IMYTStrategy(strategy).realAssets();
                 if (currentRealAssets > 0) {
                     uint256 deallocationAmount = currentRealAssets > amount ? amount : currentRealAssets;
                     uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(deallocationAmount);
@@ -318,7 +318,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
                 }
             }
 
-            uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
+            currentRealAssets = IMYTStrategy(strategy).realAssets();
 
             if (currentRealAssets < realAssetsHistoryMin) {
                 realAssetsHistoryMin = currentRealAssets;

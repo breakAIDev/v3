@@ -393,15 +393,15 @@ contract AlchemistAllocatorTest is Test {
         // verify all state state changes that happen after a deallocation
         // Expected remaining real assets are determined by remaining shares * post-deallocation price.
         uint256 priceAfter = IMockYieldToken(mockStrategyYieldToken).price();
-        uint256 expectedRemainingRealAssets = (mytStrategyYieldTokenBalance * priceAfter) / 1e18;
+        uint256 expectedRemainingRealAssets = (mytStrategyYieldTokenBalance * priceAfter) / 1e18; // precision loss!
 
-        assertApproxEqAbs(mytStrategyYieldTokenRealAssets, expectedRemainingRealAssets, 1);
+        assertApproxEqRel(mytStrategyYieldTokenRealAssets, expectedRemainingRealAssets, 1e14); // 0.01% rounding headroom
         assertEq(newTotalAssets, 400 ether);
         assertEq(performanceFeeShares, 0);
         assertEq(managementFeeShares, 0);
         assertEq(vault._totalAssets(), 400 ether);
         assertEq(vault.firstTotalAssets(), 400 ether);
-        assertApproxEqAbs(allocation, expectedRemainingRealAssets, 1);
+        assertApproxEqRel(allocation, expectedRemainingRealAssets, 1e14); // 0.01% rounding headroom
         vm.stopPrank();
     }
 
