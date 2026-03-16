@@ -23,7 +23,8 @@ contract ERC4626Strategy is MYTStrategy {
     }
 
     function _allocate(uint256 amount) internal virtual override returns (uint256) {
-        require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Strategy balance is less than amount");
+        _ensureIdleBalance(address(mytAsset), amount);
+        
         TokenUtils.safeApprove(address(mytAsset), address(vault), amount);
         vault.deposit(amount, address(this));
         return amount;
@@ -37,11 +38,7 @@ contract ERC4626Strategy is MYTStrategy {
             vault.withdraw(shortfall, address(this), address(this));
         }
 
-        require(
-            TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount,
-            "Strategy balance is less than the amount needed"
-        );
-
+        _ensureIdleBalance(address(mytAsset), amount);
         TokenUtils.safeApprove(address(mytAsset), msg.sender, amount);
         return amount;
     }

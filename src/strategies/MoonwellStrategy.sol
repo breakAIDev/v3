@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MYTStrategy} from "../MYTStrategy.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 interface IMToken {
     function mint(uint256 mintAmount) external returns (uint256);
@@ -25,6 +26,8 @@ interface IWETH {
  * @notice Generic deployable strategy for Moonwell mToken integrations.
  */
 contract MoonwellStrategy is MYTStrategy {
+    using Math for uint256;
+
     IERC20 public immutable mytAsset;
     IMToken public immutable mToken;
     IERC20 public immutable rewardToken;
@@ -50,21 +53,14 @@ contract MoonwellStrategy is MYTStrategy {
         usePostRedeemETHWrap = _usePostRedeemETHWrap;
     }
 
-    function _ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a == 0 ? 0 : 1 + ((a - 1) / b);
-    }
-
     function _allocate(uint256 amount) internal virtual override returns (uint256) {
-        require(
-            TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount,
-            "Strategy balance is less than amount"
-        );
+        _ensureIdleBalance(address(mytAsset), amount);
+        
         TokenUtils.safeApprove(address(mytAsset), address(mToken), amount);
         uint256 mTokenBalanceBefore = mToken.balanceOf(address(this));
         uint256 errorCode = mToken.mint(amount);
-        if (errorCode != 0) {
-            revert MoonwellStrategyMintFailed(errorCode);
-        }
+        if (errorCode != 0) revert MoonwellStrategyMintFailed(errorCode);
+        
         uint256 mTokensMinted = mToken.balanceOf(address(this)) - mTokenBalanceBefore;
         return (mTokensMinted * mToken.exchangeRateStored()) / 1e18;
     }
@@ -73,19 +69,14 @@ contract MoonwellStrategy is MYTStrategy {
         uint256 idleBalance = _idleAssets();
         if (idleBalance < amount) {
             uint256 shortfall = amount - idleBalance;
-            uint256 mTokensNeeded = _ceilDiv(shortfall * 1e18, mToken.exchangeRateStored());
+            uint256 mTokensNeeded = (shortfall * 1e18).ceilDiv(mToken.exchangeRateStored());
             uint256 errorCode = mToken.redeem(mTokensNeeded);
-            if (errorCode != 0) {
-                revert MoonwellStrategyRedeemFailed(errorCode);
-            }
+            if (errorCode != 0) revert MoonwellStrategyRedeemFailed(errorCode);
         }
 
         _afterRedeem();
 
-        require(
-            TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount,
-            "Strategy balance is less than the amount needed"
-        );
+        _ensureIdleBalance(address(mytAsset), amount);
         TokenUtils.safeApprove(address(mytAsset), msg.sender, amount);
         return amount;
     }
@@ -113,12 +104,15 @@ contract MoonwellStrategy is MYTStrategy {
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view virtual override returns (uint256) {
-        uint256 sharesNoFee = (amount * 1e18) / _rate();
-        uint256 sharesWithFee = _ceilDiv(amount * 1e18, _rate());
+        uint256 rate = _rate();
+        uint256 sharesNoFee = (amount * 1e18) / rate;
+        uint256 sharesWithFee = (amount * 1e18).ceilDiv(rate);
+        
         uint256 feeShares = sharesWithFee > sharesNoFee ? sharesWithFee - sharesNoFee : 0;
-        uint256 feeAssets = (feeShares * _rate()) / 1e18;
+        uint256 feeAssets = (feeShares * rate) / 1e18;
         uint256 netAssets = amount > feeAssets ? amount - feeAssets : 0;
-        uint256 slippage = _ceilDiv(netAssets * params.slippageBPS, 10_000);
+        
+        uint256 slippage = Math.ceilDiv(netAssets * params.slippageBPS, 10_000);
         return netAssets > slippage ? netAssets - slippage : 0;
     }
 

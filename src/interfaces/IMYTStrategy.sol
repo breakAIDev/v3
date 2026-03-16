@@ -60,6 +60,7 @@ interface IMYTStrategy {
     error CounterfeitSettler(address);
     error ActionNotSupported();
     error InvalidAmount(uint256 min, uint256 received);
+    error InsufficientBalance(uint256 required, uint256 available);
 
 
     // Functions

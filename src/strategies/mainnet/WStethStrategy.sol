@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 interface stETH {
     function sharesOf(address account) external view returns (uint256);
@@ -26,6 +27,8 @@ interface WETH {
 
 
 contract WstethMainnetStrategy is MYTStrategy {
+    using Math for uint256;
+
     uint256 public constant MAX_ORACLE_STALENESS = 7 days;
 
     stETH public immutable steth;
@@ -51,7 +54,7 @@ contract WstethMainnetStrategy is MYTStrategy {
     }
 
     function _allocate(uint256 amount) internal override returns (uint256 depositReturn) {
-        require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than amount");
+        _ensureIdleBalance(address(weth), amount);
         
         uint256 wstETHBefore = wsteth.balanceOf(address(this));
         
@@ -71,7 +74,8 @@ contract WstethMainnetStrategy is MYTStrategy {
     }
 
     function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256 depositReturn) {
-        require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than amount");
+        _ensureIdleBalance(address(weth), amount);
+        
         // TODO no access to offchain quotes so setting minAmount to 1
         uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, 1, callData);
         

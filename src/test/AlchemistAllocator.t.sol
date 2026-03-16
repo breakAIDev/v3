@@ -330,9 +330,10 @@ contract AlchemistAllocatorTest is Test {
         allocator.allocate(address(mytStrategy), 100 ether);
         bytes32 allocationId = mytStrategy.adapterId();
         uint256 allocation = vault.allocation(allocationId);
-        require(allocation == 100 ether);
+        assertEq(allocation, 100 ether);
         allocator.deallocate(address(mytStrategy), 50 ether);
         allocation = vault.allocation(allocationId);
+        console.log("allocation is reset to", allocation);
         (uint256 newTotalAssets, uint256 performanceFeeShares, uint256 managementFeeShares) = vault.accrueInterestView();
         uint256 mytStrategyYieldTokenBalance = IMockYieldToken(mockStrategyYieldToken).balanceOf(address(mytStrategy));
         uint256 mytStrategyYieldTokenRealAssets = mytStrategy.realAssets();

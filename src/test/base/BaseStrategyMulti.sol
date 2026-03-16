@@ -522,7 +522,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         uint256 realAssetsBefore = IMYTStrategy(strategy).realAssets();
         uint256 allocationBefore = IVaultV2(vault).allocation(allocationId);
 
-        vm.expectRevert("Zero amount");
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, 1, 0));
         IAllocator(allocator).allocate(strategy, 0);
 
         uint256 realAssetsAfterZeroAlloc = IMYTStrategy(strategy).realAssets();

@@ -18,7 +18,7 @@ abstract contract BaseStrategySimple is StrategyOps {
         bytes memory params = getVaultParams();
         vm.startPrank(vault);
         deal(testConfig.vaultAsset, strategy, amountToAllocate);
-        vm.expectRevert(abi.encode("Zero amount"));
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, 1, 0));
         IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         vm.stopPrank();
     }
@@ -44,7 +44,7 @@ abstract contract BaseStrategySimple is StrategyOps {
         IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
         require(initialRealAssets > 0, "Initial real assets is 0");
-        vm.expectRevert(abi.encode("Zero amount"));
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, 1, 0));
         IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
         vm.stopPrank();
     }

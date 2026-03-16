@@ -6,6 +6,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MYTStrategy} from "../MYTStrategy.sol";
 import {IMainRewarder} from "./interfaces/ITokemac.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 interface IERC4626Like is IERC4626 {
     function convertToShares(uint256 assets, uint256 totalAssetsForPurpose, uint256 supply, Rounding rounding)
@@ -38,6 +39,8 @@ interface IERC4626Like is IERC4626 {
  * @notice Generic Tokemak auto-vault strategy with rewarder staking.
  */
 contract TokeAutoStrategy is MYTStrategy {
+    using Math for uint256;
+
     uint256 internal constant BASIS_POINTS = 10_000;
 
     IERC20 public immutable mytAsset;
@@ -63,7 +66,7 @@ contract TokeAutoStrategy is MYTStrategy {
     }
 
     function _allocate(uint256 amount) internal virtual override returns (uint256) {
-        require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Strategy balance is less than amount");
+        _ensureIdleBalance(address(mytAsset), amount);
 
         TokenUtils.safeApprove(address(mytAsset), address(autoVault), amount);
         uint256 shares = autoVault.deposit(amount, address(this));
@@ -166,7 +169,9 @@ contract TokeAutoStrategy is MYTStrategy {
         return token == MYT.asset() || token == address(autoVault);
     }
 
-    function _ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a == 0 ? 0 : 1 + ((a - 1) / b);
+
+    function _bufferedShortfall(uint256 shortfall) internal view returns (uint256) {
+        uint256 shortfallBps = deallocShortfallBufferBPS;
+        return Math.ceilDiv(shortfall * BASIS_POINTS, BASIS_POINTS - shortfallBps);
     }
 }

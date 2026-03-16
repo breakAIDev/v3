@@ -52,11 +52,9 @@ contract AaveStrategy is MYTStrategy {
     }
 
     function _allocate(uint256 amount) internal virtual override returns (uint256) {
+        _ensureIdleBalance(address(mytAsset), amount);
+        
         IAavePool pool = IAavePool(poolProvider.getPool());
-        require(
-            TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount,
-            "Strategy balance is less than amount"
-        );
         TokenUtils.safeApprove(address(mytAsset), address(pool), amount);
         pool.supply(address(mytAsset), amount, address(this), 0);
         return amount;
@@ -66,14 +64,17 @@ contract AaveStrategy is MYTStrategy {
         IAavePool pool = IAavePool(poolProvider.getPool());
         uint256 idleBalance = _idleAssets();
         uint256 withdrawnAmount = amount;
+        
         if (idleBalance < amount) {
             uint256 shortfall = amount - idleBalance;
             uint256 balanceBefore = TokenUtils.safeBalanceOf(address(mytAsset), address(this));
             withdrawnAmount = pool.withdraw(address(mytAsset), shortfall, address(this));
             uint256 balanceAfter = TokenUtils.safeBalanceOf(address(mytAsset), address(this));
-            require(withdrawnAmount >= shortfall, "Withdraw amount insufficient");
-            require(balanceAfter >= balanceBefore + shortfall, "Withdraw balance delta insufficient");
+            
+            if (withdrawnAmount < shortfall) revert InvalidAmount(shortfall, withdrawnAmount);
+            if (balanceAfter < balanceBefore + shortfall) revert InsufficientBalance(balanceBefore + shortfall, balanceAfter);
         }
+        
         TokenUtils.safeApprove(address(mytAsset), msg.sender, amount);
         return withdrawnAmount;
     }
