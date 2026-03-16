@@ -66,11 +66,8 @@ contract MockTokeAutoUSDStrategy is TokeAutoStrategy {
         address _usdc,
         address _autoUSD,
         address _rewarder,
-        address _tokeRewardsToken,
-        uint256 _deallocShortfallBufferBPS
-    )
-        TokeAutoStrategy(_myt, _params, _usdc, _autoUSD, _rewarder, _tokeRewardsToken, _deallocShortfallBufferBPS)
-    {}
+        address _tokeRewardsToken
+    ) TokeAutoStrategy(_myt, _params, _usdc, _autoUSD, _rewarder, _tokeRewardsToken) {}
 }
 
 contract TokeAutoUSDStrategyTest is BaseStrategyTest {
@@ -98,7 +95,7 @@ contract TokeAutoUSDStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockTokeAutoUSDStrategy(vault, params, USDC, TOKE_AUTO_USD_VAULT, REWARDER, TOKE, 0));
+        return address(new MockTokeAutoUSDStrategy(vault, params, USDC, TOKE_AUTO_USD_VAULT, REWARDER, TOKE));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {

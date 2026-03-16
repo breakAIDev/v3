@@ -682,8 +682,7 @@ contract MultiStrategyETHInvariantTest is Test {
             WETH,
             TOKE_AUTO_ETH_VAULT,
             TOKE_REWARDER_ETH,
-            TOKE,
-            105
+            TOKE
         ));
     }
     

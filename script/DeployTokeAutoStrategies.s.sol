@@ -15,7 +15,6 @@ contract DeployTokeAutoStrategiesScript is Script {
         address autoVault;
         address rewarder;
         address tokeRewardsToken;
-        uint256 deallocShortfallBufferBPS;
         IMYTStrategy.StrategyParams params;
     }
 
@@ -30,8 +29,7 @@ contract DeployTokeAutoStrategiesScript is Script {
             config.mytAsset,
             config.autoVault,
             config.rewarder,
-            config.tokeRewardsToken,
-            config.deallocShortfallBufferBPS
+            config.tokeRewardsToken
         );
         strategyAddr = address(strategy);
 

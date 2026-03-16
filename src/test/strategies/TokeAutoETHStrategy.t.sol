@@ -95,9 +95,8 @@ contract MockTokeAutoEthStrategy is TokeAutoStrategy {
         address _autoEth,
         address _rewarder,
         address _weth,
-        address _tokeRewardsToken,
-        uint256 _deallocShortfallBufferBPS
-    ) TokeAutoStrategy(_myt, _params, _weth, _autoEth, _rewarder, _tokeRewardsToken, _deallocShortfallBufferBPS) {}
+        address _tokeRewardsToken
+    ) TokeAutoStrategy(_myt, _params, _weth, _autoEth, _rewarder, _tokeRewardsToken) {}
 }
 
 contract TokeAutoETHStrategyTest is BaseStrategyTest {
@@ -132,11 +131,11 @@ contract TokeAutoETHStrategyTest is BaseStrategyTest {
     }
 
     function createStrategy(address vault, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
-        return address(new MockTokeAutoEthStrategy(vault, params, TOKE_AUTO_ETH_VAULT, REWARDER, WETH, TOKE, 105));
+        return address(new MockTokeAutoEthStrategy(vault, params, TOKE_AUTO_ETH_VAULT, REWARDER, WETH, TOKE));
     }
 
     function getForkBlockNumber() internal pure override returns (uint256) {
-        return 22_089_302;
+        return 24667747;
     }
 
     function getRpcUrl() internal view override returns (string memory) {

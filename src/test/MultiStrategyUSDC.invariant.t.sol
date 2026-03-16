@@ -651,8 +651,7 @@ contract MultiStrategyUSDCInvariantTest is Test {
             USDC,
             TOKE_AUTO_USD_VAULT,
             TOKE_REWARDER_USD,
-            TOKE,
-            0
+            TOKE
         ));
     }
     

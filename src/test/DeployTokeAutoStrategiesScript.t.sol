@@ -54,7 +54,6 @@ contract DeployTokeAutoStrategiesScriptTest is Test {
             autoVault: autoVaultA,
             rewarder: rewarderA,
             tokeRewardsToken: address(rewardsToken),
-            deallocShortfallBufferBPS: 105,
             params: _buildParams("Tokemak AutoETH", "TokeAuto")
         });
 
@@ -66,7 +65,6 @@ contract DeployTokeAutoStrategiesScriptTest is Test {
         assertEq(address(strategy.autoVault()), autoVaultA, "unexpected auto vault");
         assertEq(address(strategy.rewarder()), rewarderA, "unexpected rewarder");
         assertEq(address(strategy.tokeRewardsToken()), address(rewardsToken), "unexpected rewards token");
-        assertEq(strategy.deallocShortfallBufferBPS(), 105, "unexpected dealloc shortfall buffer");
         assertEq(strategy.killSwitch(), true, "kill switch should be enabled");
         assertEq(strategy.owner(), newOwner, "ownership not transferred");
 
@@ -84,7 +82,6 @@ contract DeployTokeAutoStrategiesScriptTest is Test {
             autoVault: autoVaultA,
             rewarder: rewarderA,
             tokeRewardsToken: address(rewardsToken),
-            deallocShortfallBufferBPS: 105,
             params: _buildParams("Tokemak AutoETH", "TokeAuto")
         });
 
@@ -94,7 +91,6 @@ contract DeployTokeAutoStrategiesScriptTest is Test {
             autoVault: autoVaultB,
             rewarder: rewarderB,
             tokeRewardsToken: address(rewardsToken),
-            deallocShortfallBufferBPS: 0,
             params: _buildParams("Tokemak AutoUSD", "TokeAuto")
         });
 
@@ -105,7 +101,6 @@ contract DeployTokeAutoStrategiesScriptTest is Test {
         assertEq(address(strategy0.MYT()), address(myt), "strategy0 unexpected MYT");
         assertEq(address(strategy0.autoVault()), autoVaultA, "strategy0 unexpected auto vault");
         assertEq(address(strategy0.rewarder()), rewarderA, "strategy0 unexpected rewarder");
-        assertEq(strategy0.deallocShortfallBufferBPS(), 105, "strategy0 unexpected dealloc shortfall buffer");
         assertEq(strategy0.owner(), newOwner, "strategy0 ownership not transferred");
         (, string memory name0,,,,,,,) = strategy0.params();
         assertEq(name0, "Tokemak AutoETH", "strategy0 unexpected name");
@@ -114,7 +109,6 @@ contract DeployTokeAutoStrategiesScriptTest is Test {
         assertEq(address(strategy1.MYT()), address(myt), "strategy1 unexpected MYT");
         assertEq(address(strategy1.autoVault()), autoVaultB, "strategy1 unexpected auto vault");
         assertEq(address(strategy1.rewarder()), rewarderB, "strategy1 unexpected rewarder");
-        assertEq(strategy1.deallocShortfallBufferBPS(), 0, "strategy1 unexpected dealloc shortfall buffer");
         assertEq(strategy1.owner(), newOwner, "strategy1 ownership not transferred");
         (, string memory name1,,,,,,,) = strategy1.params();
         assertEq(name1, "Tokemak AutoUSD", "strategy1 unexpected name");
