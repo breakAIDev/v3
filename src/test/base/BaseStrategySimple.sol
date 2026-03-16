@@ -59,6 +59,8 @@ abstract contract BaseStrategySimple is StrategyOps {
         if(amountToAllocate > 0) {
                 deal(testConfig.vaultAsset, strategy, amountToAllocate);
                 IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
+        } else {
+            console.log("Allocation was skipped due to caps!");
         }
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
         uint256 targetDeallocate = _effectiveDeallocateAmount(amountToAllocate);

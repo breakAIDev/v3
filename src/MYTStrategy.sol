@@ -111,7 +111,10 @@ contract MYTStrategy is IMYTStrategy, Ownable {
         }
 
         uint256 oldAllocation = allocation();
-        uint256 newAllocation = _totalValue();
+        uint256 totalValue = _totalValue();
+        // TODO check if the assumption from below is correct!
+        // Can we actually try to deallocate more than oldAllocation (ie by yield contribution?)
+        uint256 newAllocation = totalValue > assets ? totalValue - assets : 0;
         emit Deallocate(amountDeallocated, address(this));
         return (ids(), int256(newAllocation) - int256(oldAllocation));
     }

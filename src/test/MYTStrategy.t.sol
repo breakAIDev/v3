@@ -476,7 +476,7 @@ contract MYTStrategyTest is Test {
 
         deal(address(fromToken), address(harness), 100e18);
 
-        vm.expectRevert(bytes("0x exception"));
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.CounterfeitSettler.selector, address(mockFail)));
         harness.exposedDexSwap(address(toToken), address(fromToken), 100e18, 0, hex"01");
     }
 
