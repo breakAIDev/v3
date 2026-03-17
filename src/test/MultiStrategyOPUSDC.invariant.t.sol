@@ -115,17 +115,20 @@ contract MultiStrategyOPUSDCHandler is Test {
         }
     }
     
-    function mint(uint256 amount, uint256 actorSeed) external countCall(this.mint.selector) useActor(actorSeed) {
+    function mint(uint256 shares, uint256 actorSeed) external countCall(this.mint.selector) useActor(actorSeed) {
         uint256 balance = IERC20(asset).balanceOf(currentActor);
         if (balance < MIN_DEPOSIT) return;
         
-        amount = bound(amount, MIN_DEPOSIT, balance);
+        uint256 maxShares = vault.convertToShares(balance);
+        if (maxShares == 0) return;
         
-        IERC20(asset).approve(address(vault), amount);
-        vault.mint(amount, currentActor);
+        shares = bound(shares, 1, maxShares);
         
-        ghost_totalDeposited += amount;
-        ghost_userDeposits[currentActor] += amount;
+        IERC20(asset).approve(address(vault), balance);
+        uint256 assetsDeposited = vault.mint(shares, currentActor);
+        
+        ghost_totalDeposited += assetsDeposited;
+        ghost_userDeposits[currentActor] += assetsDeposited;
     }
     
     function redeem(uint256 shares, uint256 actorSeed) external countCall(this.redeem.selector) useActor(actorSeed) {
@@ -681,7 +684,8 @@ contract MultiStrategyOPUSDCInvariantTest is Test {
         
         if (totalSupply > 0) {
             uint256 sharePrice = (totalAssets * 1e18) / totalSupply;
-            assertGe(sharePrice, 0.9e18, "Share price decreased significantly");
+            uint256 minSharePrice = 9e17 / vault.virtualShares();
+            assertGe(sharePrice, minSharePrice, "Share price decreased significantly");
         }
     }
     
