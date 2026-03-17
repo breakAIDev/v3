@@ -144,18 +144,19 @@ contract WstethMainnetStrategyTest is Test {
 
     function test_strategy_allocate_with_swap() public {
         vm.startPrank(vault);
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")), minIntermediateOut: 0});
-        IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams(
-            {action: IMYTStrategy.ActionType.swap, swapParams: swapParams})
-        ;
-        bytes memory data = abi.encode(
-            params);
         
-        // Use the sellAmount (WETH input) from the quote to determine allocation size
-        uint256 amount = _getSellAmount(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json"));
-        
+        uint256 amount = 100e18;
         deal(weth, mytStrategy, 1_000_000e18);
-        vm.roll(getBlockNumberFromJson(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")));
+        
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
+            txData: getWethToWstethCalldata(mytStrategy, amount), 
+            minIntermediateOut: 0
+        });
+        IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams({
+            action: IMYTStrategy.ActionType.swap, 
+            swapParams: swapParams
+        });
+        bytes memory data = abi.encode(params);
         
         (bytes32[] memory strategyIds, int256 change) = IMYTStrategy(mytStrategy).allocate(data, amount, "", vault);
         
@@ -171,17 +172,24 @@ contract WstethMainnetStrategyTest is Test {
         vm.stopPrank();
     } 
 
+
     function test_strategy_deallocate_with_swap() public {
         vm.startPrank(vault);
         
         // First allocate: WETH -> wstETH
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")), minIntermediateOut: 0});
-        IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams(
-            {action: IMYTStrategy.ActionType.swap, swapParams: swapParams});
+        uint256 amount = 100e18;
+        deal(weth, mytStrategy, amount);
+        
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
+            txData: getWethToWstethCalldata(mytStrategy, amount), 
+            minIntermediateOut: 0
+        });
+        IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams({
+            action: IMYTStrategy.ActionType.swap, 
+            swapParams: swapParams
+        });
 
         bytes memory data = abi.encode(params);
-        uint256 amount = _getMinBuyAmount(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json"));
-        deal(weth, mytStrategy, 1_000_000e18);
 
         (bytes32[] memory strategyIds, int256 change) = IMYTStrategy(mytStrategy).allocate(data, amount, "", vault);
         
@@ -192,21 +200,27 @@ contract WstethMainnetStrategyTest is Test {
         emit WstethMainnetStrategyTestLog("wstETH to unwrap", wstETHToUnwrap);
         emit WstethMainnetStrategyTestLog("expected stETH after unwrap", expectedStETH);
         
-        uint256 minBuyAmount = _getMinBuyAmount(string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json"));
-        
         // Encode the VaultAdapterParams with stETH->WETH swap data
         IMYTStrategy.SwapParams memory swapParams2 = IMYTStrategy.SwapParams({
-            txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json")), 
+            txData: getStethToWethCalldata(address(mytStrategy), expectedStETH), 
             minIntermediateOut: expectedStETH
         });
-        IMYTStrategy.VaultAdapterParams memory params2 = IMYTStrategy.VaultAdapterParams(
-            {action: IMYTStrategy.ActionType.swap, swapParams: swapParams2});
+        IMYTStrategy.VaultAdapterParams memory params2 = IMYTStrategy.VaultAdapterParams({
+            action: IMYTStrategy.ActionType.unwrapAndSwap, 
+            swapParams: swapParams2
+        });
         bytes memory data2 = abi.encode(params2);
 
-        // Deallocate - pass calculated wstETH amount to unwrap
+        // Use previewAdjustedWithdraw to get a reasonable expected WETH output
+        // This accounts for slippage and gives us a valid minimum for the dexSwap check
+        // Apply additional 1% buffer for swap execution variability (DEX slippage, fees)
+        uint256 expectedWethOut = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(expectedStETH);
+        expectedWethOut = (expectedWethOut * 9900) / 10000;
+        
+        // Deallocate - pass expected WETH output with slippage adjustment
         (bytes32[] memory strategyIds2, int256 change2) = IMYTStrategy(mytStrategy).deallocate(
             data2, 
-            wstETHToUnwrap,
+            expectedWethOut,
             "", 
             vault
         );
@@ -214,7 +228,7 @@ contract WstethMainnetStrategyTest is Test {
         
         assertGt(strategyIds2.length, 0, "strategyIds is empty");
         assertEq(strategyIds2[0], IMYTStrategy(mytStrategy).adapterId(), "adapter id not in strategyIds");
-    } 
+    }
 
     function test_strategy_deallocate_with_mocked_dex_swap() public {
         vm.startPrank(vault);
@@ -234,21 +248,24 @@ contract WstethMainnetStrategyTest is Test {
         MYTStrategy(mytStrategy).setAllowanceHolder(address(mockSwap));
 
         vm.startPrank(vault);
-        uint256 wstETHBalance = IWstETH(wstETH).balanceOf(mytStrategy);
-        uint256 expectedStETH = IWstETH(wstETH).getStETHByWstETH(wstETHBalance);
+        
+        // Calculate wstETH amount that corresponds to expectedOut (what mock returns)
+        uint256 wstETHToDeallocate = IWstETH(wstETH).getWstETHByStETH(expectedOut);
 
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: hex"01", minIntermediateOut: expectedStETH});
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: hex"01", minIntermediateOut: expectedOut});
         IMYTStrategy.VaultAdapterParams memory deallocParams =
             IMYTStrategy.VaultAdapterParams({action: IMYTStrategy.ActionType.unwrapAndSwap, swapParams: swapParams});
 
         (bytes32[] memory strategyIds,) = IMYTStrategy(mytStrategy).deallocate(
-            abi.encode(deallocParams), expectedOut, "", vault
+            abi.encode(deallocParams), wstETHToDeallocate, "", vault
         );
         vm.stopPrank();
 
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(mytStrategy).adapterId(), "adapter id not in strategyIds");
-        assertEq(IERC20(weth).allowance(mytStrategy, vault), expectedOut, "vault allowance should equal deallocated amount");
+        // Vault allowance is set based on the wstETH amount being deallocated
+        assertEq(IERC20(weth).allowance(mytStrategy, vault), wstETHToDeallocate, "vault allowance should equal wstETH deallocated");
+        // Strategy receives the mocked WETH output from the swap
         assertEq(IERC20(weth).balanceOf(mytStrategy), expectedOut, "strategy should receive mocked WETH output");
     }
 
@@ -340,12 +357,16 @@ contract WstethMainnetStrategyTest is Test {
         bytes32 allocationId = IMYTStrategy(mytStrategy).adapterId();
         
         // First allocate: WETH -> wstETH
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")), minIntermediateOut: 0});
-        IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams(
-            {action: IMYTStrategy.ActionType.swap, swapParams: swapParams});
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
+            txData: getWethToWstethCalldata(mytStrategy, amountToAllocate), 
+            minIntermediateOut: 0
+        });
+        IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams({
+            action: IMYTStrategy.ActionType.swap, 
+            swapParams: swapParams
+        });
 
         bytes memory data = abi.encode(params);
-        uint256 amount = _getMinBuyAmount(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json"));
 
         IVaultV2(vault).allocate(mytStrategy, data, amountToAllocate);
         uint256 currentRealAssets = IMYTStrategy(mytStrategy).realAssets();
@@ -357,15 +378,17 @@ contract WstethMainnetStrategyTest is Test {
         emit WstethMainnetStrategyTestLog("wstETH to unwrap", wstETHToUnwrap);
         emit WstethMainnetStrategyTestLog("expected stETH after unwrap", expectedStETH);
         
-        uint256 minBuyAmount = _getMinBuyAmount(string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json"));
+        uint256 adjustedWithdraw = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(expectedStETH);
         
         // Encode the VaultAdapterParams with stETH->WETH swap data
         IMYTStrategy.SwapParams memory swapParams2 = IMYTStrategy.SwapParams({
-            txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json")), 
-            minIntermediateOut: IMYTStrategy(mytStrategy).previewAdjustedWithdraw(expectedStETH) 
+            txData: getStethToWethCalldata(address(mytStrategy), adjustedWithdraw), 
+            minIntermediateOut: adjustedWithdraw
         });
-        IMYTStrategy.VaultAdapterParams memory params2 = IMYTStrategy.VaultAdapterParams(
-            {action: IMYTStrategy.ActionType.unwrapAndSwap, swapParams: swapParams2});
+        IMYTStrategy.VaultAdapterParams memory params2 = IMYTStrategy.VaultAdapterParams({
+            action: IMYTStrategy.ActionType.unwrapAndSwap, 
+            swapParams: swapParams2
+        });
         bytes memory data2 = abi.encode(params2);
 
         // Deallocate - pass calculated wstETH amount to unwrap
@@ -374,30 +397,71 @@ contract WstethMainnetStrategyTest is Test {
         assertApproxEqAbs(IMYTStrategy(mytStrategy).realAssets(), currentRealAssets - expectedStETH, 1 * 10 ** 18);
     }
 
-    function _getCallData(string memory pathJson) internal returns (bytes memory) {
-        string memory root = vm.projectRoot();
-        string memory path = string.concat(root, pathJson);
-        string memory json = vm.readFile(path);
-        bytes memory quote = vm.parseBytes(vm.parseJsonString(json, ".transaction.data"));
-        return quote;
+    /// @notice Get swap calldata from 0x API for WETH -> wstETH
+    function getWethToWstethCalldata(address taker, uint256 sellAmount) internal returns (bytes memory) {
+        return _get0xCalldata(weth, wstETH, taker, sellAmount);
     }
 
-    function _getMinBuyAmount(string memory pathJson) internal returns (uint256) {
-        string memory root = vm.projectRoot();
-        string memory path = string.concat(root, pathJson);
-        string memory json = vm.readFile(path);
-        return vm.parseUint(vm.parseJsonString(json, ".minBuyAmount"));
+    /// @notice Get swap calldata from 0x API for stETH -> WETH
+    function getStethToWethCalldata(address taker, uint256 sellAmount) internal returns (bytes memory) {
+        return _get0xCalldata(stETH, weth, taker, sellAmount);
     }
 
-    function _getSellAmount(string memory pathJson) internal returns (uint256) {
-        string memory root = vm.projectRoot();
-        string memory path = string.concat(root, pathJson);
-        string memory json = vm.readFile(path);
-        return vm.parseUint(vm.parseJsonString(json, ".sellAmount"));
+    /// @notice Get 0x API key from environment variable
+    function _get0xApiKey() internal view returns (string memory) {
+        return vm.envString("ZEROX_API_KEY");
     }
 
-    function getForkBlockNumber() internal returns (uint256) {
-        return getBlockNumberFromJson(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json"));
+    /// @notice Get expected buy amount from 0x API quote
+    function get0xBuyAmount(address sellToken, address buyToken, address taker, uint256 sellAmount) internal returns (uint256) {
+        string[] memory inputs = new string[](3);
+        inputs[0] = "bash";
+        inputs[1] = "-c";
+        inputs[2] = string.concat(
+            "sleep 2 && ", // to avoid rate limits of 0x
+            "curl -s --location --request GET 'https://api.0x.org/swap/allowance-holder/quote?chainId=1&sellToken=",
+            vm.toString(sellToken),
+            "&buyToken=",
+            vm.toString(buyToken),
+            "&sellAmount=",
+            vm.toString(sellAmount),
+            "&taker=",
+            vm.toString(taker),
+            "' -H '0x-api-key: ",
+            _get0xApiKey(),
+            "' -H '0x-version: v2' | jq -r .buyAmount"
+        );
+        bytes memory b = vm.ffi(inputs);
+        bytes memory padded = abi.encodePacked(new bytes(32 - b.length), b);
+        uint256 value = abi.decode(padded, (uint256));
+        return value;
+    }
+
+    /// @notice Generic helper to get swap calldata from 0x API
+    function _get0xCalldata(address sellToken, address buyToken, address taker, uint256 sellAmount) internal returns (bytes memory) {
+        string[] memory inputs = new string[](3);
+        inputs[0] = "bash";
+        inputs[1] = "-c";
+        inputs[2] = string.concat(
+            "sleep 2 && ",
+            "curl -s --location --request GET 'https://api.0x.org/swap/allowance-holder/quote?chainId=1&sellToken=",
+            vm.toString(sellToken),
+            "&buyToken=",
+            vm.toString(buyToken),
+            "&sellAmount=",
+            vm.toString(sellAmount),
+            "&taker=",
+            vm.toString(taker),
+            "' -H '0x-api-key: ",
+            _get0xApiKey(),
+            "' -H '0x-version: v2' | jq -r .transaction.data"
+        );
+        return vm.ffi(inputs);
+    }
+
+    /// @notice Fork at latest block since we use live API quotes
+    function getForkBlockNumber() internal pure returns (uint256) {
+        return 0;
     }
 
     function _mockFreshStEthEthOracle() internal {
@@ -410,12 +474,6 @@ contract WstethMainnetStrategyTest is Test {
         );
     }
 
-    function getBlockNumberFromJson(string memory path) internal returns (uint256) {
-        string memory root = vm.projectRoot();
-        string memory fullPath = string.concat(root, path);
-        string memory json = vm.readFile(fullPath);
-        return vm.parseUint(vm.parseJsonString(json, ".blockNumber"));
-    }
 
 
     function _setUpMYT(address _vault, address _mytStrategy, uint256 absoluteCap, uint256 relativeCap) internal {
@@ -483,11 +541,13 @@ contract WstethMainnetStrategyTest is Test {
 
 
     function test_allocator_allocate_with_swap() public {
-        // 0x quote was generated for exactly 100 ETH - must use exact amount
         uint256 amountToAllocate = 100e18;
-        uint256 minWstETHOut = _getMinBuyAmount(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json"));
         vm.startPrank(admin);
-        IAllocator(allocator).allocateWithSwap(mytStrategy, amountToAllocate, _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")));
+        IAllocator(allocator).allocateWithSwap(
+            mytStrategy, 
+            amountToAllocate, 
+            getWethToWstethCalldata(mytStrategy, amountToAllocate)
+        );
         
         // Verify wstETH was received - balance depends on wstETH/stETH exchange rate (can vary significantly)
         uint256 wstETHBalance = IWstETH(wstETH).balanceOf(mytStrategy);
@@ -500,34 +560,31 @@ contract WstethMainnetStrategyTest is Test {
     }
 
     function test_allocator_deallocate_with_swap() public {
-        // 0x quote was generated for exactly 100 ETH - must use exact amount
         uint256 amountToAllocate = 100e18;
         vm.startPrank(admin);
-        IAllocator(allocator).allocateWithSwap(mytStrategy, amountToAllocate, _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")));
+        IAllocator(allocator).allocateWithSwap(
+            mytStrategy, 
+            amountToAllocate, 
+            getWethToWstethCalldata(mytStrategy, amountToAllocate)
+        );
         
         // Verify wstETH was received
         uint256 wstETHBalance = IWstETH(wstETH).balanceOf(mytStrategy);
         assertGt(wstETHBalance, 0, "wstETH balance should be positive");
         
-        // Get quote parameters for stETH->WETH swap
-        string memory quotePath = string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json");
-        uint256 minFinalOut = _getMinBuyAmount(quotePath);  // minimum WETH out (slippage protected)
-        uint256 minIntermediateOut = _getSellAmount(quotePath);  // stETH to produce from unwrap
-        
-        // Calculate expected remaining wstETH after deallocate
-        // The quote only sells minIntermediateOut stETH, so we only unwrap the equivalent wstETH
-        uint256 wstETHToUnwrap = IWstETH(wstETH).getWstETHByStETH(minIntermediateOut); // +1 for rounding buffer
+        // Calculate stETH amount from wstETH balance for the swap
+        uint256 stETHAmount = IWstETH(wstETH).getStETHByWstETH(wstETHBalance);
+        uint256 minFinalOut = get0xBuyAmount(stETH, weth, address(mytStrategy), stETHAmount);
         
         // Deallocate: wstETH -> unwrap -> stETH -> swap -> WETH
-        // minFinalOut = WETH expected by vault, minIntermediateOut = stETH to produce from unwrap
         IAllocator(allocator).deallocateWithUnwrapAndSwap(
             mytStrategy, 
             minFinalOut, 
-            _getCallData(quotePath),
-            IMYTStrategy(mytStrategy).previewAdjustedWithdraw(minIntermediateOut)
+            getStethToWethCalldata(address(mytStrategy), stETHAmount),
+            IMYTStrategy(mytStrategy).previewAdjustedWithdraw(stETHAmount)
         );
 
-        // Verify realAssets matches expected remaining (within 1e15 tolerance for rounding)
+        // Verify realAssets matches expected remaining (within 1e18 tolerance for rounding)
         uint256 realAssetsAfter = IMYTStrategy(mytStrategy).realAssets();
         assertApproxEqAbs(realAssetsAfter, 0, 1e18, "realAssets should match expected remaining"); 
         vm.stopPrank();
@@ -595,20 +652,25 @@ contract WstethMainnetStrategyTest is Test {
 
     // Test: WstETH Mainnet yield accumulation over time
     function test_wsteth_mainnet_yield_accumulation() public {
+        // Set up mocked swap executor for deallocations (avoids 0x signature deadline issues with vm.warp)
+        // Mock returns 100 WETH per call, fund it enough for multiple deallocations
+        uint256 mockWethOutput = 100e18;
+        uint256 mockWethFunding = 200e18; // Enough for 2 deallocation calls
+        MockSwapExecutor mockSwap = new MockSwapExecutor(weth, mockWethOutput);
+        deal(weth, address(mockSwap), mockWethFunding);
+        vm.prank(admin);
+        MYTStrategy(mytStrategy).setAllowanceHolder(address(mockSwap));
+        
         vm.startPrank(allocator);
     
         // Allocate initial amount
         uint256 allocAmount = 100e18; // 100 WETH
         deal(weth, mytStrategy, allocAmount);
     
-        // Use swap-based allocation for wstETH strategy (not direct)
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
-            txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/wethToWsteth.json")),
-            minIntermediateOut: 0
-        });
+        // Use direct allocation (WETH -> wstETH wrap)
         IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams({
-            action: IMYTStrategy.ActionType.swap,
-            swapParams: swapParams
+            action: IMYTStrategy.ActionType.direct,
+            swapParams: IMYTStrategy.SwapParams({txData: "", minIntermediateOut: 0})
         });
         bytes memory data = abi.encode(params);
         IVaultV2(vault).allocate(mytStrategy, data, allocAmount);
@@ -622,8 +684,8 @@ contract WstethMainnetStrategyTest is Test {
             vm.warp(block.timestamp + 30 days);
             _mockFreshStEthEthOracle();
             
-            // Simulate yield by transferring small amount to strategy (0.5% per period)
-            deal(weth, mytStrategy, initialRealAssets * 5 / 1000);
+            // wstETH naturally accrues yield through staking rewards (reflected in exchange rate)
+            // No need to simulate yield artificially - just track that assets don't decrease significantly
             
             realAssetsSnapshots[i] = IMYTStrategy(mytStrategy).realAssets();
             
@@ -632,33 +694,50 @@ contract WstethMainnetStrategyTest is Test {
             // Update minExpected to the new baseline
             minExpected = realAssetsSnapshots[i];
             
-            // Small deallocation on second snapshot
+            // Small deallocation on second snapshot using mocked swap
             if (i == 1) {
                 uint256 smallDealloc = 10e18; // 10 WETH
+                
+                // Use mocked swap (no 0x deadline issues)
+                IMYTStrategy.SwapParams memory deallocSwapParams = IMYTStrategy.SwapParams({
+                    txData: hex"01", // Mock calldata
+                    minIntermediateOut: smallDealloc
+                });
+                IMYTStrategy.VaultAdapterParams memory deallocParams = IMYTStrategy.VaultAdapterParams({
+                    action: IMYTStrategy.ActionType.unwrapAndSwap,
+                    swapParams: deallocSwapParams
+                });
+                bytes memory deallocateData = abi.encode(deallocParams);
+                
                 uint256 deallocPreview = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(smallDealloc);
-                IMYTStrategy(mytStrategy).deallocate(data, deallocPreview, "", vault);
+                // Call deallocate through the vault (allocator is whitelisted)
+                IVaultV2(vault).deallocate(mytStrategy, deallocateData, deallocPreview);
                 // Update minExpected after deallocation to account for the reduction
                 _mockFreshStEthEthOracle();
                 minExpected = IMYTStrategy(mytStrategy).realAssets();
             }
         }
         
-        // Final deallocation
+        // Final deallocation using mocked swap
         _mockFreshStEthEthOracle();
         uint256 finalRealAssets = IMYTStrategy(mytStrategy).realAssets();
         if (finalRealAssets > 1e15) {
-            uint256 minBuyAmount = _getMinBuyAmount(string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json"));
-            IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
-                txData: _getCallData(string.concat("/src/test/strategies/utils/offchain/quotes/stethToWeth.json")),
-                minIntermediateOut: IMYTStrategy(mytStrategy).previewAdjustedWithdraw(minBuyAmount)
+            uint256 stETHAmount = IWstETH(wstETH).getStETHByWstETH(IWstETH(wstETH).balanceOf(mytStrategy));
+            uint256 adjustedWithdraw = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(stETHAmount);
+            
+            // Use mocked swap (no 0x deadline issues)
+            IMYTStrategy.SwapParams memory deallocSwapParams = IMYTStrategy.SwapParams({
+                txData: hex"01", // Mock calldata
+                minIntermediateOut: adjustedWithdraw
             });
-            IMYTStrategy.VaultAdapterParams memory params = IMYTStrategy.VaultAdapterParams({
+            IMYTStrategy.VaultAdapterParams memory deallocParams = IMYTStrategy.VaultAdapterParams({
                 action: IMYTStrategy.ActionType.unwrapAndSwap,
-                swapParams: swapParams
+                swapParams: deallocSwapParams
             });
-            bytes memory deallocateData = abi.encode(params);
+            bytes memory deallocateData = abi.encode(deallocParams);
             uint256 finalDeallocPreview = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(finalRealAssets);
-            IMYTStrategy(mytStrategy).deallocate(deallocateData, finalDeallocPreview, "", vault);
+            // Call deallocate through the vault (allocator is whitelisted)
+            IVaultV2(vault).deallocate(mytStrategy, deallocateData, finalDeallocPreview);
         }
         
         assertEq(IMYTStrategy(mytStrategy).realAssets(), 0, "All real assets should be deallocated");

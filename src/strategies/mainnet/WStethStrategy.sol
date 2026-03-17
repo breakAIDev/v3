@@ -5,6 +5,7 @@ import {MYTStrategy} from "../../MYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface stETH {
     function sharesOf(address account) external view returns (uint256);
@@ -91,7 +92,7 @@ contract WstethMainnetStrategy is MYTStrategy {
     function _deallocate(uint256 amount, bytes memory callData, uint256 minIntermediateOut) internal override returns (uint256) {        
         // Convert minIntermediateOut (stETH) to wstETH equivalent
         // Add 1 wei buffer to account for rounding in wstETH/stETH conversion
-        uint256 wstETHToUnwrap = wsteth.getWstETHByStETH(minIntermediateOut);
+        uint256 wstETHToUnwrap = wsteth.getWstETHByStETH(minIntermediateOut) + 1;
         
         // Cap at actual balance
         uint256 wstETHBalance = wsteth.balanceOf(address(this));
@@ -106,7 +107,8 @@ contract WstethMainnetStrategy is MYTStrategy {
         uint256 stETHReceived = stETHAfter - stETHBefore; 
         
         // Swap stETH -> WETH via 0x (will return >= amount due to quote)
-        uint256 wethReceived = dexSwap(address(weth), address(steth), stETHReceived, amount, callData);
+        // Approve minIntermediateOut since that's what the swap calldata expects to pull
+        uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, amount, callData);
         require(wethReceived >= amount, "Insufficient WETH received");
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
@@ -143,6 +145,10 @@ contract WstethMainnetStrategy is MYTStrategy {
 
     function _isProtectedToken(address token) internal view override returns (bool) {
         return token == MYT.asset() || token == address(wsteth) || token == address(steth);
+    }
+
+    function _idleAssets() internal view override returns (uint256) {
+        return IERC20(address(weth)).balanceOf(address(this));
     }
 
     function _stEthToWeth(uint256 stEthAmount) internal view returns (uint256) {
