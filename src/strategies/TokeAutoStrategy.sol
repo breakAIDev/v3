@@ -42,6 +42,8 @@ contract TokeAutoStrategy is MYTStrategy {
     using Math for uint256;
 
     uint256 internal constant BASIS_POINTS = 10_000;
+    /// @dev Minimum shares to ensure possibleAssets > 0 in TokeAutoETH.redeem
+    uint256 internal constant MIN_SHARES = 1e15;
 
     IERC20 public immutable mytAsset;
     IERC4626Like public immutable autoVault;
@@ -86,29 +88,53 @@ contract TokeAutoStrategy is MYTStrategy {
 
     function _deallocate(uint256 amount) internal virtual override returns (uint256) {
         uint256 assetBalance = _idleAssets();
+
         if (assetBalance < amount) {
-            uint256 totalAssetsForWithdraw = autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw);
-            uint256 totalSupply = autoVault.totalSupply();
             uint256 shortfall = amount - assetBalance;
-            uint256 sharesNeeded =
-                autoVault.convertToShares(shortfall, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Up);
+            uint256 totalPulled;
 
-            uint256 directShares = autoVault.balanceOf(address(this));
-            uint256 stakedShares = rewarder.balanceOf(address(this));
-            uint256 totalShares = directShares + stakedShares;
-            if (sharesNeeded > totalShares) sharesNeeded = totalShares;
+            // Iteratively redeem until we've pulled enough assets.
+            // TokeAutoETH.redeem may return fewer assets than convertToAssets suggests due to slippage/recoup.
+            for (totalPulled = 0; totalPulled < shortfall;) {
+                uint256 totalAssetsForWithdraw = autoVault.totalAssets(IERC4626Like.TotalAssetPurpose.Withdraw);
+                uint256 totalSupply = autoVault.totalSupply();
 
-            if (sharesNeeded > directShares) {
-                rewarder.withdraw(address(this), sharesNeeded - directShares, false);
+                uint256 sharesNeeded = autoVault.convertToShares(
+                    shortfall - totalPulled,
+                    totalAssetsForWithdraw,
+                    totalSupply,
+                    IERC4626Like.Rounding.Up
+                );
+
+                // Ensure minimum shares and cap to available
+                uint256 directShares = autoVault.balanceOf(address(this));
+                uint256 totalSharesAvailable = directShares + rewarder.balanceOf(address(this));
+                sharesNeeded = Math.max(sharesNeeded, MIN_SHARES);
+                if (sharesNeeded > totalSharesAvailable) sharesNeeded = totalSharesAvailable;
+
+                // Break if no shares or would result in zero possibleAssets
+                if (sharesNeeded == 0) break;
+                if (autoVault.convertToAssets(sharesNeeded, totalAssetsForWithdraw, totalSupply, IERC4626Like.Rounding.Down) == 0) break;
+
+                // Unstake if needed
+                if (sharesNeeded > directShares) {
+                    rewarder.withdraw(address(this), sharesNeeded - directShares, false);
+                }
+
+                uint256 balanceBefore = TokenUtils.safeBalanceOf(address(mytAsset), address(this));
+                autoVault.redeem(sharesNeeded, address(this), address(this));
+                uint256 pulled = TokenUtils.safeBalanceOf(address(mytAsset), address(this)) - balanceBefore;
+
+                if (pulled == 0) break;
+                totalPulled += pulled;
             }
-            autoVault.redeem(sharesNeeded, address(this), address(this));
         }
 
         require(TokenUtils.safeBalanceOf(address(mytAsset), address(this)) >= amount, "Withdraw amount insufficient");
         TokenUtils.safeApprove(address(mytAsset), msg.sender, amount);
         return amount;
     }
-
+        
     function _totalValue() internal view virtual override returns (uint256) {
         uint256 shares = rewarder.balanceOf(address(this)) + autoVault.balanceOf(address(this));
         uint256 assets = autoVault.convertToAssets(

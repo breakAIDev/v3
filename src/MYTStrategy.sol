@@ -113,7 +113,9 @@ contract MYTStrategy is IMYTStrategy, Ownable {
             revert ActionNotSupported();
         }
 
-        uint256 newAllocation = totalValueBefore > assets ? totalValueBefore - assets : 0;
+        uint256 totalValueAfter = _totalValue();
+        require(totalValueAfter >= assets, "inconsistent totalValue");
+        uint256 newAllocation = totalValueAfter - assets;
         emit Deallocate(amountDeallocated, address(this));
         return (ids(), int256(newAllocation) - int256(oldAllocation));
     }
