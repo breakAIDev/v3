@@ -2845,6 +2845,81 @@ contract AlchemistV3Test is Test {
         alchemistNFT.tokenURI(tokenId);
     }
 
+    function testAlchemistV3PositionInitializesMetadataManagerAndAgentWallet() public {
+        uint256 tokenId = _mintPosition(address(0xbeef), 100e18);
+
+        assertTrue(alchemistNFT.agentMetadataManager() != address(0), "agent metadata manager should be deployed");
+        assertEq(alchemistNFT.getAgentWallet(tokenId), address(0xbeef), "owner should be the initial agent wallet");
+    }
+
+    function testAlchemistV3PositionSetAgentURI_DoesNotOverrideRendererTokenURI() public {
+        uint256 tokenId = _mintPosition(address(0xbeef), 100e18);
+        string memory customURI = "ipfs://alchemix-agent-1";
+        string memory originalTokenURI = alchemistNFT.tokenURI(tokenId);
+
+        vm.prank(address(0xbeef));
+        alchemistNFT.setAgentURI(tokenId, customURI);
+
+        assertEq(alchemistNFT.getAgentURI(tokenId), customURI);
+        assertEq(alchemistNFT.tokenURI(tokenId), originalTokenURI);
+    }
+
+    function testAlchemistV3PositionSetMetadata_StoresCustomValues() public {
+        uint256 tokenId = _mintPosition(address(0xbeef), 100e18);
+        bytes memory value = abi.encode("position-manager");
+
+        vm.prank(address(0xbeef));
+        alchemistNFT.setMetadata(tokenId, "role", value);
+
+        assertEq(
+            keccak256(alchemistNFT.getMetadata(tokenId, "role")),
+            keccak256(value),
+            "stored metadata should round-trip through the agent metadata manager"
+        );
+    }
+
+    function testAlchemistV3PositionSetMetadata_RevertsForReservedAgentWalletKey() public {
+        uint256 tokenId = _mintPosition(address(0xbeef), 100e18);
+
+        vm.prank(address(0xbeef));
+        vm.expectRevert(AlchemistV3Position.ReservedMetadataKey.selector);
+        alchemistNFT.setMetadata(tokenId, "agentWallet", abi.encode(address(0xcafe)));
+    }
+
+    function testAlchemistV3PositionSetAgentWallet_RequiresWalletProof() public {
+        uint256 tokenId = _mintPosition(address(0xbeef), 100e18);
+        uint256 privateKey = 0xA11CE;
+        address newWallet = vm.addr(privateKey);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 digest = _agentWalletDigest(tokenId, newWallet, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(address(0xbeef));
+        alchemistNFT.setAgentWallet(tokenId, newWallet, deadline, signature);
+
+        assertEq(alchemistNFT.getAgentWallet(tokenId), newWallet);
+    }
+
+    function testAlchemistV3PositionTransfer_ClearsAgentWallet() public {
+        uint256 tokenId = _mintPosition(address(0xbeef), 100e18);
+        uint256 privateKey = 0xB0B;
+        address newWallet = vm.addr(privateKey);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 digest = _agentWalletDigest(tokenId, newWallet, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        vm.prank(address(0xbeef));
+        alchemistNFT.setAgentWallet(tokenId, newWallet, deadline, signature);
+
+        vm.prank(address(0xbeef));
+        alchemistNFT.transferFrom(address(0xbeef), address(0xdad), tokenId);
+
+        assertEq(alchemistNFT.ownerOf(tokenId), address(0xdad));
+        assertEq(alchemistNFT.getAgentWallet(tokenId), address(0), "transfers should clear ownership-bound agent wallets");
+    }
+
     function testLiquidate_Undercollateralized_Position_With_Earmarked_Debt_Sufficient_Repayment() external {
         vm.prank(alOwner);
         alchemist.setProtocolFee(protocolFee);        
@@ -5681,6 +5756,33 @@ contract AlchemistV3Test is Test {
         uint256 liquidatorUnderlyingAfter = IERC20(mockVaultCollateral).balanceOf(liquidator);
         assertEq(liquidatorUnderlyingAfter, liquidatorUnderlyingBefore, "no second fee should be paid");
         assertGt(firstFeeYield + firstFeeUnderlying, 0, "first repayment fee was paid");
+    }
+
+    function _mintPosition(address owner, uint256 amount) internal returns (uint256 tokenId) {
+        vm.startPrank(owner);
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount);
+        alchemist.deposit(amount, owner, 0);
+        vm.stopPrank();
+
+        tokenId = AlchemistNFTHelper.getFirstTokenId(owner, address(alchemistNFT));
+    }
+
+    function _agentWalletDigest(uint256 tokenId, address newWallet, uint256 deadline) internal view returns (bytes32) {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("AlchemistV3Position")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(alchemistNFT)
+            )
+        );
+
+        bytes32 structHash = keccak256(
+            abi.encode(alchemistNFT.SET_AGENT_WALLET_TYPEHASH(), tokenId, newWallet, deadline)
+        );
+
+        return keccak256(abi.encodePacked(hex"1901", domainSeparator, structHash));
     }
 
     function _abs(uint256 a, uint256 b) internal pure returns (uint256) {
