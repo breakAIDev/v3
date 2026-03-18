@@ -110,8 +110,10 @@ library ValidationLogic {
         if (tokenId == 0) return false;
 
         try IAlchemistV3Position(positionNFT).ownerOf(tokenId) {
+            // If the call succeeds, the token exists.
             exists = true;
         } catch {
+            // If the call fails, then the token does not exist.
             exists = false;
         }
     }

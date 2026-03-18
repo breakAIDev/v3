@@ -132,6 +132,7 @@ library SyncLogic {
         account.collateralBalance = collateralBalance;
         account.earmarked = newEarmarked;
         account.debt = newDebt;
+        // Advance account checkpoints even when no collateral or debt changed.
         BorrowLogic.checkpointAccountState(account, checkpointParams(state));
     }
 
@@ -163,6 +164,7 @@ library SyncLogic {
         }
 
         uint256 globalSharesDelta = totalRedeemedSharesOut - account.lastTotalRedeemedSharesOut;
+        // sharesToDebit = redeemedDebt * globalSharesDelta / globalDebtDelta
         uint256 sharesToDebit = FixedPointMath.mulDivUp(redeemedDebt, globalSharesDelta, globalDebtDelta);
         if (sharesToDebit > collateralBalance) sharesToDebit = collateralBalance;
         return collateralBalance - sharesToDebit;
@@ -203,6 +205,7 @@ library SyncLogic {
         mapping(uint256 => uint256) storage earmarkEpochStartRedemptionWeight,
         mapping(uint256 => uint256) storage earmarkEpochStartSurvivalAccumulator
     ) internal view returns (uint256 newDebt, uint256 newEarmarked, uint256 redeemedDebt) {
+        // Survival during the current sync window.
         uint256 survivalRatio = EarmarkLogic.redemptionSurvivalRatio(
             account.lastAccruedRedemptionWeight,
             state.redemptionWeight,
@@ -211,6 +214,7 @@ library SyncLogic {
             state.oneQ128
         );
 
+        // User exposure at last sync used to calculate newly earmarked debt pre-redemption.
         uint256 userExposure = account.debt > account.earmarked ? account.debt - account.earmarked : 0;
         uint256 unearmarkSurvivalRatio = EarmarkLogic.earmarkSurvivalRatio(
             account.lastAccruedEarmarkWeight,
@@ -220,9 +224,12 @@ library SyncLogic {
             state.oneQ128
         );
 
+        // Amount that stayed unearmarked from the user's prior exposure.
         uint256 unearmarkedRemaining = FixedPointMath.mulQ128(userExposure, unearmarkSurvivalRatio);
+        // Amount newly earmarked since last sync.
         uint256 earmarkRaw = userExposure - unearmarkedRemaining;
 
+        // No redemption in this sync window means debt cannot decrease.
         if (survivalRatio == state.oneQ128) {
             newDebt = account.debt;
             newEarmarked = account.earmarked + earmarkRaw;
@@ -234,6 +241,7 @@ library SyncLogic {
         uint256 earmarkSurvival = EarmarkLogic.packedIndex(account.lastAccruedEarmarkWeight, state.earmarkIndexMask);
         if (earmarkSurvival == 0) earmarkSurvival = state.oneQ128;
 
+        // Default path for accounts that stayed inside the same earmark epoch.
         uint256 decayedRedeemed = FixedPointMath.mulQ128(account.lastSurvivalAccumulator, survivalRatio);
         uint256 survivalDiff =
             state.survivalAccumulator > decayedRedeemed ? state.survivalAccumulator - decayedRedeemed : 0;
@@ -244,6 +252,10 @@ library SyncLogic {
         uint256 oldEarEpoch = EarmarkLogic.packedEpoch(account.lastAccruedEarmarkWeight, state.earmarkIndexBits);
         uint256 newEarEpoch = EarmarkLogic.packedEpoch(state.earmarkWeight, state.earmarkIndexBits);
         if (newEarEpoch > oldEarEpoch) {
+            // If the account crossed an earmark epoch, split the math at the first boundary:
+            // - pre-boundary via accumulator diff at epoch boundary
+            // - post-boundary via redemption survival only
+            // This avoids both over-redemption and under-redemption across epoch rollover.
             uint256 boundaryEpoch = oldEarEpoch + 1;
             uint256 boundaryRedemptionWeight = earmarkEpochStartRedemptionWeight[boundaryEpoch];
             uint256 boundarySurvivalAccumulator = earmarkEpochStartSurvivalAccumulator[boundaryEpoch];
@@ -276,14 +288,18 @@ library SyncLogic {
 
                 earmarkedUnredeemed = FixedPointMath.mulQ128(unredeemedAtBoundary, postBoundarySurvival);
             } else {
+                // Backward-compatibility fallback for old state without boundary checkpoints.
                 earmarkedUnredeemed = FixedPointMath.mulQ128(earmarkRaw, survivalRatio);
             }
         }
 
         if (earmarkedUnredeemed > earmarkRaw) earmarkedUnredeemed = earmarkRaw;
 
+        // Old earmarks that survived redemptions in the current sync window.
         uint256 exposureSurvival = FixedPointMath.mulQ128(account.earmarked, survivalRatio);
+        // What was redeemed from the portion newly earmarked since the last sync.
         uint256 redeemedFromEarmarked = earmarkRaw - earmarkedUnredeemed;
+        // Total redeemed amount used to adjust the user's debt and collateral.
         uint256 redeemedTotal = (account.earmarked - exposureSurvival) + redeemedFromEarmarked;
 
         newDebt = account.debt >= redeemedTotal ? account.debt - redeemedTotal : 0;
@@ -304,6 +320,8 @@ library SyncLogic {
             account, state, earmarkEpochStartRedemptionWeight, earmarkEpochStartSurvivalAccumulator
         );
 
+        // First project the account against committed globals only, then apply the simulated earmark-only delta.
+        // Historical redemptions must not reduce debt again during this prospective step.
         newEarmarked = applyProspectiveEarmark(
             newDebt,
             newEarmarked,

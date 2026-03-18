@@ -132,9 +132,11 @@ library ConfiguratorLogic {
             revert IllegalArgument();
         }
 
+        // cannot exceed global minimum
         uint256 newMinimum =
             value > globalMinimumCollateralization ? globalMinimumCollateralization : value;
 
+        // cannot exceed liquidation target
         if (newMinimum > liquidationTargetCollateralization) {
             newMinimum = liquidationTargetCollateralization;
         }

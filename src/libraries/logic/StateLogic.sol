@@ -157,6 +157,7 @@ library StateLogic {
         uint256 minimumCollateralization,
         uint256 fixedPointScalar
     ) internal view returns (uint256) {
+        // Calculate locked collateral based on the current share price.
         return lockedCollateralForDebt(
             myt, underlyingConversionFactor, totalDebt, minimumCollateralization, fixedPointScalar
         );
@@ -206,6 +207,7 @@ library StateLogic {
         uint256 minimumCollateralization,
         uint256 fixedPointScalar
     ) internal view returns (uint256) {
+        // Cap locked shares by what the alchemist actually holds.
         return underlyingValueForShares(
             myt,
             lockedProtocolShares(
@@ -265,6 +267,8 @@ library StateLogic {
         uint256 fixedPointScalar
     ) internal view returns (bool) {
         if (totalSyntheticsIssued == 0) return false;
+        // Backing mirrors transmuter claim math:
+        // locked collateral in the alchemist plus MYT shares currently held by the transmuter.
         return totalSyntheticsIssued
             > protocolBackingDebtValue(
                 myt,

@@ -80,28 +80,38 @@ library LiquidationLogic {
         uint256 fixedPointScalar
     ) public pure returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee) {
         if (debt >= collateral) {
+            // fully liquidate debt if debt is greater than collateral
             outsourcedFee = (debt * feeBps) / bps;
             return (collateral, debt, 0, outsourcedFee);
         }
 
         if (alchemistCurrentCollateralization < alchemistMinimumCollateralization) {
+            // fully liquidate debt in high ltv global environment
             outsourcedFee = (debt * feeBps) / bps;
             return (debt, debt, 0, outsourcedFee);
         }
 
+        // fee is taken from surplus = collateral - debt
         uint256 surplus = collateral - debt;
         fee = (surplus * feeBps) / bps;
 
+        // collateral remaining for margin-restore calc
         uint256 adjCollat = collateral - fee;
+
+        // compute m * d (both plain units)
         uint256 md = (targetCollateralization * debt) / fixedPointScalar;
         if (md <= adjCollat) {
+            // if md <= adjCollat, nothing to liquidate
             return (0, 0, 0, 0);
         }
 
+        // numerator = md - adjCollat
         uint256 num = md - adjCollat;
+        // denom = m - 1
         uint256 denom = targetCollateralization - fixedPointScalar;
 
         debtToBurn = (num * fixedPointScalar) / denom;
+        // gross collateral seize = net + fee
         grossCollateralToSeize = debtToBurn + fee;
     }
 
@@ -139,6 +149,7 @@ library LiquidationLogic {
         applyCommit(runtime, commit);
 
         Account storage account = accounts[accountId];
+        // In the rare scenario where 1 share is worth 0 underlying asset.
         if (IVaultV2(runtime.myt).convertToAssets(1e18) == 0) {
             return packResult(runtime, 0, 0, 0, false);
         }
@@ -151,6 +162,7 @@ library LiquidationLogic {
         uint256 feeInUnderlying;
 
         if (account.earmarked > 0) {
+            // Try to repay earmarked debt if it exists.
             (repaidAmountInYield, runtime.totalDebt, runtime.totalDeposited, runtime.cumulativeEarmarked) = forceRepay(
                 accounts, accountId, account.earmarked, runtime, liquidator, true
             );
@@ -170,6 +182,8 @@ library LiquidationLogic {
                 uint256 targetFeeInYield = feeInYield;
                 uint256 maxSafeFeeInYield = maxRepaymentFeeInYield(account, runtime);
                 if (maxSafeFeeInYield < targetFeeInYield) {
+                    // All-or-nothing source switch: if the account cannot safely cover the full fee,
+                    // pay the fee entirely from the fee vault.
                     feeInYield = 0;
                     feeInUnderlying = StateLogic.convertYieldTokensToUnderlying(runtime.myt, targetFeeInYield);
                 }
@@ -230,31 +244,39 @@ library LiquidationLogic {
 
         Account storage account = accounts[accountId];
         if (account.debt == 0) revert IllegalState();
+        // must use the regular liquidation path i.e. liquidate(accountId)
         if (!isHealthy(runtime, account)) revert IAlchemistV3Errors.AccountNotHealthy();
 
+        // Repay any earmarked debt.
         uint256 repaidEarmarkedDebtInYield;
         (repaidEarmarkedDebtInYield, runtime.totalDebt, runtime.totalDeposited, runtime.cumulativeEarmarked) =
             forceRepay(accounts, accountId, account.earmarked, runtime, caller, true);
 
+        // then clear all remaining debt
         uint256 debt = account.debt;
         (runtime.totalDebt, runtime.cumulativeEarmarked) =
             BorrowLogic.subDebt(account, debt, runtime.totalDebt, runtime.cumulativeEarmarked, checkpointParams(runtime));
 
+        // sub the collateral used for repaying debt
         uint256 repaidDebtInYield;
         (repaidDebtInYield, runtime.totalDeposited) =
             SupplyLogic.subCollateralBalance(account, StateLogic.convertDebtTokensToYield(runtime.myt, runtime.underlyingConversionFactor, debt), runtime.totalDeposited);
+        // clear all remaining collateral
         uint256 remainingCollateral;
         (remainingCollateral, runtime.totalDeposited) =
             SupplyLogic.subCollateralBalance(account, account.collateralBalance, runtime.totalDeposited);
 
         if (repaidDebtInYield > 0) {
+            // transfer collateral used for repaying debt to transmuter
             TokenUtils.safeTransfer(runtime.myt, runtime.transmuter, repaidDebtInYield);
         }
         if (remainingCollateral > 0) {
+            // transfer remaining collateral to the recipient
             TokenUtils.safeTransfer(runtime.myt, recipient, remainingCollateral);
         }
 
         uint256 totalLiquidated = repaidEarmarkedDebtInYield + repaidDebtInYield;
+        // emit event
         emit IAlchemistV3Events.SelfLiquidated(accountId, totalLiquidated);
         return packResult(runtime, totalLiquidated, 0, 0, totalLiquidated > 0);
     }
@@ -337,6 +359,7 @@ library LiquidationLogic {
         );
 
         if (liquidationAmount == 0) {
+            // Debt-only closeout path: account can be insolvent with no remaining collateral to seize.
             if (debtToBurn > 0) {
                 uint256 burnableDebt = BorrowLogic.capDebtCredit(debtToBurn, account.debt, runtime.totalDebt);
                 if (burnableDebt > 0) {
@@ -368,6 +391,8 @@ library LiquidationLogic {
             SupplyLogic.subCollateralBalance(account, requestedLiquidationInYield, runtime.totalDeposited);
         if (amountLiquidated == 0) return (0, 0, 0);
 
+        // Fee and debt burn come from idealized liquidation math, so clamp them to realized collateral
+        // after balance capping to avoid over-burning debt or underflowing fees.
         uint256 requestedFeeInYield =
             StateLogic.convertDebtTokensToYield(runtime.myt, runtime.underlyingConversionFactor, baseFee);
         feeInYield = requestedFeeInYield > amountLiquidated ? amountLiquidated : requestedFeeInYield;
@@ -381,12 +406,15 @@ library LiquidationLogic {
         if (debtToBurn > maxDebtByStorage) debtToBurn = maxDebtByStorage;
 
         if (debtToBurn > 0) {
+            // update user debt
             (runtime.totalDebt, runtime.cumulativeEarmarked) = BorrowLogic.subDebt(
                 account, debtToBurn, runtime.totalDebt, runtime.cumulativeEarmarked, checkpointParams(runtime)
             );
         }
 
         if (account.debt > 0 && !isHealthy(runtime, account)) {
+            // If liquidation still leaves the account unhealthy, force-close the residual:
+            // sweep all remaining collateral and clear any debt that cannot be backed anymore.
             uint256 remainingShares = account.collateralBalance;
             if (remainingShares > 0) {
                 uint256 removedShares;
@@ -424,11 +452,14 @@ library LiquidationLogic {
             }
         }
 
+        // send liquidation amount net of liquidator fee to transmuter
         TokenUtils.safeTransfer(runtime.myt, runtime.transmuter, netToTransmuter);
 
         if (feeInYield > 0) {
+            // send base fee to liquidator if available
             TokenUtils.safeTransfer(runtime.myt, liquidator, feeInYield);
         } else if (StateLogic.normalizeDebtTokensToUnderlying(outsourcedFee, runtime.underlyingConversionFactor) > 0) {
+            // Handle outsourced fee from vault.
             feeInUnderlying = payWithFeeVault(
                 runtime.alchemistFeeVault,
                 liquidator,
@@ -471,6 +502,7 @@ library LiquidationLogic {
             return 0;
         }
 
+        // `isHealthy` uses a strict `>` comparison, so retain one debt-unit of margin.
         uint256 removableInDebt = collateralInDebt - minRequiredPostFee;
         return StateLogic.convertDebtTokensToYield(runtime.myt, runtime.underlyingConversionFactor, removableInDebt);
     }

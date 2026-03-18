@@ -96,7 +96,9 @@ library EarmarkLogic {
             return result;
         }
 
+        // Update pending cover shares based on transmuter balance delta.
         uint256 transmuterBalance = StateLogic.transmuterSharesBalance(myt, transmuter);
+        // Determine how much debt should be earmarked for this window from the staking graph.
         uint256 amount = StateLogic.queryGraph(transmuter, state.lastEarmarkBlock, blockNumber);
         return commit(state, transmuterBalance, amount, blockNumber, myt, underlyingConversionFactor);
     }
@@ -121,8 +123,10 @@ library EarmarkLogic {
             result.pendingCoverShares += (transmuterBalance - state.lastTransmuterTokenBalance);
         }
 
+        // Apply pending cover before treating the graph output as fresh earmark demand.
         uint256 sharesUsed;
         (amount, sharesUsed) = applyPendingCover(amount, result.pendingCoverShares, myt, underlyingConversionFactor);
+        // Consume the corresponding portion of pending cover shares so they cannot be reused.
         result.pendingCoverShares -= sharesUsed;
 
         uint256 liveUnearmarked = state.totalDebt - state.cumulativeEarmarked;
@@ -149,6 +153,7 @@ library EarmarkLogic {
 
             uint256 earmarkedFraction = state.oneQ128 - ratioApplied;
             result.survivalAccumulator += FixedPointMath.mulQ128(oldIndex, earmarkedFraction);
+            // Bump cumulative earmarked by the effective amount implied by `ratioApplied`.
             result.cumulativeEarmarked += effectiveEarmarked;
 
             if (epochAdvanced) {
@@ -170,6 +175,7 @@ library EarmarkLogic {
         if (state.totalDebt == 0 || blockNumber <= state.lastEarmarkBlock) return (earmarkWeightCopy, 0);
 
         uint256 transmuterBalance = StateLogic.transmuterSharesBalance(myt, transmuter);
+        // Simulate the graph-driven earmark amount for this window.
         uint256 amount = StateLogic.queryGraph(transmuter, state.lastEarmarkBlock, blockNumber);
         return simulateUnrealizedEarmark(state, transmuterBalance, amount, myt, underlyingConversionFactor);
     }
@@ -189,6 +195,7 @@ library EarmarkLogic {
             pendingCover += (transmuterBalance - state.lastTransmuterTokenBalance);
         }
 
+        // Apply simulated pending cover the same way the committed path would.
         (amount,) = applyPendingCover(amount, pendingCover, myt, underlyingConversionFactor);
 
         uint256 liveUnearmarked = state.totalDebt - state.cumulativeEarmarked;
@@ -259,6 +266,7 @@ library EarmarkLogic {
             return result;
         }
 
+        // ratioWanted = (liveEarmarked - amount) / liveEarmarked in Q128.128
         uint256 ratioWanted =
             amount == liveEarmarked ? 0 : FixedPointMath.divQ128(liveEarmarked - amount, liveEarmarked);
         (uint256 packedNew, uint256 ratioApplied,,,) = simulatePackedWeightUpdate(
@@ -269,8 +277,11 @@ library EarmarkLogic {
             state.oneQ128
         );
         result.redemptionWeight = packedNew;
+
+        // Apply survival using the applied ratio.
         result.survivalAccumulator = FixedPointMath.mulQ128(state.survivalAccumulator, ratioApplied);
 
+        // Derive effective redeemed amount using the same applied ratio.
         result.effectiveRedeemed = effectiveAppliedAmount(liveEarmarked, ratioApplied);
         result.cumulativeEarmarked = liveEarmarked - result.effectiveRedeemed;
         result.totalDebt = state.totalDebt - result.effectiveRedeemed;
@@ -343,9 +354,11 @@ library EarmarkLogic {
         uint256 indexMask,
         uint256 oneQ128
     ) internal pure returns (uint256 packedNew, uint256 ratioApplied, uint256 oldIndex, uint256 newEpoch, bool epochAdvanced) {
+        // Snapshot old packed state.
         uint256 oldEpoch = packedEpoch(packedOld, indexBits);
         oldIndex = packedIndex(packedOld, indexMask);
 
+        // Normalize uninitialized or zero-index weights.
         if (packedOld == 0) {
             oldEpoch = 0;
             oldIndex = oneQ128;
@@ -366,6 +379,8 @@ library EarmarkLogic {
         }
 
         epochAdvanced = newEpoch > oldEpoch;
+
+        // Compute new packed and the ratio accounts will actually observe.
         packedNew = packWeight(newEpoch, newIndex, indexBits);
         ratioApplied = epochAdvanced ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
     }

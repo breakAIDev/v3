@@ -85,6 +85,7 @@ library BorrowLogic {
         MintParams memory params,
         uint256 collateralValue
     ) internal returns (uint256 newTotalDebt, uint256 newTotalSyntheticsIssued) {
+        // Preemptively try to decrease the minting allowance. This saves gas when the allowance is not sufficient.
         Account storage account = accounts[params.tokenId];
         account.mintAllowances[account.allowancesVersion][params.caller] -= params.amount;
 
@@ -109,16 +110,20 @@ library BorrowLogic {
         uint256 debt = account.debt - account.earmarked;
         if (debt == 0) revert IllegalState();
 
+        // Burning alAssets can only repay unearmarked debt.
         credit = capDebtCredit(params.amount, debt, params.totalDebt);
         if (credit == 0) {
             return (0, params.totalDebt, params.totalSyntheticsIssued, params.cumulativeEarmarked);
         }
 
+        // Must only burn enough tokens that the transmuter positions can still be fulfilled.
         uint256 burnLimit = params.totalSyntheticsIssued - ITransmuter(params.transmuter).totalLocked();
         if (credit > burnLimit) revert IAlchemistV3Errors.BurnLimitExceeded(credit, burnLimit);
 
+        // Burn the tokens from the message sender.
         TokenUtils.safeBurnFrom(params.debtToken, params.caller, credit);
 
+        // Update the recipient's debt.
         (newTotalDebt, newCumulativeEarmarked) =
             subDebt(account, credit, params.totalDebt, params.cumulativeEarmarked, checkpoint);
         account.lastRepayBlock = block.number;
@@ -143,6 +148,7 @@ library BorrowLogic {
         Account storage account = accounts[params.recipientTokenId];
         if (account.debt == 0) revert IllegalState();
 
+        // Burning yield tokens will pay off all types of debt.
         uint256 credit = capDebtCredit(
             StateLogic.convertYieldTokensToDebt(params.myt, params.underlyingConversionFactor, params.amount),
             account.debt,
@@ -152,10 +158,13 @@ library BorrowLogic {
             return (0, 0, params.totalDebt, params.totalDeposited, params.cumulativeEarmarked);
         }
 
+        // Repay debt from earmarked amount of debt first.
         uint256 earmarkedRepaid;
         (earmarkedRepaid, newCumulativeEarmarked) = subEarmarkedDebt(account, credit, params.cumulativeEarmarked);
 
         creditToYield = StateLogic.convertDebtTokensToYield(params.myt, params.underlyingConversionFactor, credit);
+
+        // Protocol fee only applies to earmarked debt repaid.
         feeAmount = StateLogic.convertDebtTokensToYield(
             params.myt, params.underlyingConversionFactor, earmarkedRepaid
         ) * params.protocolFee / params.bps;
@@ -167,8 +176,10 @@ library BorrowLogic {
             subDebt(account, credit, params.totalDebt, newCumulativeEarmarked, checkpoint);
         account.lastRepayBlock = block.number;
 
+        // Transfer the repaid tokens to the transmuter.
         TokenUtils.safeTransferFrom(params.myt, params.caller, params.transmuter, creditToYield);
         if (feeAmount > 0) {
+            // Transfer the protocol fee to the protocol fee receiver.
             TokenUtils.safeTransfer(params.myt, params.protocolFeeReceiver, feeAmount);
         }
     }
@@ -199,8 +210,10 @@ library BorrowLogic {
         uint256 credit = amountInDebtTokens > debt ? debt : amountInDebtTokens;
         earmarkToRemove = credit > earmarkedDebt ? earmarkedDebt : credit;
 
+        // Always reduce local earmark by the full local repay amount.
         account.earmarked = earmarkedDebt - earmarkToRemove;
 
+        // Global can lag local by rounding; clamp only the global subtraction.
         uint256 remove = earmarkToRemove > cumulativeEarmarked ? cumulativeEarmarked : earmarkToRemove;
         newCumulativeEarmarked = cumulativeEarmarked - remove;
     }
@@ -250,6 +263,7 @@ library BorrowLogic {
         Account storage account = accounts[params.tokenId];
         if (block.number == account.lastRepayBlock) revert IAlchemistV3Errors.CannotMintOnRepayBlock();
 
+        // After sync, current collateralBalance is authoritative, so no extra simulation is needed here.
         newTotalDebt = addDebt(
             account,
             params.amount,
@@ -261,6 +275,7 @@ library BorrowLogic {
         newTotalSyntheticsIssued = params.totalSyntheticsIssued + params.amount;
         account.lastMintBlock = block.number;
 
+        // Mint the debt tokens to the recipient.
         TokenUtils.safeMint(params.debtToken, params.recipient, params.amount);
     }
 }

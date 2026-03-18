@@ -91,6 +91,7 @@ library RedemptionLogic {
             StateLogic.convertDebtTokensToYield(params.myt, params.underlyingConversionFactor, result.effectiveRedeemed);
         uint256 feeCollateral = collRedeemed * params.protocolFee / params.bps;
 
+        // Use the effective redeemed amount everywhere downstream.
         result.newTotalRedeemedDebt = params.totalRedeemedDebt + result.effectiveRedeemed;
         result.newTotalRedeemedSharesOut = params.totalRedeemedSharesOut + collRedeemed;
 

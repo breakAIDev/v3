@@ -21,11 +21,14 @@ library SupplyLogic {
         uint256 totalDeposited
     ) internal returns (uint256 positionId, uint256 newTotalDeposited, bool createdPosition) {
         positionId = tokenId;
+
+        // Only mint a new position if the id is 0.
         if (positionId == 0) {
             positionId = IAlchemistV3Position(positionNFT).mint(recipient);
             createdPosition = true;
         }
 
+        // Pull tokens from the payer after internal position selection has been committed.
         newTotalDeposited = executeDeposit(
             accounts[positionId],
             ExecuteDepositParams({
@@ -49,6 +52,7 @@ library SupplyLogic {
         uint256 fixedPointScalar,
         uint256 debtShares
     ) internal returns (uint256 amountRemoved, uint256 newTotalDeposited) {
+        // Assure that the collateralization invariant is still held.
         (amountRemoved, newTotalDeposited) = executeWithdraw(
             accounts[tokenId],
             ExecuteWithdrawParams({
@@ -60,6 +64,7 @@ library SupplyLogic {
             })
         );
 
+        // Transfer the yield tokens to the recipient.
         TokenUtils.safeTransfer(myt, recipient, amountRemoved);
     }
 
@@ -111,6 +116,8 @@ library SupplyLogic {
         internal
         returns (uint256 amountRemoved, uint256 newTotalDeposited)
     {
+        // Reconcile local collateral against global tracked shares before subtraction.
+        // This prevents underflow if rounding or drift made local storage exceed global storage.
         uint256 collateralBalance = account.collateralBalance;
 
         if (collateralBalance > totalDeposited) {
