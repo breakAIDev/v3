@@ -112,4 +112,21 @@ contract AaveStrategy is MYTStrategy {
     function _isProtectedToken(address token) internal view virtual override returns (bool) {
         return token == MYT.asset() || token == address(aToken);
     }
+
+    /// @notice Admin only function to perform a DEX swap via the 0x AllowanceHolder.
+    /// @param to The target token address (token to buy).
+    /// @param from The source token address (token to sell).
+    /// @param amount The amount of `from` tokens to swap.
+    /// @param minAmountOut The minimum amount of `to` tokens expected.
+    /// @param callData The calldata for the 0x interaction.
+    /// @return amountReceived The amount of `to` tokens received.
+    function adminDexSwap(
+        address to, 
+        address from, 
+        uint256 amount, 
+        uint256 minAmountOut, 
+        bytes calldata callData
+    ) external onlyOwner returns (uint256) {
+        return dexSwap(to, from, amount, minAmountOut, callData);
+    }
 }
