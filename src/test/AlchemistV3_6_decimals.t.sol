@@ -354,7 +354,7 @@ contract AlchemistV3Test is Test {
 
         IERC20(alToken).approve(address(transmuterLogic), 3000e18);
         IERC20(address(vault)).approve(address(alchemist), 100_000e18);
-        transmuterLogic.createRedemption(9e18 - 100);
+        transmuterLogic.createRedemption(9e18 - 100, user1);
 
         vm.roll(vm.getBlockNumber() + transmuterLogic.timeToTransmute()); // full dulration of the redemption.
 

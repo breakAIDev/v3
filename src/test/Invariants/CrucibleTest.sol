@@ -336,7 +336,7 @@ contract CrucibleTest is InvariantsTest {
 
         vm.startPrank(staker);
         alToken.approve(address(transmuterLogic), amount);
-        transmuterLogic.createRedemption(amount);
+        transmuterLogic.createRedemption(amount, staker);
         vm.stopPrank();
     }
 
@@ -567,7 +567,7 @@ contract CrucibleTest is InvariantsTest {
 
             vm.startPrank(staker);
             alToken.approve(address(transmuterLogic), stakeAmount);
-            transmuterLogic.createRedemption(stakeAmount);
+            transmuterLogic.createRedemption(stakeAmount, staker);
             vm.stopPrank();
 
             onBehalf = staker;

@@ -217,9 +217,9 @@ library LiquidationLogic {
         address caller,
         address recipient
     ) public returns (LiquidationResult memory result) {
-        if (recipient == address(0)) revert IllegalArgument();
-        ValidationLogic.ensureValidAccount(runtime.positionNFT, accountId);
-        ValidationLogic.requireTokenOwner(runtime.positionNFT, accountId, caller);
+        ValidationLogic.validateSelfLiquidation(
+            runtime.positionNFT, caller, recipient, accountId, accounts[accountId].lastMintBlock
+        );
 
         EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
             accounts,

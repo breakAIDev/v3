@@ -460,7 +460,7 @@ contract HardenedInvariantsTest is InvariantsTest {
         vm.startPrank(onBehalf);
         alToken.mint(onBehalf, amount);
         alToken.approve(address(transmuterLogic), amount);
-        try transmuterLogic.createRedemption(amount) {} catch {}
+        try transmuterLogic.createRedemption(amount, onBehalf) {} catch {}
         vm.stopPrank();
     }
 

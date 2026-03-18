@@ -261,7 +261,6 @@ library BorrowLogic {
         uint256 collateralValue
     ) private returns (uint256 newTotalDebt, uint256 newTotalSyntheticsIssued) {
         Account storage account = accounts[params.tokenId];
-        if (block.number == account.lastRepayBlock) revert IAlchemistV3Errors.CannotMintOnRepayBlock();
 
         // After sync, current collateralBalance is authoritative, so no extra simulation is needed here.
         newTotalDebt = addDebt(

@@ -173,10 +173,11 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
     }
 
     /// @inheritdoc ITransmuter
-    function createRedemption(uint256 syntheticDepositAmount) external {
+    function createRedemption(uint256 syntheticDepositAmount, address recipient) external {
         if (syntheticDepositAmount == 0) {
             revert DepositZeroAmount();
         }
+        _checkArgument(recipient != address(0));
 
         if (totalActiveLocked + syntheticDepositAmount > depositCap) {
             revert DepositCapReached();
@@ -198,7 +199,7 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         totalActiveLocked += syntheticDepositAmount;
         _countsTowardCap[_nonce] = true;
 
-        _mint(msg.sender, _nonce);
+        _mint(recipient, _nonce);
 
         emit PositionCreated(msg.sender, syntheticDepositAmount, _nonce);
     }

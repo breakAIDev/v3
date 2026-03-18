@@ -35,31 +35,23 @@ library ValidationLogic {
         requireTokenOwner(positionNFT, tokenId, caller);
     }
 
-    /// @dev Validates direct minting from a position owned by the caller.
-    function validateMint(
+    /// @dev Validates minting preconditions and optionally requires the caller to own the position.
+    function validateMintRequest(
         address positionNFT,
         address caller,
         address recipient,
         uint256 tokenId,
         uint256 amount,
-        bool loansPaused
+        bool loansPaused,
+        uint256 lastRepayBlock,
+        bool requireOwner
     ) internal view {
         if (recipient == address(0)) revert IllegalArgument();
         ensureValidAccount(positionNFT, tokenId);
         if (amount == 0) revert IllegalArgument();
         if (loansPaused) revert IllegalState();
-        requireTokenOwner(positionNFT, tokenId, caller);
-    }
-
-    /// @dev Validates delegated minting where allowance, not ownership, governs access.
-    function validateMintFrom(address positionNFT, address recipient, uint256 tokenId, uint256 amount, bool loansPaused)
-        internal
-        view
-    {
-        if (recipient == address(0)) revert IllegalArgument();
-        ensureValidAccount(positionNFT, tokenId);
-        if (amount == 0) revert IllegalArgument();
-        if (loansPaused) revert IllegalState();
+        if (block.number == lastRepayBlock) revert IAlchemistV3Errors.CannotMintOnRepayBlock();
+        if (requireOwner) requireTokenOwner(positionNFT, tokenId, caller);
     }
 
     /// @dev Validates burn and repay flows and enforces the mint/repay cooldown.
@@ -75,6 +67,23 @@ library ValidationLogic {
     /// @dev Validates that the target position exists before syncing it.
     function validatePoke(address positionNFT, uint256 tokenId) internal view {
         ensureValidAccount(positionNFT, tokenId);
+    }
+
+    /// @dev Validates self-liquidation preconditions, including the mint/repay same-block cooldown.
+    function validateSelfLiquidation(
+        address positionNFT,
+        address caller,
+        address recipient,
+        uint256 tokenId,
+        uint256 lastMintBlock
+    )
+        internal
+        view
+    {
+        if (recipient == address(0)) revert IllegalArgument();
+        ensureValidAccount(positionNFT, tokenId);
+        if (block.number == lastMintBlock) revert IAlchemistV3Errors.CannotRepayOnMintBlock();
+        requireTokenOwner(positionNFT, tokenId, caller);
     }
 
     /// @dev Validates that the caller can manage mint approvals for the target position.

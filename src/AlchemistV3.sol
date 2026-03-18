@@ -233,7 +233,16 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         external
         override(IAlchemistV3Actions)
     {
-        ValidationLogic.validateMint(_alchemistPositionNFT, msg.sender, recipient, tokenId, amount, _loansPaused);
+        ValidationLogic.validateMintRequest(
+            _alchemistPositionNFT,
+            msg.sender,
+            recipient,
+            tokenId,
+            amount,
+            _loansPaused,
+            _accounts[tokenId].lastRepayBlock,
+            true
+        );
         _commitAndApply(tokenId, true);
 
         (_totalDebt, _totalSyntheticsIssued) = BorrowLogic.mint(
@@ -250,7 +259,16 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         external
         override(IAlchemistV3Actions)
     {
-        ValidationLogic.validateMintFrom(_alchemistPositionNFT, recipient, tokenId, amount, _loansPaused);
+        ValidationLogic.validateMintRequest(
+            _alchemistPositionNFT,
+            msg.sender,
+            recipient,
+            tokenId,
+            amount,
+            _loansPaused,
+            _accounts[tokenId].lastRepayBlock,
+            false
+        );
         _commitAndApply(tokenId, true);
 
         (_totalDebt, _totalSyntheticsIssued) = BorrowLogic.mintFrom(

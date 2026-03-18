@@ -40,7 +40,7 @@ interface IReplayAlchemist {
 }
 
 interface IReplayTransmuter {
-    function createRedemption(uint256 syntheticDepositAmount) external;
+    function createRedemption(uint256 syntheticDepositAmount, address recipient) external;
     function claimRedemption(uint256 id) external;
 }
 
@@ -69,7 +69,7 @@ contract ReplayActor {
     function stakeSequence(address alTokenAddr, address transmuterAddr, uint256 amount) external {
         IReplayAlToken(alTokenAddr).mint(address(this), amount);
         IReplayAlToken(alTokenAddr).approve(transmuterAddr, amount);
-        IReplayTransmuter(transmuterAddr).createRedemption(amount);
+        IReplayTransmuter(transmuterAddr).createRedemption(amount, address(this));
     }
 
     function claimSequence(address transmuterAddr, uint256 tokenId) external {

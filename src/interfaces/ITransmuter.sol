@@ -142,11 +142,13 @@ interface ITransmuter {
     /// @notice Creates a new staking position in the transmuter.
     ///
     /// @notice `depositAmount` must be non-zero or this call will revert with a {DepositZeroAmount} error.
+    /// @notice `recipient` must be non-zero or this call will revert with an {IllegalArgument} error.
     ///
     /// @notice Emits a {PositionCreated} event.
     ///
     /// @param depositAmount    Amount of debt tokens to deposit.
-    function createRedemption(uint256 depositAmount) external;
+    /// @param recipient        Owner of the new transmuter position NFT.
+    function createRedemption(uint256 depositAmount, address recipient) external;
 
     /// @notice Claims a staking position from the transmuter.
     ///
