@@ -847,6 +847,33 @@ contract AlchemistV3Test is Test {
         assertEq(alchemist.totalValue(tokenId), alchemist.getTotalUnderlyingValue());
     }
 
+    function testDeposit_ReturnsTokenIdAndDebt() external {
+        uint256 amount = 100e18;
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), amount + 100e18);
+        (uint256 tokenId, uint256 debtValue) = alchemist.deposit(amount, address(0xbeef), 0);
+        vm.stopPrank();
+
+        uint256 expectedTokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
+        assertEq(tokenId, expectedTokenId);
+        assertEq(debtValue, alchemist.convertYieldTokensToDebt(amount));
+    }
+
+    function testDeposit_ExistingPositionReturnsTokenIdAndDebt() external {
+        uint256 amount = 100e18;
+
+        vm.startPrank(address(0xbeef));
+        SafeERC20.safeApprove(address(vault), address(alchemist), (amount * 2) + 100e18);
+
+        (uint256 tokenId,) = alchemist.deposit(amount, address(0xbeef), 0);
+        (uint256 returnedTokenId, uint256 debtValue) = alchemist.deposit(amount, address(0xbeef), tokenId);
+        vm.stopPrank();
+
+        assertEq(returnedTokenId, tokenId);
+        assertEq(debtValue, alchemist.convertYieldTokensToDebt(amount));
+    }
+
     function testDeposit_ExistingPosition(uint256 amount) external {
         amount = bound(amount, FIXED_POINT_SCALAR, 1000e18);
         vm.startPrank(address(0xbeef));

@@ -164,7 +164,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     function deposit(uint256 amount, address recipient, uint256 tokenId)
         external
         override(IAlchemistV3Actions)
-        returns (uint256)
+        returns (uint256 positionId, uint256 debtValue)
     {
         ValidationLogic.validateDeposit(
             _alchemistPositionNFT,
@@ -190,7 +190,6 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             _commitAndApply(tokenId, false);
         }
 
-        uint256 positionId;
         bool createdPosition;
         (positionId, _mytSharesDeposited, createdPosition) = SupplyLogic.deposit(
             _accounts, _alchemistPositionNFT, _myt, msg.sender, recipient, tokenId, amount, _mytSharesDeposited
@@ -200,7 +199,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             emit AlchemistV3PositionNFTMinted(recipient, positionId);
         }
         emit Deposit(amount, positionId);
-        return StateLogic.convertYieldTokensToDebt(_myt, _underlyingConversionFactor, amount);
+        debtValue = StateLogic.convertYieldTokensToDebt(_myt, _underlyingConversionFactor, amount);
     }
 
     /// @inheritdoc IAlchemistV3Actions

@@ -197,7 +197,7 @@ contract CrucibleTest is InvariantsTest {
         vm.startPrank(onBehalf);
         IERC20(mockVaultCollateral).approve(address(vault), underlyingNeeded);
         vault.mint(amount, onBehalf);
-        try alchemist.deposit(amount, onBehalf, tokenId) returns (uint256) {
+        try alchemist.deposit(amount, onBehalf, tokenId) returns (uint256, uint256) {
             vm.stopPrank();
         } catch (bytes memory reason) {
             vm.stopPrank();
