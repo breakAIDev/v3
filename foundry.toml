@@ -45,6 +45,16 @@ ffi = true
 exclude = ["lib/vault-v2/test/**"]
 fs_permissions = [{ access = "read", path = "src/test/strategies/utils/offchain/quotes/" }]
 
+[profile.deploy]
+optimizer = true
+optimizer_runs = 1
+via_ir = true
+bytecode_hash = "none"
+cbor_metadata = false
+
+[profile.deploy.optimizer_details]
+yul = true
+
 [profile.default.optimizer_details]
 yul = false
 

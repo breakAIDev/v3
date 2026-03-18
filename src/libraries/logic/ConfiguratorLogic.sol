@@ -8,14 +8,10 @@ import "../../libraries/TokenUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 library ConfiguratorLogic {
-    struct InitializeResult {
-        uint256 underlyingConversionFactor;
-    }
-
     function initialize(AlchemistInitializationParams memory params, uint256 bps)
         internal
         view
-        returns (InitializeResult memory result)
+        returns (uint256 underlyingConversionFactor)
     {
         if (params.protocolFee > bps) {
             revert IllegalArgument();
@@ -30,7 +26,7 @@ library ConfiguratorLogic {
             revert IllegalArgument();
         }
 
-        result.underlyingConversionFactor =
+        underlyingConversionFactor =
             10 ** (TokenUtils.expectDecimals(params.debtToken) - TokenUtils.expectDecimals(params.underlyingToken));
     }
 

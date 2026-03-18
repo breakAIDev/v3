@@ -14,19 +14,19 @@ import {ViewLogic} from "./libraries/logic/ViewLogic.sol";
 import {SyncLogic} from "./libraries/logic/SyncLogic.sol";
 import {EarmarkLogic} from "./libraries/logic/EarmarkLogic.sol";
 import {StateLogic} from "./libraries/logic/StateLogic.sol";
+import {IFeeVault} from "./interfaces/IFeeVault.sol";
 import "./base/Errors.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title  AlchemistV3
 /// @author Alchemix Finance
 ///
 /// For Juris, Graham, and Marcus
 contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
-    function initialize(AlchemistInitializationParams memory params) external initializer {
-        ConfiguratorLogic.InitializeResult memory result = ConfiguratorLogic.initialize(params, BPS);
-
+    function initialize(AlchemistInitializationParams calldata params) external initializer {
         _debtToken = params.debtToken;
         _underlyingToken = params.underlyingToken;
-        _underlyingConversionFactor = result.underlyingConversionFactor;
+        _underlyingConversionFactor = ConfiguratorLogic.initialize(params, BPS);
         _depositCap = params.depositCap;
         _minimumCollateralization = params.minimumCollateralization;
         _globalMinimumCollateralization = params.globalMinimumCollateralization;
@@ -49,10 +49,8 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         _earmarkEpochStartSurvivalAccumulator[0] = _survivalAccumulator;
     }
 
-    // ---------------- Protocol and CDP getters ---------------- //
-
-    function getCDP(uint256 tokenId) public view override(IAlchemistV3State) returns (uint256, uint256, uint256) {
-        SyncLogic.GlobalSyncState memory syncState = SyncLogic.globalSyncState(
+    function _globalSyncState() private view returns (SyncLogic.GlobalSyncState memory) {
+        return SyncLogic.globalSyncState(
             _totalRedeemedDebt,
             _totalRedeemedSharesOut,
             _earmarkWeight,
@@ -64,7 +62,10 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             _REDEMPTION_INDEX_MASK,
             _REDEMPTION_INDEX_BITS
         );
-        EarmarkLogic.State memory earmarkState = EarmarkLogic.state(
+    }
+
+    function _earmarkState() private view returns (EarmarkLogic.State memory) {
+        return EarmarkLogic.state(
             _totalDebt,
             _cumulativeEarmarked,
             _lastEarmarkBlock,
@@ -79,8 +80,142 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             _EARMARK_INDEX_BITS,
             _EARMARK_INDEX_MASK
         );
-        (uint256 simulatedEarmarkWeight,) =
-            EarmarkLogic.simulateFromGraph(earmarkState, _transmuter, _myt, _underlyingConversionFactor, block.number);
+    }
+
+    function _simulateFromGraph(EarmarkLogic.State memory earmarkState_)
+        private
+        view
+        returns (uint256 simulatedEarmarkWeight, uint256 effectiveEarmarked)
+    {
+        return EarmarkLogic.simulateFromGraph(
+            earmarkState_, _transmuter, _myt, _underlyingConversionFactor, block.number
+        );
+    }
+
+    function _viewContext()
+        private
+        view
+        returns (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight)
+    {
+        syncState = _globalSyncState();
+        (simulatedEarmarkWeight,) = _simulateFromGraph(_earmarkState());
+    }
+
+    function _commitAndApply(uint256 tokenId, bool enforceNoBadDebt) private {
+        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
+            _accounts,
+            tokenId,
+            _earmarkEpochStartRedemptionWeight,
+            _earmarkEpochStartSurvivalAccumulator,
+            _earmarkState(),
+            _totalRedeemedDebt,
+            _totalRedeemedSharesOut,
+            SyncLogic.CommitAndSyncParams({
+                myt: _myt,
+                transmuter: _transmuter,
+                underlyingConversionFactor: _underlyingConversionFactor,
+                totalSyntheticsIssued: _totalSyntheticsIssued,
+                totalDeposited: _mytSharesDeposited,
+                minimumCollateralization: _minimumCollateralization,
+                fixedPointScalar: FIXED_POINT_SCALAR,
+                enforceNoBadDebt: enforceNoBadDebt
+            })
+        );
+
+        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
+        _pendingCoverShares = commit.pendingCoverShares;
+        _cumulativeEarmarked = commit.cumulativeEarmarked;
+        _earmarkWeight = commit.earmarkWeight;
+        _survivalAccumulator = commit.survivalAccumulator;
+        _lastEarmarkBlock = commit.lastEarmarkBlock;
+    }
+
+    function _borrowCheckpointParams() private view returns (BorrowLogic.CheckpointParams memory) {
+        return BorrowLogic.CheckpointParams({
+            totalRedeemedDebt: _totalRedeemedDebt,
+            totalRedeemedSharesOut: _totalRedeemedSharesOut,
+            earmarkWeight: _earmarkWeight,
+            redemptionWeight: _redemptionWeight,
+            survivalAccumulator: _survivalAccumulator
+        });
+    }
+
+    function _mintParams(uint256 tokenId, uint256 amount, address recipient)
+        private
+        view
+        returns (BorrowLogic.MintParams memory)
+    {
+        return BorrowLogic.MintParams({
+            debtToken: _debtToken,
+            caller: msg.sender,
+            tokenId: tokenId,
+            amount: amount,
+            recipient: recipient,
+            totalDebt: _totalDebt,
+            totalSyntheticsIssued: _totalSyntheticsIssued,
+            minimumCollateralization: _minimumCollateralization,
+            fixedPointScalar: FIXED_POINT_SCALAR
+        });
+    }
+
+    function _collateralValueInDebt(uint256 tokenId) private view returns (uint256) {
+        return StateLogic.collateralValueInDebt(
+            _myt, _underlyingConversionFactor, _accounts[tokenId].collateralBalance
+        );
+    }
+
+    function _liquidationRuntime() private view returns (LiquidationLogic.Runtime memory) {
+        return LiquidationLogic.Runtime({
+            positionNFT: _alchemistPositionNFT,
+            myt: _myt,
+            transmuter: _transmuter,
+            protocolFeeReceiver: _protocolFeeReceiver,
+            alchemistFeeVault: _alchemistFeeVault,
+            totalDebt: _totalDebt,
+            totalDeposited: _mytSharesDeposited,
+            cumulativeEarmarked: _cumulativeEarmarked,
+            totalSyntheticsIssued: _totalSyntheticsIssued,
+            totalRedeemedDebt: _totalRedeemedDebt,
+            totalRedeemedSharesOut: _totalRedeemedSharesOut,
+            lastEarmarkBlock: _lastEarmarkBlock,
+            lastTransmuterTokenBalance: _lastTransmuterTokenBalance,
+            pendingCoverShares: _pendingCoverShares,
+            earmarkWeight: _earmarkWeight,
+            redemptionWeight: _redemptionWeight,
+            survivalAccumulator: _survivalAccumulator,
+            underlyingConversionFactor: _underlyingConversionFactor,
+            minimumCollateralization: _minimumCollateralization,
+            collateralizationLowerBound: _collateralizationLowerBound,
+            globalMinimumCollateralization: _globalMinimumCollateralization,
+            liquidationTargetCollateralization: _liquidationTargetCollateralization,
+            protocolFee: _protocolFee,
+            liquidatorFee: _liquidatorFee,
+            repaymentFee: _repaymentFee,
+            oneQ128: ONE_Q128,
+            fixedPointScalar: FIXED_POINT_SCALAR,
+            bps: BPS,
+            earmarkIndexBits: _EARMARK_INDEX_BITS,
+            earmarkIndexMask: _EARMARK_INDEX_MASK,
+            redemptionIndexBits: _REDEMPTION_INDEX_BITS,
+            redemptionIndexMask: _REDEMPTION_INDEX_MASK
+        });
+    }
+
+    function _applyLiquidationResult(LiquidationLogic.LiquidationResult memory result) private {
+        _totalDebt = result.totalDebt;
+        _mytSharesDeposited = result.totalDeposited;
+        _cumulativeEarmarked = result.cumulativeEarmarked;
+        _lastEarmarkBlock = result.lastEarmarkBlock;
+        _lastTransmuterTokenBalance = result.lastTransmuterTokenBalance;
+        _pendingCoverShares = result.pendingCoverShares;
+        _earmarkWeight = result.earmarkWeight;
+        _survivalAccumulator = result.survivalAccumulator;
+    }
+
+    // ---------------- Protocol and CDP getters ---------------- //
+
+    function getCDP(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256, uint256, uint256) {
+        (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
         return ViewLogic.getCDP(
             _accounts,
@@ -92,40 +227,12 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
-    function getTotalDeposited() public view override(IAlchemistV3State) returns (uint256) {
-        return ViewLogic.getTotalDeposited(_mytSharesDeposited);
+    function getTotalDeposited() external view override(IAlchemistV3State) returns (uint256) {
+        return _mytSharesDeposited;
     }
 
-    function getMaxBorrowable(uint256 tokenId) public view override(IAlchemistV3State) returns (uint256) {
-        SyncLogic.GlobalSyncState memory syncState = SyncLogic.globalSyncState(
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _EARMARK_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _REDEMPTION_INDEX_BITS
-        );
-        EarmarkLogic.State memory earmarkState = EarmarkLogic.state(
-            _totalDebt,
-            _cumulativeEarmarked,
-            _lastEarmarkBlock,
-            _lastTransmuterTokenBalance,
-            _pendingCoverShares,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _REDEMPTION_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _EARMARK_INDEX_MASK
-        );
-        (uint256 simulatedEarmarkWeight,) =
-            EarmarkLogic.simulateFromGraph(earmarkState, _transmuter, _myt, _underlyingConversionFactor, block.number);
+    function getMaxBorrowable(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256) {
+        (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
         return ViewLogic.getMaxBorrowable(
             _accounts,
@@ -141,36 +248,8 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
-    function getMaxWithdrawable(uint256 tokenId) public view override(IAlchemistV3State) returns (uint256) {
-        SyncLogic.GlobalSyncState memory syncState = SyncLogic.globalSyncState(
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _EARMARK_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _REDEMPTION_INDEX_BITS
-        );
-        EarmarkLogic.State memory earmarkState = EarmarkLogic.state(
-            _totalDebt,
-            _cumulativeEarmarked,
-            _lastEarmarkBlock,
-            _lastTransmuterTokenBalance,
-            _pendingCoverShares,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _REDEMPTION_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _EARMARK_INDEX_MASK
-        );
-        (uint256 simulatedEarmarkWeight,) =
-            EarmarkLogic.simulateFromGraph(earmarkState, _transmuter, _myt, _underlyingConversionFactor, block.number);
+    function getMaxWithdrawable(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256) {
+        (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
         return ViewLogic.getMaxWithdrawable(
             _accounts,
@@ -189,20 +268,21 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function mintAllowance(uint256 ownerTokenId, address spender)
-        public
+        external
         view
         override(IAlchemistV3State)
         returns (uint256)
     {
-        return ViewLogic.mintAllowance(_accounts, ownerTokenId, spender);
+        Account storage account = _accounts[ownerTokenId];
+        return account.mintAllowances[account.allowancesVersion][spender];
     }
 
-    function getTotalUnderlyingValue() public view override(IAlchemistV3State) returns (uint256) {
-        return ViewLogic.getTotalUnderlyingValue(_myt, _mytSharesDeposited);
+    function getTotalUnderlyingValue() external view override(IAlchemistV3State) returns (uint256) {
+        return StateLogic.getTotalUnderlyingValue(_myt, _mytSharesDeposited);
     }
 
-    function getTotalLockedUnderlyingValue() public view override(IAlchemistV3State) returns (uint256) {
-        return ViewLogic.getTotalLockedUnderlyingValue(
+    function getTotalLockedUnderlyingValue() external view override(IAlchemistV3State) returns (uint256) {
+        return StateLogic.getTotalLockedUnderlyingValue(
             _myt,
             _underlyingConversionFactor,
             _totalDebt,
@@ -212,36 +292,8 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
-    function totalValue(uint256 tokenId) public view override(IAlchemistV3State) returns (uint256) {
-        SyncLogic.GlobalSyncState memory syncState = SyncLogic.globalSyncState(
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _EARMARK_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _REDEMPTION_INDEX_BITS
-        );
-        EarmarkLogic.State memory earmarkState = EarmarkLogic.state(
-            _totalDebt,
-            _cumulativeEarmarked,
-            _lastEarmarkBlock,
-            _lastTransmuterTokenBalance,
-            _pendingCoverShares,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _REDEMPTION_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _EARMARK_INDEX_MASK
-        );
-        (uint256 simulatedEarmarkWeight,) =
-            EarmarkLogic.simulateFromGraph(earmarkState, _transmuter, _myt, _underlyingConversionFactor, block.number);
+    function totalValue(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256) {
+        (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
         return ViewLogic.totalValue(
             _accounts,
@@ -255,31 +307,16 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
-    function getUnrealizedCumulativeEarmarked() public view returns (uint256) {
-        EarmarkLogic.State memory earmarkState = EarmarkLogic.state(
-            _totalDebt,
-            _cumulativeEarmarked,
-            _lastEarmarkBlock,
-            _lastTransmuterTokenBalance,
-            _pendingCoverShares,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _REDEMPTION_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _EARMARK_INDEX_MASK
-        );
-        (, uint256 effectiveEarmarked) =
-            EarmarkLogic.simulateFromGraph(earmarkState, _transmuter, _myt, _underlyingConversionFactor, block.number);
-        return ViewLogic.getUnrealizedCumulativeEarmarked(_totalDebt, _cumulativeEarmarked, effectiveEarmarked);
+    function getUnrealizedCumulativeEarmarked() external view returns (uint256) {
+        (, uint256 effectiveEarmarked) = _simulateFromGraph(_earmarkState());
+        if (_totalDebt == 0) return 0;
+        return _cumulativeEarmarked + effectiveEarmarked;
     }
 
     // ---------------- Core CDP actions ---------------- //
 
     function deposit(uint256 amount, address recipient, uint256 tokenId)
-        public
+        external
         override(IAlchemistV3Actions)
         returns (uint256)
     {
@@ -304,45 +341,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
 
         if (tokenId != 0) {
-            EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-                _accounts,
-                tokenId,
-                _earmarkEpochStartRedemptionWeight,
-                _earmarkEpochStartSurvivalAccumulator,
-                EarmarkLogic.state(
-                    _totalDebt,
-                    _cumulativeEarmarked,
-                    _lastEarmarkBlock,
-                    _lastTransmuterTokenBalance,
-                    _pendingCoverShares,
-                    _earmarkWeight,
-                    _redemptionWeight,
-                    _survivalAccumulator,
-                    ONE_Q128,
-                    _REDEMPTION_INDEX_BITS,
-                    _REDEMPTION_INDEX_MASK,
-                    _EARMARK_INDEX_BITS,
-                    _EARMARK_INDEX_MASK
-                ),
-                _totalRedeemedDebt,
-                _totalRedeemedSharesOut,
-                SyncLogic.CommitAndSyncParams({
-                    myt: _myt,
-                    transmuter: _transmuter,
-                    underlyingConversionFactor: _underlyingConversionFactor,
-                    totalSyntheticsIssued: _totalSyntheticsIssued,
-                    totalDeposited: _mytSharesDeposited,
-                    minimumCollateralization: _minimumCollateralization,
-                    fixedPointScalar: FIXED_POINT_SCALAR,
-                    enforceNoBadDebt: false
-                })
-            );
-            _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-            _pendingCoverShares = commit.pendingCoverShares;
-            _cumulativeEarmarked = commit.cumulativeEarmarked;
-            _earmarkWeight = commit.earmarkWeight;
-            _survivalAccumulator = commit.survivalAccumulator;
-            _lastEarmarkBlock = commit.lastEarmarkBlock;
+            _commitAndApply(tokenId, false);
         }
 
         uint256 positionId;
@@ -355,55 +354,16 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             emit AlchemistV3PositionNFTMinted(recipient, positionId);
         }
         emit Deposit(amount, positionId);
-        return convertYieldTokensToDebt(amount);
+        return StateLogic.convertYieldTokensToDebt(_myt, _underlyingConversionFactor, amount);
     }
 
     function withdraw(uint256 amount, address recipient, uint256 tokenId)
-        public
+        external
         override(IAlchemistV3Actions)
         returns (uint256)
     {
         ValidationLogic.validateWithdraw(_alchemistPositionNFT, msg.sender, recipient, tokenId, amount);
-
-        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-            _accounts,
-            tokenId,
-            _earmarkEpochStartRedemptionWeight,
-            _earmarkEpochStartSurvivalAccumulator,
-            EarmarkLogic.state(
-                _totalDebt,
-                _cumulativeEarmarked,
-                _lastEarmarkBlock,
-                _lastTransmuterTokenBalance,
-                _pendingCoverShares,
-                _earmarkWeight,
-                _redemptionWeight,
-                _survivalAccumulator,
-                ONE_Q128,
-                _REDEMPTION_INDEX_BITS,
-                _REDEMPTION_INDEX_MASK,
-                _EARMARK_INDEX_BITS,
-                _EARMARK_INDEX_MASK
-            ),
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            SyncLogic.CommitAndSyncParams({
-                myt: _myt,
-                transmuter: _transmuter,
-                underlyingConversionFactor: _underlyingConversionFactor,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                totalDeposited: _mytSharesDeposited,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR,
-                enforceNoBadDebt: false
-            })
-        );
-        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-        _pendingCoverShares = commit.pendingCoverShares;
-        _cumulativeEarmarked = commit.cumulativeEarmarked;
-        _earmarkWeight = commit.earmarkWeight;
-        _survivalAccumulator = commit.survivalAccumulator;
-        _lastEarmarkBlock = commit.lastEarmarkBlock;
+        _commitAndApply(tokenId, false);
 
         uint256 transferred;
         (transferred, _mytSharesDeposited) = SupplyLogic.withdraw(
@@ -423,187 +383,46 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function mint(uint256 tokenId, uint256 amount, address recipient)
-        public
+        external
         override(IAlchemistV3Actions)
     {
         ValidationLogic.validateMint(_alchemistPositionNFT, msg.sender, recipient, tokenId, amount, _loansPaused);
-
-        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-            _accounts,
-            tokenId,
-            _earmarkEpochStartRedemptionWeight,
-            _earmarkEpochStartSurvivalAccumulator,
-            EarmarkLogic.state(
-                _totalDebt,
-                _cumulativeEarmarked,
-                _lastEarmarkBlock,
-                _lastTransmuterTokenBalance,
-                _pendingCoverShares,
-                _earmarkWeight,
-                _redemptionWeight,
-                _survivalAccumulator,
-                ONE_Q128,
-                _REDEMPTION_INDEX_BITS,
-                _REDEMPTION_INDEX_MASK,
-                _EARMARK_INDEX_BITS,
-                _EARMARK_INDEX_MASK
-            ),
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            SyncLogic.CommitAndSyncParams({
-                myt: _myt,
-                transmuter: _transmuter,
-                underlyingConversionFactor: _underlyingConversionFactor,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                totalDeposited: _mytSharesDeposited,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR,
-                enforceNoBadDebt: true
-            })
-        );
-        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-        _pendingCoverShares = commit.pendingCoverShares;
-        _cumulativeEarmarked = commit.cumulativeEarmarked;
-        _earmarkWeight = commit.earmarkWeight;
-        _survivalAccumulator = commit.survivalAccumulator;
-        _lastEarmarkBlock = commit.lastEarmarkBlock;
+        _commitAndApply(tokenId, true);
 
         (_totalDebt, _totalSyntheticsIssued) = BorrowLogic.mint(
             _accounts,
-            BorrowLogic.MintParams({
-                debtToken: _debtToken,
-                caller: msg.sender,
-                tokenId: tokenId,
-                amount: amount,
-                recipient: recipient,
-                totalDebt: _totalDebt,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR
-            }),
-            StateLogic.collateralValueInDebt(
-                _myt, _underlyingConversionFactor, _accounts[tokenId].collateralBalance
-            )
+            _mintParams(tokenId, amount, recipient),
+            _collateralValueInDebt(tokenId)
         );
 
         emit Mint(tokenId, amount, recipient);
     }
 
     function mintFrom(uint256 tokenId, uint256 amount, address recipient)
-        public
+        external
         override(IAlchemistV3Actions)
     {
         ValidationLogic.validateMintFrom(_alchemistPositionNFT, recipient, tokenId, amount, _loansPaused);
-
-        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-            _accounts,
-            tokenId,
-            _earmarkEpochStartRedemptionWeight,
-            _earmarkEpochStartSurvivalAccumulator,
-            EarmarkLogic.state(
-                _totalDebt,
-                _cumulativeEarmarked,
-                _lastEarmarkBlock,
-                _lastTransmuterTokenBalance,
-                _pendingCoverShares,
-                _earmarkWeight,
-                _redemptionWeight,
-                _survivalAccumulator,
-                ONE_Q128,
-                _REDEMPTION_INDEX_BITS,
-                _REDEMPTION_INDEX_MASK,
-                _EARMARK_INDEX_BITS,
-                _EARMARK_INDEX_MASK
-            ),
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            SyncLogic.CommitAndSyncParams({
-                myt: _myt,
-                transmuter: _transmuter,
-                underlyingConversionFactor: _underlyingConversionFactor,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                totalDeposited: _mytSharesDeposited,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR,
-                enforceNoBadDebt: true
-            })
-        );
-        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-        _pendingCoverShares = commit.pendingCoverShares;
-        _cumulativeEarmarked = commit.cumulativeEarmarked;
-        _earmarkWeight = commit.earmarkWeight;
-        _survivalAccumulator = commit.survivalAccumulator;
-        _lastEarmarkBlock = commit.lastEarmarkBlock;
+        _commitAndApply(tokenId, true);
 
         (_totalDebt, _totalSyntheticsIssued) = BorrowLogic.mintFrom(
             _accounts,
-            BorrowLogic.MintParams({
-                debtToken: _debtToken,
-                caller: msg.sender,
-                tokenId: tokenId,
-                amount: amount,
-                recipient: recipient,
-                totalDebt: _totalDebt,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR
-            }),
-            StateLogic.collateralValueInDebt(
-                _myt, _underlyingConversionFactor, _accounts[tokenId].collateralBalance
-            )
+            _mintParams(tokenId, amount, recipient),
+            _collateralValueInDebt(tokenId)
         );
 
         emit Mint(tokenId, amount, recipient);
     }
 
     function burn(uint256 amount, uint256 recipientId)
-        public
+        external
         override(IAlchemistV3Actions)
         returns (uint256)
     {
         ValidationLogic.validateDebtRepayment(
             _alchemistPositionNFT, recipientId, amount, _accounts[recipientId].lastMintBlock
         );
-
-        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-            _accounts,
-            recipientId,
-            _earmarkEpochStartRedemptionWeight,
-            _earmarkEpochStartSurvivalAccumulator,
-            EarmarkLogic.state(
-                _totalDebt,
-                _cumulativeEarmarked,
-                _lastEarmarkBlock,
-                _lastTransmuterTokenBalance,
-                _pendingCoverShares,
-                _earmarkWeight,
-                _redemptionWeight,
-                _survivalAccumulator,
-                ONE_Q128,
-                _REDEMPTION_INDEX_BITS,
-                _REDEMPTION_INDEX_MASK,
-                _EARMARK_INDEX_BITS,
-                _EARMARK_INDEX_MASK
-            ),
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            SyncLogic.CommitAndSyncParams({
-                myt: _myt,
-                transmuter: _transmuter,
-                underlyingConversionFactor: _underlyingConversionFactor,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                totalDeposited: _mytSharesDeposited,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR,
-                enforceNoBadDebt: false
-            })
-        );
-        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-        _pendingCoverShares = commit.pendingCoverShares;
-        _cumulativeEarmarked = commit.cumulativeEarmarked;
-        _earmarkWeight = commit.earmarkWeight;
-        _survivalAccumulator = commit.survivalAccumulator;
-        _lastEarmarkBlock = commit.lastEarmarkBlock;
+        _commitAndApply(recipientId, false);
 
         uint256 credit;
         (credit, _totalDebt, _totalSyntheticsIssued, _cumulativeEarmarked) = BorrowLogic.burn(
@@ -618,13 +437,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
                 totalSyntheticsIssued: _totalSyntheticsIssued,
                 cumulativeEarmarked: _cumulativeEarmarked
             }),
-            BorrowLogic.CheckpointParams({
-                totalRedeemedDebt: _totalRedeemedDebt,
-                totalRedeemedSharesOut: _totalRedeemedSharesOut,
-                earmarkWeight: _earmarkWeight,
-                redemptionWeight: _redemptionWeight,
-                survivalAccumulator: _survivalAccumulator
-            })
+            _borrowCheckpointParams()
         );
 
         if (credit == 0) return 0;
@@ -633,53 +446,14 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function repay(uint256 amount, uint256 recipientTokenId)
-        public
+        external
         override(IAlchemistV3Actions)
         returns (uint256)
     {
         ValidationLogic.validateDebtRepayment(
             _alchemistPositionNFT, recipientTokenId, amount, _accounts[recipientTokenId].lastMintBlock
         );
-
-        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-            _accounts,
-            recipientTokenId,
-            _earmarkEpochStartRedemptionWeight,
-            _earmarkEpochStartSurvivalAccumulator,
-            EarmarkLogic.state(
-                _totalDebt,
-                _cumulativeEarmarked,
-                _lastEarmarkBlock,
-                _lastTransmuterTokenBalance,
-                _pendingCoverShares,
-                _earmarkWeight,
-                _redemptionWeight,
-                _survivalAccumulator,
-                ONE_Q128,
-                _REDEMPTION_INDEX_BITS,
-                _REDEMPTION_INDEX_MASK,
-                _EARMARK_INDEX_BITS,
-                _EARMARK_INDEX_MASK
-            ),
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            SyncLogic.CommitAndSyncParams({
-                myt: _myt,
-                transmuter: _transmuter,
-                underlyingConversionFactor: _underlyingConversionFactor,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                totalDeposited: _mytSharesDeposited,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR,
-                enforceNoBadDebt: false
-            })
-        );
-        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-        _pendingCoverShares = commit.pendingCoverShares;
-        _cumulativeEarmarked = commit.cumulativeEarmarked;
-        _earmarkWeight = commit.earmarkWeight;
-        _survivalAccumulator = commit.survivalAccumulator;
-        _lastEarmarkBlock = commit.lastEarmarkBlock;
+        _commitAndApply(recipientTokenId, false);
 
         uint256 creditToYield;
         uint256 feeAmount;
@@ -699,13 +473,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
                 protocolFee: _protocolFee,
                 bps: BPS
             }),
-            BorrowLogic.CheckpointParams({
-                totalRedeemedDebt: _totalRedeemedDebt,
-                totalRedeemedSharesOut: _totalRedeemedSharesOut,
-                earmarkWeight: _earmarkWeight,
-                redemptionWeight: _redemptionWeight,
-                survivalAccumulator: _survivalAccumulator
-            })
+            _borrowCheckpointParams()
         );
 
         if (creditToYield == 0 && feeAmount == 0) return 0;
@@ -714,26 +482,11 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function redeem(uint256 amount)
-        public
+        external
         override(IAlchemistV3Actions)
         onlyTransmuter
         returns (uint256 sharesSent)
     {
-        EarmarkLogic.State memory earmarkState = EarmarkLogic.state(
-            _totalDebt,
-            _cumulativeEarmarked,
-            _lastEarmarkBlock,
-            _lastTransmuterTokenBalance,
-            _pendingCoverShares,
-            _earmarkWeight,
-            _redemptionWeight,
-            _survivalAccumulator,
-            ONE_Q128,
-            _REDEMPTION_INDEX_BITS,
-            _REDEMPTION_INDEX_MASK,
-            _EARMARK_INDEX_BITS,
-            _EARMARK_INDEX_MASK
-        );
         RedemptionLogic.RedeemResult memory result = RedemptionLogic.redeem(
             RedemptionLogic.RedeemParams({
                 myt: _myt,
@@ -747,14 +500,13 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
                 protocolFee: _protocolFee,
                 bps: BPS
             }),
-            earmarkState
+            _earmarkState()
         );
 
         if (result.epochAdvanced) {
             _earmarkEpochStartRedemptionWeight[result.epochBoundary] = _redemptionWeight;
             _earmarkEpochStartSurvivalAccumulator[result.epochBoundary] = result.epochStartSurvivalAccumulator;
         }
-
         _lastRedemptionBlock = result.newLastRedemptionBlock;
         _totalDebt = result.newTotalDebt;
         _cumulativeEarmarked = result.newCumulativeEarmarked;
@@ -767,13 +519,12 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         _mytSharesDeposited = result.newTotalDeposited;
         _totalRedeemedDebt = result.newTotalRedeemedDebt;
         _totalRedeemedSharesOut = result.newTotalRedeemedSharesOut;
-
         emit Redemption(result.effectiveRedeemed);
         return result.sharesSent;
     }
 
     function reduceSyntheticsIssued(uint256 amount)
-        public
+        external
         override(IAlchemistV3Actions)
         onlyTransmuter
     {
@@ -781,7 +532,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function setTransmuterTokenBalance(uint256 amount)
-        public
+        external
         override(IAlchemistV3Actions)
         onlyTransmuter
     {
@@ -789,157 +540,46 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             RedemptionLogic.setTransmuterTokenBalance(_lastTransmuterTokenBalance, _pendingCoverShares, amount);
     }
 
-    function poke(uint256 tokenId) public override(IAlchemistV3Actions) {
+    function poke(uint256 tokenId) external override(IAlchemistV3Actions) {
         ValidationLogic.validatePoke(_alchemistPositionNFT, tokenId);
-        EarmarkLogic.CommitResult memory commit = SyncLogic.commitEarmarkAndSync(
-            _accounts,
-            tokenId,
-            _earmarkEpochStartRedemptionWeight,
-            _earmarkEpochStartSurvivalAccumulator,
-            EarmarkLogic.state(
-                _totalDebt,
-                _cumulativeEarmarked,
-                _lastEarmarkBlock,
-                _lastTransmuterTokenBalance,
-                _pendingCoverShares,
-                _earmarkWeight,
-                _redemptionWeight,
-                _survivalAccumulator,
-                ONE_Q128,
-                _REDEMPTION_INDEX_BITS,
-                _REDEMPTION_INDEX_MASK,
-                _EARMARK_INDEX_BITS,
-                _EARMARK_INDEX_MASK
-            ),
-            _totalRedeemedDebt,
-            _totalRedeemedSharesOut,
-            SyncLogic.CommitAndSyncParams({
-                myt: _myt,
-                transmuter: _transmuter,
-                underlyingConversionFactor: _underlyingConversionFactor,
-                totalSyntheticsIssued: _totalSyntheticsIssued,
-                totalDeposited: _mytSharesDeposited,
-                minimumCollateralization: _minimumCollateralization,
-                fixedPointScalar: FIXED_POINT_SCALAR,
-                enforceNoBadDebt: false
-            })
-        );
-        _lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
-        _pendingCoverShares = commit.pendingCoverShares;
-        _cumulativeEarmarked = commit.cumulativeEarmarked;
-        _earmarkWeight = commit.earmarkWeight;
-        _survivalAccumulator = commit.survivalAccumulator;
-        _lastEarmarkBlock = commit.lastEarmarkBlock;
+        _commitAndApply(tokenId, false);
     }
 
     function liquidate(uint256 accountId)
-        public
+        external
         override(IAlchemistV3Actions)
         returns (uint256 yieldAmount, uint256 feeInYield, uint256 feeInUnderlying)
     {
         ValidationLogic.ensureValidAccount(_alchemistPositionNFT, accountId);
-        LiquidationLogic.Runtime memory runtime = LiquidationLogic.Runtime({
-            positionNFT: _alchemistPositionNFT,
-            myt: _myt,
-            transmuter: _transmuter,
-            protocolFeeReceiver: _protocolFeeReceiver,
-            alchemistFeeVault: _alchemistFeeVault,
-            totalDebt: _totalDebt,
-            totalDeposited: _mytSharesDeposited,
-            cumulativeEarmarked: _cumulativeEarmarked,
-            totalSyntheticsIssued: _totalSyntheticsIssued,
-            totalRedeemedDebt: _totalRedeemedDebt,
-            totalRedeemedSharesOut: _totalRedeemedSharesOut,
-            lastEarmarkBlock: _lastEarmarkBlock,
-            lastTransmuterTokenBalance: _lastTransmuterTokenBalance,
-            pendingCoverShares: _pendingCoverShares,
-            earmarkWeight: _earmarkWeight,
-            redemptionWeight: _redemptionWeight,
-            survivalAccumulator: _survivalAccumulator,
-            underlyingConversionFactor: _underlyingConversionFactor,
-            minimumCollateralization: _minimumCollateralization,
-            collateralizationLowerBound: _collateralizationLowerBound,
-            globalMinimumCollateralization: _globalMinimumCollateralization,
-            liquidationTargetCollateralization: _liquidationTargetCollateralization,
-            protocolFee: _protocolFee,
-            liquidatorFee: _liquidatorFee,
-            repaymentFee: _repaymentFee,
-            oneQ128: ONE_Q128,
-            fixedPointScalar: FIXED_POINT_SCALAR,
-            bps: BPS,
-            earmarkIndexBits: _EARMARK_INDEX_BITS,
-            earmarkIndexMask: _EARMARK_INDEX_MASK,
-            redemptionIndexBits: _REDEMPTION_INDEX_BITS,
-            redemptionIndexMask: _REDEMPTION_INDEX_MASK
-        });
         LiquidationLogic.LiquidationResult memory result = LiquidationLogic.executeLiquidation(
             _accounts,
             accountId,
             _earmarkEpochStartRedemptionWeight,
             _earmarkEpochStartSurvivalAccumulator,
-            runtime,
+            _liquidationRuntime(),
             msg.sender
         );
-        _totalDebt = result.totalDebt;
-        _mytSharesDeposited = result.totalDeposited;
-        _cumulativeEarmarked = result.cumulativeEarmarked;
-        _lastEarmarkBlock = result.lastEarmarkBlock;
-        _lastTransmuterTokenBalance = result.lastTransmuterTokenBalance;
-        _pendingCoverShares = result.pendingCoverShares;
-        _earmarkWeight = result.earmarkWeight;
-        _survivalAccumulator = result.survivalAccumulator;
+        _applyLiquidationResult(result);
         if (!result.progressed) revert IAlchemistV3Errors.LiquidationError();
         return (result.amountLiquidated, result.feeInYield, result.feeInUnderlying);
     }
 
-    function batchLiquidate(uint256[] memory accountIds)
-        public
+    function batchLiquidate(uint256[] calldata accountIds)
+        external
         override(IAlchemistV3Actions)
         returns (uint256 totalAmountLiquidated, uint256 totalFeesInYield, uint256 totalFeesInUnderlying)
     {
         if (accountIds.length == 0) revert MissingInputData();
 
-        LiquidationLogic.Runtime memory runtime = LiquidationLogic.Runtime({
-            positionNFT: _alchemistPositionNFT,
-            myt: _myt,
-            transmuter: _transmuter,
-            protocolFeeReceiver: _protocolFeeReceiver,
-            alchemistFeeVault: _alchemistFeeVault,
-            totalDebt: _totalDebt,
-            totalDeposited: _mytSharesDeposited,
-            cumulativeEarmarked: _cumulativeEarmarked,
-            totalSyntheticsIssued: _totalSyntheticsIssued,
-            totalRedeemedDebt: _totalRedeemedDebt,
-            totalRedeemedSharesOut: _totalRedeemedSharesOut,
-            lastEarmarkBlock: _lastEarmarkBlock,
-            lastTransmuterTokenBalance: _lastTransmuterTokenBalance,
-            pendingCoverShares: _pendingCoverShares,
-            earmarkWeight: _earmarkWeight,
-            redemptionWeight: _redemptionWeight,
-            survivalAccumulator: _survivalAccumulator,
-            underlyingConversionFactor: _underlyingConversionFactor,
-            minimumCollateralization: _minimumCollateralization,
-            collateralizationLowerBound: _collateralizationLowerBound,
-            globalMinimumCollateralization: _globalMinimumCollateralization,
-            liquidationTargetCollateralization: _liquidationTargetCollateralization,
-            protocolFee: _protocolFee,
-            liquidatorFee: _liquidatorFee,
-            repaymentFee: _repaymentFee,
-            oneQ128: ONE_Q128,
-            fixedPointScalar: FIXED_POINT_SCALAR,
-            bps: BPS,
-            earmarkIndexBits: _EARMARK_INDEX_BITS,
-            earmarkIndexMask: _EARMARK_INDEX_MASK,
-            redemptionIndexBits: _REDEMPTION_INDEX_BITS,
-            redemptionIndexMask: _REDEMPTION_INDEX_MASK
-        });
-
-        LiquidationLogic.LiquidationResult memory totals;
+        LiquidationLogic.Runtime memory runtime = _liquidationRuntime();
         bool anyProgress;
         uint256 accountCount = accountIds.length;
-        for (uint256 i = 0; i < accountCount; ++i) {
+        for (uint256 i = 0; i < accountCount;) {
             uint256 accountId = accountIds[i];
             if (accountId == 0 || !ValidationLogic.tokenExists(_alchemistPositionNFT, accountId)) {
+                unchecked {
+                    ++i;
+                }
                 continue;
             }
 
@@ -960,10 +600,15 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             runtime.earmarkWeight = result.earmarkWeight;
             runtime.survivalAccumulator = result.survivalAccumulator;
 
-            totals.amountLiquidated += result.amountLiquidated;
-            totals.feeInYield += result.feeInYield;
-            totals.feeInUnderlying += result.feeInUnderlying;
+            unchecked {
+                totalAmountLiquidated += result.amountLiquidated;
+                totalFeesInYield += result.feeInYield;
+                totalFeesInUnderlying += result.feeInUnderlying;
+            }
             if (result.progressed) anyProgress = true;
+            unchecked {
+                ++i;
+            }
         }
 
         if (!anyProgress) revert IAlchemistV3Errors.LiquidationError();
@@ -976,67 +621,25 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         _pendingCoverShares = runtime.pendingCoverShares;
         _earmarkWeight = runtime.earmarkWeight;
         _survivalAccumulator = runtime.survivalAccumulator;
-
-        emit BatchLiquidated(accountIds, msg.sender, totals.amountLiquidated, totals.feeInYield, totals.feeInUnderlying);
-        return (totals.amountLiquidated, totals.feeInYield, totals.feeInUnderlying);
+        emit BatchLiquidated(accountIds, msg.sender, totalAmountLiquidated, totalFeesInYield, totalFeesInUnderlying);
+        return (totalAmountLiquidated, totalFeesInYield, totalFeesInUnderlying);
     }
 
     function selfLiquidate(uint256 accountId, address recipient)
-        public
+        external
         override(IAlchemistV3Actions)
         returns (uint256 amountLiquidated)
     {
-        LiquidationLogic.Runtime memory runtime = LiquidationLogic.Runtime({
-            positionNFT: _alchemistPositionNFT,
-            myt: _myt,
-            transmuter: _transmuter,
-            protocolFeeReceiver: _protocolFeeReceiver,
-            alchemistFeeVault: _alchemistFeeVault,
-            totalDebt: _totalDebt,
-            totalDeposited: _mytSharesDeposited,
-            cumulativeEarmarked: _cumulativeEarmarked,
-            totalSyntheticsIssued: _totalSyntheticsIssued,
-            totalRedeemedDebt: _totalRedeemedDebt,
-            totalRedeemedSharesOut: _totalRedeemedSharesOut,
-            lastEarmarkBlock: _lastEarmarkBlock,
-            lastTransmuterTokenBalance: _lastTransmuterTokenBalance,
-            pendingCoverShares: _pendingCoverShares,
-            earmarkWeight: _earmarkWeight,
-            redemptionWeight: _redemptionWeight,
-            survivalAccumulator: _survivalAccumulator,
-            underlyingConversionFactor: _underlyingConversionFactor,
-            minimumCollateralization: _minimumCollateralization,
-            collateralizationLowerBound: _collateralizationLowerBound,
-            globalMinimumCollateralization: _globalMinimumCollateralization,
-            liquidationTargetCollateralization: _liquidationTargetCollateralization,
-            protocolFee: _protocolFee,
-            liquidatorFee: _liquidatorFee,
-            repaymentFee: _repaymentFee,
-            oneQ128: ONE_Q128,
-            fixedPointScalar: FIXED_POINT_SCALAR,
-            bps: BPS,
-            earmarkIndexBits: _EARMARK_INDEX_BITS,
-            earmarkIndexMask: _EARMARK_INDEX_MASK,
-            redemptionIndexBits: _REDEMPTION_INDEX_BITS,
-            redemptionIndexMask: _REDEMPTION_INDEX_MASK
-        });
         LiquidationLogic.LiquidationResult memory result = LiquidationLogic.executeSelfLiquidation(
             _accounts,
             accountId,
             _earmarkEpochStartRedemptionWeight,
             _earmarkEpochStartSurvivalAccumulator,
-            runtime,
+            _liquidationRuntime(),
             msg.sender,
             recipient
         );
-        _totalDebt = result.totalDebt;
-        _mytSharesDeposited = result.totalDeposited;
-        _cumulativeEarmarked = result.cumulativeEarmarked;
-        _lastEarmarkBlock = result.lastEarmarkBlock;
-        _lastTransmuterTokenBalance = result.lastTransmuterTokenBalance;
-        _pendingCoverShares = result.pendingCoverShares;
-        _earmarkWeight = result.earmarkWeight;
-        _survivalAccumulator = result.survivalAccumulator;
+        _applyLiquidationResult(result);
         return result.amountLiquidated;
     }
 
@@ -1048,7 +651,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         uint256 alchemistMinimumCollateralization,
         uint256 feeBps
     )
-        public
+        external
         pure
         override(IAlchemistV3State)
         returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee)
@@ -1066,7 +669,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function approveMint(uint256 tokenId, address spender, uint256 amount)
-        public
+        external
         override(IAlchemistV3Actions)
     {
         ValidationLogic.validateApproveMint(_alchemistPositionNFT, msg.sender, tokenId);
@@ -1075,7 +678,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
     }
 
     function resetMintAllowances(uint256 tokenId)
-        public
+        external
         override(IAlchemistV3Actions)
     {
         ValidationLogic.validateResetMintAllowances(_alchemistPositionNFT, msg.sender, tokenId);
@@ -1085,34 +688,34 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
 
     // ---------------- Unit conversion ---------------- //
 
-    function convertYieldTokensToDebt(uint256 amount) public view override(IAlchemistV3State) returns (uint256) {
+    function convertYieldTokensToDebt(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertYieldTokensToDebt(_myt, _underlyingConversionFactor, amount);
     }
 
-    function convertDebtTokensToYield(uint256 amount) public view override(IAlchemistV3State) returns (uint256) {
+    function convertDebtTokensToYield(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertDebtTokensToYield(_myt, _underlyingConversionFactor, amount);
     }
 
-    function convertYieldTokensToUnderlying(uint256 amount) public view override(IAlchemistV3State) returns (uint256) {
+    function convertYieldTokensToUnderlying(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertYieldTokensToUnderlying(_myt, amount);
     }
 
-    function convertUnderlyingTokensToYield(uint256 amount) public view override(IAlchemistV3State) returns (uint256) {
+    function convertUnderlyingTokensToYield(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertUnderlyingTokensToYield(_myt, amount);
     }
 
-    function normalizeUnderlyingTokensToDebt(uint256 amount) public view override(IAlchemistV3State) returns (uint256) {
+    function normalizeUnderlyingTokensToDebt(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.normalizeUnderlyingTokensToDebt(amount, _underlyingConversionFactor);
     }
 
-    function normalizeDebtTokensToUnderlying(uint256 amount) public view override(IAlchemistV3State) returns (uint256) {
+    function normalizeDebtTokensToUnderlying(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.normalizeDebtTokensToUnderlying(amount, _underlyingConversionFactor);
     }
 
     // ---------------- Protocol state getters ---------------- //
 
     function version() external pure override(IAlchemistV3Immutables) returns (string memory) {
-        return VERSION;
+        return "3.0.0";
     }
 
     function debtToken() external view override(IAlchemistV3Immutables) returns (address) {
@@ -1229,132 +832,147 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
 
     // ---------------- Protocol admin actions ---------------- //
 
-    function setAlchemistPositionNFT(address nft) public onlyAdmin {
-        _alchemistPositionNFT = ConfiguratorLogic.alchemistPositionNFT(_alchemistPositionNFT, nft);
+    function setAlchemistPositionNFT(address nft) external onlyAdmin {
+        if (nft == address(0)) {
+            revert IAlchemistV3Errors.AlchemistV3NFTZeroAddressError();
+        }
+        if (_alchemistPositionNFT != address(0)) {
+            revert IAlchemistV3Errors.AlchemistV3NFTAlreadySetError();
+        }
+        _alchemistPositionNFT = nft;
     }
 
-    function setAlchemistFeeVault(address value) public override(IAlchemistV3AdminActions) onlyAdmin {
-        _alchemistFeeVault = ConfiguratorLogic.alchemistFeeVault(value, _underlyingToken);
+    function setAlchemistFeeVault(address value) external override(IAlchemistV3AdminActions) onlyAdmin {
+        if (IFeeVault(value).token() != _underlyingToken) {
+            revert IAlchemistV3Errors.AlchemistVaultTokenMismatchError();
+        }
+        _alchemistFeeVault = value;
         emit AlchemistFeeVaultUpdated(value);
     }
 
-    function setPendingAdmin(address value) public override(IAlchemistV3AdminActions) onlyAdmin {
-        _pendingAdmin = ConfiguratorLogic.pendingAdmin(value);
+    function setPendingAdmin(address value) external override(IAlchemistV3AdminActions) onlyAdmin {
+        _pendingAdmin = value;
         emit PendingAdminUpdated(value);
     }
 
-    function acceptAdmin() public override(IAlchemistV3AdminActions) {
-        (_admin, _pendingAdmin) = ConfiguratorLogic.acceptAdmin(_pendingAdmin, msg.sender);
+    function acceptAdmin() external override(IAlchemistV3AdminActions) {
+        if (_pendingAdmin == address(0)) revert IllegalState();
+        if (msg.sender != _pendingAdmin) revert Unauthorized();
+        _admin = _pendingAdmin;
+        _pendingAdmin = address(0);
         emit AdminUpdated(_admin);
         emit PendingAdminUpdated(address(0));
     }
 
-    function setDepositCap(uint256 value) public override(IAlchemistV3AdminActions) onlyAdmin {
-        _depositCap = ConfiguratorLogic.depositCap(value, _myt, address(this));
+    function setDepositCap(uint256 value) external override(IAlchemistV3AdminActions) onlyAdmin {
+        if (value < IERC20(_myt).balanceOf(address(this))) revert IllegalArgument();
+        _depositCap = value;
         emit DepositCapUpdated(value);
     }
 
     function setProtocolFeeReceiver(address value)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdmin
     {
-        _protocolFeeReceiver = ConfiguratorLogic.protocolFeeReceiver(value);
+        if (value == address(0)) revert IllegalArgument();
+        _protocolFeeReceiver = value;
         emit ProtocolFeeReceiverUpdated(value);
     }
 
-    function setProtocolFee(uint256 fee) public override(IAlchemistV3AdminActions) onlyAdmin {
+    function setProtocolFee(uint256 fee) external override(IAlchemistV3AdminActions) onlyAdmin {
         _protocolFee = ConfiguratorLogic.feeBps(fee, BPS);
         emit ProtocolFeeUpdated(fee);
     }
 
-    function setLiquidatorFee(uint256 fee) public override(IAlchemistV3AdminActions) onlyAdmin {
+    function setLiquidatorFee(uint256 fee) external override(IAlchemistV3AdminActions) onlyAdmin {
         _liquidatorFee = ConfiguratorLogic.feeBps(fee, BPS);
         emit LiquidatorFeeUpdated(fee);
     }
 
-    function setRepaymentFee(uint256 fee) public override(IAlchemistV3AdminActions) onlyAdmin {
+    function setRepaymentFee(uint256 fee) external override(IAlchemistV3AdminActions) onlyAdmin {
         _repaymentFee = ConfiguratorLogic.feeBps(fee, BPS);
         emit RepaymentFeeUpdated(fee);
     }
 
-    function setTokenAdapter(address value) public override(IAlchemistV3AdminActions) onlyAdmin {
-        _tokenAdapter = ConfiguratorLogic.tokenAdapter(value);
+    function setTokenAdapter(address value) external override(IAlchemistV3AdminActions) onlyAdmin {
+        if (value == address(0)) revert IllegalArgument();
+        _tokenAdapter = value;
         emit TokenAdapterUpdated(value);
     }
 
     function setGuardian(address guardian, bool isActive)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdmin
     {
-        ConfiguratorLogic.setGuardian(_guardians, guardian, isActive);
+        if (guardian == address(0)) revert IllegalArgument();
+        _guardians[guardian] = isActive;
         emit GuardianSet(guardian, isActive);
     }
 
     function setMinimumCollateralization(uint256 value)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdmin
     {
-        _minimumCollateralization = ConfiguratorLogic.minimumCollateralization(
-            value,
-            _globalMinimumCollateralization,
-            _liquidationTargetCollateralization,
-            FIXED_POINT_SCALAR
-        );
+        if (value < FIXED_POINT_SCALAR) revert IllegalArgument();
+        _minimumCollateralization = value > _globalMinimumCollateralization ? _globalMinimumCollateralization : value;
+        if (_minimumCollateralization > _liquidationTargetCollateralization) {
+            _minimumCollateralization = _liquidationTargetCollateralization;
+        }
         emit MinimumCollateralizationUpdated(_minimumCollateralization);
     }
 
     function setGlobalMinimumCollateralization(uint256 value)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdmin
     {
-        _globalMinimumCollateralization =
-            ConfiguratorLogic.globalMinimumCollateralization(value, _minimumCollateralization);
+        if (value < _minimumCollateralization) revert IllegalArgument();
+        _globalMinimumCollateralization = value;
         emit GlobalMinimumCollateralizationUpdated(value);
     }
 
     function setCollateralizationLowerBound(uint256 value)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdmin
     {
-        _collateralizationLowerBound =
-            ConfiguratorLogic.collateralizationLowerBound(value, _minimumCollateralization, FIXED_POINT_SCALAR);
+        if (value >= _minimumCollateralization) revert IllegalArgument();
+        if (value < FIXED_POINT_SCALAR) revert IllegalArgument();
+        _collateralizationLowerBound = value;
         emit CollateralizationLowerBoundUpdated(value);
     }
 
     function setLiquidationTargetCollateralization(uint256 value)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdmin
     {
-        _liquidationTargetCollateralization = ConfiguratorLogic.liquidationTargetCollateralization(
-            value,
-            _minimumCollateralization,
-            _collateralizationLowerBound,
-            FIXED_POINT_SCALAR
-        );
+        if (value <= FIXED_POINT_SCALAR) revert IllegalArgument();
+        if (value < _minimumCollateralization) revert IllegalArgument();
+        if (value <= _collateralizationLowerBound) revert IllegalArgument();
+        if (value > 2 * FIXED_POINT_SCALAR) revert IllegalArgument();
+        _liquidationTargetCollateralization = value;
         emit LiquidationTargetCollateralizationUpdated(value);
     }
 
     function pauseDeposits(bool isPaused)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdminOrGuardian
     {
-        _depositsPaused = ConfiguratorLogic.pauseState(isPaused);
+        _depositsPaused = isPaused;
         emit DepositsPaused(isPaused);
     }
 
     function pauseLoans(bool isPaused)
-        public
+        external
         override(IAlchemistV3AdminActions)
         onlyAdminOrGuardian
     {
-        _loansPaused = ConfiguratorLogic.pauseState(isPaused);
+        _loansPaused = isPaused;
         emit LoansPaused(isPaused);
     }
 }

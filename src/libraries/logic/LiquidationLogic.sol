@@ -73,7 +73,7 @@ library LiquidationLogic {
         uint256 feeBps,
         uint256 bps,
         uint256 fixedPointScalar
-    ) internal pure returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee) {
+    ) public pure returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee) {
         if (debt >= collateral) {
             outsourcedFee = (debt * feeBps) / bps;
             return (collateral, debt, 0, outsourcedFee);
@@ -107,7 +107,7 @@ library LiquidationLogic {
         mapping(uint256 => uint256) storage earmarkEpochStartSurvivalAccumulator,
         Runtime memory runtime,
         address liquidator
-    ) internal returns (LiquidationResult memory result) {
+    ) public returns (LiquidationResult memory result) {
         ValidationLogic.ensureValidAccount(runtime.positionNFT, accountId);
         uint256 debtBefore = accounts[accountId].debt;
 
@@ -195,7 +195,7 @@ library LiquidationLogic {
         Runtime memory runtime,
         address caller,
         address recipient
-    ) internal returns (LiquidationResult memory result) {
+    ) public returns (LiquidationResult memory result) {
         if (recipient == address(0)) revert IllegalArgument();
         ValidationLogic.ensureValidAccount(runtime.positionNFT, accountId);
         ValidationLogic.requireTokenOwner(runtime.positionNFT, accountId, caller);
@@ -259,7 +259,7 @@ library LiquidationLogic {
         Runtime memory runtime,
         address feeRecipient,
         bool skipPoke
-    ) internal returns (uint256 creditToYield, uint256 totalDebt, uint256 totalDeposited, uint256 cumulativeEarmarked) {
+    ) public returns (uint256 creditToYield, uint256 totalDebt, uint256 totalDeposited, uint256 cumulativeEarmarked) {
         if (amount == 0) {
             return (0, runtime.totalDebt, runtime.totalDeposited, runtime.cumulativeEarmarked);
         }
@@ -304,7 +304,7 @@ library LiquidationLogic {
         uint256 accountId,
         Runtime memory runtime,
         address liquidator
-    ) internal returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying) {
+    ) public returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying) {
         Account storage account = accounts[accountId];
         uint256 debt = account.debt;
         uint256 collateralValue = StateLogic.collateralValueInDebt(
@@ -430,16 +430,14 @@ library LiquidationLogic {
         return (amountLiquidated, feeInYield, feeInUnderlying);
     }
 
-    function calculateRepaymentFee(uint256 repaidAmountInYield, uint256 repaymentFee, uint256 bps)
-        internal
+    function calculateRepaymentFee(uint256 repaidAmountInYield, uint256 repaymentFee, uint256 bps) public
         pure
         returns (uint256 feeInYield)
     {
         return repaidAmountInYield * repaymentFee / bps;
     }
 
-    function maxRepaymentFeeInYield(Account storage account, Runtime memory runtime)
-        internal
+    function maxRepaymentFeeInYield(Account storage account, Runtime memory runtime) public
         view
         returns (uint256)
     {
@@ -466,8 +464,7 @@ library LiquidationLogic {
         return StateLogic.convertDebtTokensToYield(runtime.myt, runtime.underlyingConversionFactor, removableInDebt);
     }
 
-    function payWithFeeVault(address alchemistFeeVault, address liquidator, uint256 amountInUnderlying)
-        internal
+    function payWithFeeVault(address alchemistFeeVault, address liquidator, uint256 amountInUnderlying) public
         returns (uint256)
     {
         if (amountInUnderlying == 0) return 0;
@@ -488,7 +485,7 @@ library LiquidationLogic {
         return 0;
     }
 
-    function isHealthy(Runtime memory runtime, Account storage account) internal view returns (bool) {
+    function isHealthy(Runtime memory runtime, Account storage account) public view returns (bool) {
         if (account.debt == 0) {
             return true;
         }
@@ -499,7 +496,7 @@ library LiquidationLogic {
         );
     }
 
-    function applyCommit(Runtime memory runtime, EarmarkLogic.CommitResult memory commit) internal pure {
+    function applyCommit(Runtime memory runtime, EarmarkLogic.CommitResult memory commit) public pure {
         runtime.lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
         runtime.pendingCoverShares = commit.pendingCoverShares;
         runtime.cumulativeEarmarked = commit.cumulativeEarmarked;
@@ -508,7 +505,7 @@ library LiquidationLogic {
         runtime.lastEarmarkBlock = commit.lastEarmarkBlock;
     }
 
-    function earmarkState(Runtime memory runtime) internal pure returns (EarmarkLogic.State memory) {
+    function earmarkState(Runtime memory runtime) public pure returns (EarmarkLogic.State memory) {
         return EarmarkLogic.State({
             totalDebt: runtime.totalDebt,
             cumulativeEarmarked: runtime.cumulativeEarmarked,
@@ -526,8 +523,7 @@ library LiquidationLogic {
         });
     }
 
-    function checkpointParams(Runtime memory runtime)
-        internal
+    function checkpointParams(Runtime memory runtime) public
         pure
         returns (BorrowLogic.CheckpointParams memory)
     {
@@ -546,7 +542,7 @@ library LiquidationLogic {
         uint256 feeInYield,
         uint256 feeInUnderlying,
         bool progressed
-    ) internal pure returns (LiquidationResult memory result) {
+    ) public pure returns (LiquidationResult memory result) {
         result.amountLiquidated = amountLiquidated;
         result.feeInYield = feeInYield;
         result.feeInUnderlying = feeInUnderlying;
@@ -567,9 +563,10 @@ library LiquidationLogic {
         uint256 amountLiquidated,
         uint256 feeInYield,
         uint256 feeInUnderlying
-    ) internal pure returns (bool) {
+    ) public pure returns (bool) {
         return amountLiquidated > 0 || feeInYield > 0 || feeInUnderlying > 0 || debtAfter < debtBefore;
     }
 }
+
 
 

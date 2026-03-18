@@ -6,11 +6,9 @@ import {Initializable} from "../lib/openzeppelin-contracts-upgradeable/contracts
 import {Unauthorized} from "./base/Errors.sol";
 
 abstract contract AlchemistV3Storage is Initializable {
-    uint256 public constant BPS = 10_000;
-    uint256 public constant FIXED_POINT_SCALAR = 1e18;
-    uint256 public constant ONE_Q128 = uint256(1) << 128;
-
-    string internal constant VERSION = "3.0.0";
+    uint256 internal constant BPS = 10_000;
+    uint256 internal constant FIXED_POINT_SCALAR = 1e18;
+    uint256 internal constant ONE_Q128 = uint256(1) << 128;
 
     address internal _admin;
     address internal _alchemistFeeVault;
@@ -59,24 +57,36 @@ abstract contract AlchemistV3Storage is Initializable {
     uint256 internal constant _EARMARK_INDEX_BITS = 129;
     uint256 internal constant _EARMARK_INDEX_MASK = (uint256(1) << _EARMARK_INDEX_BITS) - 1;
 
-    modifier onlyAdmin() {
+    function _checkAdmin() internal view {
         if (msg.sender != _admin) {
             revert Unauthorized();
         }
+    }
+
+    function _checkAdminOrGuardian() internal view {
+        if (msg.sender != _admin && !_guardians[msg.sender]) {
+            revert Unauthorized();
+        }
+    }
+
+    function _checkTransmuter() internal view {
+        if (msg.sender != _transmuter) {
+            revert Unauthorized();
+        }
+    }
+
+    modifier onlyAdmin() {
+        _checkAdmin();
         _;
     }
 
     modifier onlyAdminOrGuardian() {
-        if (msg.sender != _admin && !_guardians[msg.sender]) {
-            revert Unauthorized();
-        }
+        _checkAdminOrGuardian();
         _;
     }
 
     modifier onlyTransmuter() {
-        if (msg.sender != _transmuter) {
-            revert Unauthorized();
-        }
+        _checkTransmuter();
         _;
     }
 
