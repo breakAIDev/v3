@@ -44,7 +44,7 @@ contract ERC4626Strategy is MYTStrategy {
     }
 
     function _totalValue() internal view virtual override returns (uint256) {
-        return vault.convertToAssets(vault.balanceOf(address(this))) + _idleAssets();
+        return vault.previewRedeem(vault.balanceOf(address(this))) + _idleAssets();
     }
 
     function _idleAssets() internal view virtual override returns (uint256) {
@@ -55,7 +55,7 @@ contract ERC4626Strategy is MYTStrategy {
         uint256 sharesNoFee = vault.convertToShares(amount);
         uint256 sharesWithFee = vault.previewWithdraw(amount);
         uint256 feeShares = sharesWithFee > sharesNoFee ? sharesWithFee - sharesNoFee : 0;
-        uint256 feeAssets = vault.convertToAssets(feeShares);
+        uint256 feeAssets = vault.previewRedeem(feeShares);
         uint256 netAssets = amount - feeAssets;
         return netAssets * (10_000 - params.slippageBPS) / 10_000;
     }
