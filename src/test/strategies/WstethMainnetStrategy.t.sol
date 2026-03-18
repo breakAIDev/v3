@@ -429,13 +429,12 @@ contract WstethMainnetStrategyTest is Test {
             vm.toString(taker),
             "' -H '0x-api-key: ",
             _get0xApiKey(),
-            "' -H '0x-version: v2' | jq -r .buyAmount"
+            "' -H '0x-version: v2' | jq -r '.buyAmount' | xargs cast to-hex"
         );
         bytes memory b = vm.ffi(inputs);
-        bytes memory padded = abi.encodePacked(new bytes(32 - b.length), b);
-        uint256 value = abi.decode(padded, (uint256));
-        return value;
+        return vm.parseUint(string(b));
     }
+
 
     /// @notice Generic helper to get swap calldata from 0x API
     function _get0xCalldata(address sellToken, address buyToken, address taker, uint256 sellAmount) internal returns (bytes memory) {
@@ -575,13 +574,14 @@ contract WstethMainnetStrategyTest is Test {
         // Calculate stETH amount from wstETH balance for the swap
         uint256 stETHAmount = IWstETH(wstETH).getStETHByWstETH(wstETHBalance);
         uint256 minFinalOut = get0xBuyAmount(stETH, weth, address(mytStrategy), stETHAmount);
-        
+        console.log("minFinalOut is %d", minFinalOut);
+        console.log("stETHAmount is %d", stETHAmount);
         // Deallocate: wstETH -> unwrap -> stETH -> swap -> WETH
         IAllocator(allocator).deallocateWithUnwrapAndSwap(
             mytStrategy, 
             minFinalOut, 
             getStethToWethCalldata(address(mytStrategy), stETHAmount),
-            IMYTStrategy(mytStrategy).previewAdjustedWithdraw(stETHAmount)
+            stETHAmount
         );
 
         // Verify realAssets matches expected remaining (within 1e18 tolerance for rounding)
