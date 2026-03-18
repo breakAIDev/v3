@@ -14,7 +14,9 @@ import {SyncLogic} from "./SyncLogic.sol";
 import {EarmarkLogic} from "./EarmarkLogic.sol";
 import {StateLogic} from "./StateLogic.sol";
 
+/// @dev Liquidation and forced-repayment flows extracted from the main alchemist implementation.
 library LiquidationLogic {
+    /// @dev Global runtime state needed to execute a liquidation against one or more accounts.
     struct Runtime {
         address positionNFT;
         address myt;
@@ -50,6 +52,7 @@ library LiquidationLogic {
         uint256 redemptionIndexMask;
     }
 
+    /// @dev Storage updates and payout amounts produced by a liquidation path.
     struct LiquidationResult {
         uint256 amountLiquidated;
         uint256 feeInYield;
@@ -64,6 +67,8 @@ library LiquidationLogic {
         uint256 earmarkWeight;
         uint256 survivalAccumulator;
     }
+
+    /// @dev Computes the collateral seize, debt burn, and fee split for a liquidation attempt.
     function calculateLiquidation(
         uint256 collateral,
         uint256 debt,
@@ -100,6 +105,7 @@ library LiquidationLogic {
         grossCollateralToSeize = debtToBurn + fee;
     }
 
+    /// @dev Commits pending earmarks, force-repays earmarked debt, and liquidates the remainder if needed.
     function executeLiquidation(
         mapping(uint256 => Account) storage accounts,
         uint256 accountId,
@@ -187,6 +193,7 @@ library LiquidationLogic {
         ));
     }
 
+    /// @dev Lets the owner unwind a healthy position by repaying debt from its own collateral.
     function executeSelfLiquidation(
         mapping(uint256 => Account) storage accounts,
         uint256 accountId,
@@ -252,6 +259,7 @@ library LiquidationLogic {
         return packResult(runtime, totalLiquidated, 0, 0, totalLiquidated > 0);
     }
 
+    /// @dev Forces repayment of up to `amount` debt using the account's collateral and protocol fee rules.
     function forceRepay(
         mapping(uint256 => Account) storage accounts,
         uint256 accountId,
@@ -299,6 +307,7 @@ library LiquidationLogic {
         return (creditToYield, runtime.totalDebt, runtime.totalDeposited, runtime.cumulativeEarmarked);
     }
 
+    /// @dev Executes the actual liquidation seize-and-burn path once the account is confirmed unhealthy.
     function doLiquidation(
         mapping(uint256 => Account) storage accounts,
         uint256 accountId,
@@ -430,6 +439,7 @@ library LiquidationLogic {
         return (amountLiquidated, feeInYield, feeInUnderlying);
     }
 
+    /// @dev Computes the liquidator's repayment fee in MYT shares.
     function calculateRepaymentFee(uint256 repaidAmountInYield, uint256 repaymentFee, uint256 bps) public
         pure
         returns (uint256 feeInYield)
@@ -437,6 +447,7 @@ library LiquidationLogic {
         return repaidAmountInYield * repaymentFee / bps;
     }
 
+    /// @dev Returns the largest repayment fee that can be charged without pushing the account below the lower bound.
     function maxRepaymentFeeInYield(Account storage account, Runtime memory runtime) public
         view
         returns (uint256)
@@ -464,6 +475,7 @@ library LiquidationLogic {
         return StateLogic.convertDebtTokensToYield(runtime.myt, runtime.underlyingConversionFactor, removableInDebt);
     }
 
+    /// @dev Pays an underlying-denominated fee from the fee vault, emitting shortfall events when underfunded.
     function payWithFeeVault(address alchemistFeeVault, address liquidator, uint256 amountInUnderlying) public
         returns (uint256)
     {
@@ -485,6 +497,7 @@ library LiquidationLogic {
         return 0;
     }
 
+    /// @dev Returns whether an account sits above the liquidation lower bound.
     function isHealthy(Runtime memory runtime, Account storage account) public view returns (bool) {
         if (account.debt == 0) {
             return true;
@@ -496,6 +509,7 @@ library LiquidationLogic {
         );
     }
 
+    /// @dev Copies committed earmark state back into the liquidation runtime snapshot.
     function applyCommit(Runtime memory runtime, EarmarkLogic.CommitResult memory commit) public pure {
         runtime.lastTransmuterTokenBalance = commit.lastTransmuterTokenBalance;
         runtime.pendingCoverShares = commit.pendingCoverShares;
@@ -505,6 +519,7 @@ library LiquidationLogic {
         runtime.lastEarmarkBlock = commit.lastEarmarkBlock;
     }
 
+    /// @dev Converts the liquidation runtime snapshot into the earmark-state format.
     function earmarkState(Runtime memory runtime) public pure returns (EarmarkLogic.State memory) {
         return EarmarkLogic.State({
             totalDebt: runtime.totalDebt,
@@ -523,6 +538,7 @@ library LiquidationLogic {
         });
     }
 
+    /// @dev Converts liquidation runtime checkpoints into the borrow checkpoint format.
     function checkpointParams(Runtime memory runtime) public
         pure
         returns (BorrowLogic.CheckpointParams memory)
@@ -536,6 +552,7 @@ library LiquidationLogic {
         });
     }
 
+    /// @dev Packs the updated runtime state and payout values into the public liquidation result.
     function packResult(
         Runtime memory runtime,
         uint256 amountLiquidated,
@@ -557,6 +574,7 @@ library LiquidationLogic {
         result.survivalAccumulator = runtime.survivalAccumulator;
     }
 
+    /// @dev Returns whether a liquidation changed debt or paid any liquidation consideration.
     function didLiquidationProgress(
         uint256 debtBefore,
         uint256 debtAfter,

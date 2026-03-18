@@ -8,7 +8,9 @@ import {BorrowLogic} from "./BorrowLogic.sol";
 import {EarmarkLogic} from "./EarmarkLogic.sol";
 import {StateLogic} from "./StateLogic.sol";
 
+/// @dev Account sync routines that reconcile earmarks, redemptions, and collateral loss.
 library SyncLogic {
+    /// @dev Global weights and checkpoints needed to project an account forward.
     struct GlobalSyncState {
         uint256 totalRedeemedDebt;
         uint256 totalRedeemedSharesOut;
@@ -22,6 +24,7 @@ library SyncLogic {
         uint256 redemptionIndexBits;
     }
 
+    /// @dev Inputs required when committing a new earmark window and syncing a position.
     struct CommitAndSyncParams {
         address myt;
         address transmuter;
@@ -33,6 +36,7 @@ library SyncLogic {
         bool enforceNoBadDebt;
     }
 
+    /// @dev Packs the current global sync checkpoints into a reusable struct.
     function globalSyncState(
         uint256 totalRedeemedDebt,
         uint256 totalRedeemedSharesOut,
@@ -59,6 +63,7 @@ library SyncLogic {
         });
     }
 
+    /// @dev Commits the latest earmark window, optionally enforces global solvency, and syncs one account.
     function commitEarmarkAndSync(
         mapping(uint256 => Account) storage accounts,
         uint256 tokenId,
@@ -113,6 +118,7 @@ library SyncLogic {
         );
     }
 
+    /// @dev Applies committed redemption and earmark state to an account in storage.
     function sync(
         Account storage account,
         GlobalSyncState memory state,
@@ -129,6 +135,7 @@ library SyncLogic {
         BorrowLogic.checkpointAccountState(account, checkpointParams(state));
     }
 
+    /// @dev Computes an account's post-sync debt, earmarked debt, and collateral after redemptions.
     function computeCommittedAccountState(
         Account storage account,
         GlobalSyncState memory state,
@@ -142,6 +149,7 @@ library SyncLogic {
         );
     }
 
+    /// @dev Applies the account's share of globally redeemed collateral.
     function applyRedeemedCollateralDelta(
         Account storage account,
         uint256 collateralBalance,
@@ -160,6 +168,7 @@ library SyncLogic {
         return collateralBalance - sharesToDebit;
     }
 
+    /// @dev Applies a simulated future earmark window on top of committed account state.
     function applyProspectiveEarmark(
         uint256 debt,
         uint256 earmarked,
@@ -187,6 +196,7 @@ library SyncLogic {
         return earmarked > debt ? debt : earmarked;
     }
 
+    /// @dev Projects an account from its last checkpoint to the current committed global state.
     function computeUnrealizedAccount(
         Account storage account,
         GlobalSyncState memory state,
@@ -282,6 +292,7 @@ library SyncLogic {
         if (newEarmarked > newDebt) newEarmarked = newDebt;
     }
 
+    /// @dev Returns the projected debt, earmarked debt, and collateral including a simulated new earmark window.
     function calculateUnrealizedDebt(
         Account storage account,
         GlobalSyncState memory state,
@@ -306,6 +317,7 @@ library SyncLogic {
         return (newDebt, newEarmarked, collateralBalanceCopy);
     }
 
+    /// @dev Converts the global sync state into the borrow checkpoint format used on accounts.
     function checkpointParams(GlobalSyncState memory state)
         internal
         pure

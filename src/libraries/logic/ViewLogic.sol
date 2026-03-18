@@ -5,7 +5,9 @@ import "../../interfaces/IAlchemistV3.sol";
 import {StateLogic} from "./StateLogic.sol";
 import {SyncLogic} from "./SyncLogic.sol";
 
+/// @dev Read-only helpers for projecting account and protocol state.
 library ViewLogic {
+    /// @dev Returns the fully projected account debt, earmark state, and collateral balance.
     function accountView(
         mapping(uint256 => Account) storage accounts,
         uint256 tokenId,
@@ -23,6 +25,7 @@ library ViewLogic {
         );
     }
 
+    /// @dev Formats the projected account view into the `getCDP` return order.
     function getCDP(
         mapping(uint256 => Account) storage accounts,
         uint256 tokenId,
@@ -41,10 +44,12 @@ library ViewLogic {
         );
     }
 
+    /// @dev Returns the tracked total deposited shares unchanged.
     function getTotalDeposited(uint256 totalDeposited) internal pure returns (uint256) {
         return totalDeposited;
     }
 
+    /// @dev Computes the additional debt a position can safely mint against its current collateral.
     function getMaxBorrowable(
         mapping(uint256 => Account) storage accounts,
         uint256 tokenId,
@@ -75,6 +80,7 @@ library ViewLogic {
         );
     }
 
+    /// @dev Computes the maximum shares a position can withdraw while respecting local and global constraints.
     function getMaxWithdrawable(
         mapping(uint256 => Account) storage accounts,
         uint256 tokenId,
@@ -109,6 +115,7 @@ library ViewLogic {
         );
     }
 
+    /// @dev Reads the active mint allowance for `spender` on `ownerTokenId`.
     function mintAllowance(mapping(uint256 => Account) storage accounts, uint256 ownerTokenId, address spender)
         internal
         view
@@ -118,10 +125,12 @@ library ViewLogic {
         return account.mintAllowances[account.allowancesVersion][spender];
     }
 
+    /// @dev Returns the underlying-denominated value of all deposited MYT shares.
     function getTotalUnderlyingValue(address myt, uint256 totalDeposited) internal view returns (uint256) {
         return StateLogic.getTotalUnderlyingValue(myt, totalDeposited);
     }
 
+    /// @dev Returns the underlying-denominated value of the shares required to back outstanding debt.
     function getTotalLockedUnderlyingValue(
         address myt,
         uint256 underlyingConversionFactor,
@@ -140,6 +149,7 @@ library ViewLogic {
         );
     }
 
+    /// @dev Returns the debt-denominated collateral value of a position after projecting unrealized state.
     function totalValue(
         mapping(uint256 => Account) storage accounts,
         uint256 tokenId,
@@ -161,6 +171,7 @@ library ViewLogic {
         return StateLogic.collateralValueInDebt(myt, underlyingConversionFactor, collateral);
     }
 
+    /// @dev Returns cumulative earmarked debt including the pending simulated earmark window.
     function getUnrealizedCumulativeEarmarked(uint256 totalDebt, uint256 cumulativeEarmarked, uint256 effectiveEarmarked)
         internal
         pure

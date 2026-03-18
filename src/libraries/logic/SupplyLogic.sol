@@ -7,7 +7,9 @@ import "../FixedPointMath.sol";
 import "../TokenUtils.sol";
 import "../../base/Errors.sol";
 
+/// @dev Collateral deposit and withdrawal helpers for position accounts.
 library SupplyLogic {
+    /// @dev Deposits MYT shares into an existing position or mints a new one when `tokenId` is zero.
     function deposit(
         mapping(uint256 => Account) storage accounts,
         address positionNFT,
@@ -35,6 +37,7 @@ library SupplyLogic {
         );
     }
 
+    /// @dev Withdraws collateral shares from a position and transfers them to `recipient`.
     function withdraw(
         mapping(uint256 => Account) storage accounts,
         address myt,
@@ -59,6 +62,8 @@ library SupplyLogic {
 
         TokenUtils.safeTransfer(myt, recipient, amountRemoved);
     }
+
+    /// @dev Parameters for the raw collateral deposit helper.
     struct ExecuteDepositParams {
         address myt;
         address payer;
@@ -66,6 +71,7 @@ library SupplyLogic {
         uint256 totalDeposited;
     }
 
+    /// @dev Parameters for the raw collateral withdrawal helper.
     struct ExecuteWithdrawParams {
         uint256 amount;
         uint256 totalDeposited;
@@ -74,6 +80,7 @@ library SupplyLogic {
         uint256 fixedPointScalar;
     }
 
+    /// @dev Credits collateral to an account and pulls the shares from `payer`.
     function executeDeposit(Account storage account, ExecuteDepositParams memory params)
         internal
         returns (uint256 newTotalDeposited)
@@ -83,6 +90,7 @@ library SupplyLogic {
         return params.totalDeposited + params.amount;
     }
 
+    /// @dev Removes collateral while preserving the position's required locked balance.
     function executeWithdraw(Account storage account, ExecuteWithdrawParams memory params)
         internal
         returns (uint256 amountRemoved, uint256 newTotalDeposited)
@@ -98,6 +106,7 @@ library SupplyLogic {
         return subCollateralBalance(account, params.amount, params.totalDeposited);
     }
 
+    /// @dev Removes up to `amountInYieldTokens` from the account and global deposit total.
     function subCollateralBalance(Account storage account, uint256 amountInYieldTokens, uint256 totalDeposited)
         internal
         returns (uint256 amountRemoved, uint256 newTotalDeposited)
@@ -114,6 +123,7 @@ library SupplyLogic {
         newTotalDeposited = totalDeposited - amountRemoved;
     }
 
+    /// @dev Clamps stale collateral balances to the protocol's tracked total deposits.
     function reconcileCollateralBalance(Account storage account, uint256 totalDeposited) internal {
         if (account.collateralBalance > totalDeposited) {
             account.collateralBalance = totalDeposited;

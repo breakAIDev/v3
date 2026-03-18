@@ -9,7 +9,9 @@ import "../TokenUtils.sol";
 import {SupplyLogic} from "./SupplyLogic.sol";
 import {StateLogic} from "./StateLogic.sol";
 
+/// @dev Debt issuance, burn, and collateral-backed repayment helpers.
 library BorrowLogic {
+    /// @dev Account snapshots needed to reconcile redemptions during sync.
     struct CheckpointParams {
         uint256 totalRedeemedDebt;
         uint256 totalRedeemedSharesOut;
@@ -18,6 +20,7 @@ library BorrowLogic {
         uint256 survivalAccumulator;
     }
 
+    /// @dev Inputs for direct or delegated minting.
     struct MintParams {
         address debtToken;
         address caller;
@@ -30,6 +33,7 @@ library BorrowLogic {
         uint256 fixedPointScalar;
     }
 
+    /// @dev Inputs for burning debt tokens against a position.
     struct BurnParams {
         address debtToken;
         address transmuter;
@@ -41,6 +45,7 @@ library BorrowLogic {
         uint256 cumulativeEarmarked;
     }
 
+    /// @dev Inputs for repaying debt with yield-token collateral.
     struct RepayParams {
         address myt;
         address transmuter;
@@ -56,6 +61,7 @@ library BorrowLogic {
         uint256 bps;
     }
 
+    /// @dev Records the latest global redemption and earmark checkpoints on an account.
     function checkpointAccountState(Account storage account, CheckpointParams memory params) internal {
         account.lastTotalRedeemedDebt = params.totalRedeemedDebt;
         account.lastTotalRedeemedSharesOut = params.totalRedeemedSharesOut;
@@ -64,6 +70,7 @@ library BorrowLogic {
         account.lastSurvivalAccumulator = params.survivalAccumulator;
     }
 
+    /// @dev Mints debt directly from a position after collateralization checks.
     function mint(
         mapping(uint256 => Account) storage accounts,
         MintParams memory params,
@@ -72,6 +79,7 @@ library BorrowLogic {
         return _executeMint(accounts, params, collateralValue);
     }
 
+    /// @dev Mints debt using a previously granted mint allowance.
     function mintFrom(
         mapping(uint256 => Account) storage accounts,
         MintParams memory params,
@@ -83,6 +91,7 @@ library BorrowLogic {
         return _executeMint(accounts, params, collateralValue);
     }
 
+    /// @dev Burns debt tokens against unearmarked debt on `recipientId`.
     function burn(
         mapping(uint256 => Account) storage accounts,
         BurnParams memory params,
@@ -116,6 +125,7 @@ library BorrowLogic {
         newTotalSyntheticsIssued = params.totalSyntheticsIssued - credit;
     }
 
+    /// @dev Repays debt with collateral shares and routes any protocol fee to the fee receiver.
     function repay(
         mapping(uint256 => Account) storage accounts,
         RepayParams memory params,
@@ -163,6 +173,7 @@ library BorrowLogic {
         }
     }
 
+    /// @dev Caps a requested debt adjustment to both account debt and total protocol debt.
     function capDebtCredit(uint256 requested, uint256 accountDebt, uint256 totalDebt)
         internal
         pure
@@ -172,10 +183,12 @@ library BorrowLogic {
         if (credit > totalDebt) credit = totalDebt;
     }
 
+    /// @dev Returns the debt that can be safely cleared without exceeding protocol debt.
     function clearableDebt(uint256 accountDebt, uint256 totalDebt) internal pure returns (uint256) {
         return accountDebt > totalDebt ? totalDebt : accountDebt;
     }
 
+    /// @dev Removes earmarked debt first and updates cumulative earmarked accounting.
     function subEarmarkedDebt(Account storage account, uint256 amountInDebtTokens, uint256 cumulativeEarmarked)
         internal
         returns (uint256 earmarkToRemove, uint256 newCumulativeEarmarked)
@@ -192,6 +205,7 @@ library BorrowLogic {
         newCumulativeEarmarked = cumulativeEarmarked - remove;
     }
 
+    /// @dev Subtracts debt from an account and clears sync checkpoints when the account reaches zero debt.
     function subDebt(
         Account storage account,
         uint256 amount,
@@ -210,6 +224,7 @@ library BorrowLogic {
         newCumulativeEarmarked = cumulativeEarmarked > newTotalDebt ? newTotalDebt : cumulativeEarmarked;
     }
 
+    /// @dev Adds debt to an account while enforcing the minimum collateralization ratio.
     function addDebt(
         Account storage account,
         uint256 amount,
@@ -226,6 +241,7 @@ library BorrowLogic {
         return totalDebt + amount;
     }
 
+    /// @dev Shared mint implementation used by both direct and delegated mint paths.
     function _executeMint(
         mapping(uint256 => Account) storage accounts,
         MintParams memory params,

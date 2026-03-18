@@ -214,6 +214,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
 
     // ---------------- Protocol and CDP getters ---------------- //
 
+    /// @inheritdoc IAlchemistV3State
     function getCDP(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256, uint256, uint256) {
         (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
@@ -227,10 +228,12 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
+    /// @inheritdoc IAlchemistV3State
     function getTotalDeposited() external view override(IAlchemistV3State) returns (uint256) {
         return _mytSharesDeposited;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function getMaxBorrowable(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256) {
         (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
@@ -248,6 +251,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
+    /// @inheritdoc IAlchemistV3State
     function getMaxWithdrawable(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256) {
         (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
@@ -267,6 +271,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
+    /// @inheritdoc IAlchemistV3State
     function mintAllowance(uint256 ownerTokenId, address spender)
         external
         view
@@ -277,10 +282,12 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return account.mintAllowances[account.allowancesVersion][spender];
     }
 
+    /// @inheritdoc IAlchemistV3State
     function getTotalUnderlyingValue() external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.getTotalUnderlyingValue(_myt, _mytSharesDeposited);
     }
 
+    /// @inheritdoc IAlchemistV3State
     function getTotalLockedUnderlyingValue() external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.getTotalLockedUnderlyingValue(
             _myt,
@@ -292,6 +299,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
+    /// @inheritdoc IAlchemistV3State
     function totalValue(uint256 tokenId) external view override(IAlchemistV3State) returns (uint256) {
         (SyncLogic.GlobalSyncState memory syncState, uint256 simulatedEarmarkWeight) = _viewContext();
 
@@ -315,6 +323,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
 
     // ---------------- Core CDP actions ---------------- //
 
+    /// @inheritdoc IAlchemistV3Actions
     function deposit(uint256 amount, address recipient, uint256 tokenId)
         external
         override(IAlchemistV3Actions)
@@ -357,6 +366,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return StateLogic.convertYieldTokensToDebt(_myt, _underlyingConversionFactor, amount);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function withdraw(uint256 amount, address recipient, uint256 tokenId)
         external
         override(IAlchemistV3Actions)
@@ -382,6 +392,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return transferred;
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function mint(uint256 tokenId, uint256 amount, address recipient)
         external
         override(IAlchemistV3Actions)
@@ -398,6 +409,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit Mint(tokenId, amount, recipient);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function mintFrom(uint256 tokenId, uint256 amount, address recipient)
         external
         override(IAlchemistV3Actions)
@@ -414,6 +426,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit Mint(tokenId, amount, recipient);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function burn(uint256 amount, uint256 recipientId)
         external
         override(IAlchemistV3Actions)
@@ -445,6 +458,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return credit;
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function repay(uint256 amount, uint256 recipientTokenId)
         external
         override(IAlchemistV3Actions)
@@ -481,6 +495,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return creditToYield;
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function redeem(uint256 amount)
         external
         override(IAlchemistV3Actions)
@@ -523,6 +538,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return result.sharesSent;
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function reduceSyntheticsIssued(uint256 amount)
         external
         override(IAlchemistV3Actions)
@@ -531,6 +547,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         _totalSyntheticsIssued = RedemptionLogic.reduceSyntheticsIssued(_totalSyntheticsIssued, amount);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function setTransmuterTokenBalance(uint256 amount)
         external
         override(IAlchemistV3Actions)
@@ -540,11 +557,13 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
             RedemptionLogic.setTransmuterTokenBalance(_lastTransmuterTokenBalance, _pendingCoverShares, amount);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function poke(uint256 tokenId) external override(IAlchemistV3Actions) {
         ValidationLogic.validatePoke(_alchemistPositionNFT, tokenId);
         _commitAndApply(tokenId, false);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function liquidate(uint256 accountId)
         external
         override(IAlchemistV3Actions)
@@ -564,6 +583,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return (result.amountLiquidated, result.feeInYield, result.feeInUnderlying);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function batchLiquidate(uint256[] calldata accountIds)
         external
         override(IAlchemistV3Actions)
@@ -625,6 +645,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return (totalAmountLiquidated, totalFeesInYield, totalFeesInUnderlying);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function selfLiquidate(uint256 accountId, address recipient)
         external
         override(IAlchemistV3Actions)
@@ -643,6 +664,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return result.amountLiquidated;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function calculateLiquidation(
         uint256 collateral,
         uint256 debt,
@@ -668,6 +690,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         );
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function approveMint(uint256 tokenId, address spender, uint256 amount)
         external
         override(IAlchemistV3Actions)
@@ -677,6 +700,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit ApproveMint(tokenId, spender, amount);
     }
 
+    /// @inheritdoc IAlchemistV3Actions
     function resetMintAllowances(uint256 tokenId)
         external
         override(IAlchemistV3Actions)
@@ -688,40 +712,49 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
 
     // ---------------- Unit conversion ---------------- //
 
+    /// @inheritdoc IAlchemistV3State
     function convertYieldTokensToDebt(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertYieldTokensToDebt(_myt, _underlyingConversionFactor, amount);
     }
 
+    /// @inheritdoc IAlchemistV3State
     function convertDebtTokensToYield(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertDebtTokensToYield(_myt, _underlyingConversionFactor, amount);
     }
 
+    /// @inheritdoc IAlchemistV3State
     function convertYieldTokensToUnderlying(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertYieldTokensToUnderlying(_myt, amount);
     }
 
+    /// @inheritdoc IAlchemistV3State
     function convertUnderlyingTokensToYield(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.convertUnderlyingTokensToYield(_myt, amount);
     }
 
+    /// @inheritdoc IAlchemistV3State
     function normalizeUnderlyingTokensToDebt(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.normalizeUnderlyingTokensToDebt(amount, _underlyingConversionFactor);
     }
 
+    /// @inheritdoc IAlchemistV3State
     function normalizeDebtTokensToUnderlying(uint256 amount) external view override(IAlchemistV3State) returns (uint256) {
         return StateLogic.normalizeDebtTokensToUnderlying(amount, _underlyingConversionFactor);
     }
 
     // ---------------- Protocol state getters ---------------- //
 
+    /// @inheritdoc IAlchemistV3Immutables
     function version() external pure override(IAlchemistV3Immutables) returns (string memory) {
         return "3.0.0";
     }
 
+    /// @inheritdoc IAlchemistV3Immutables
     function debtToken() external view override(IAlchemistV3Immutables) returns (address) {
         return _debtToken;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function admin() external view override(IAlchemistV3State) returns (address) {
         return _admin;
     }
@@ -798,34 +831,42 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         return _alchemistPositionNFT;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function pendingAdmin() external view override(IAlchemistV3State) returns (address) {
         return _pendingAdmin;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function tokenAdapter() external view override(IAlchemistV3State) returns (address) {
         return _tokenAdapter;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function alchemistFeeVault() external view override(IAlchemistV3State) returns (address) {
         return _alchemistFeeVault;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function transmuter() external view override(IAlchemistV3State) returns (address) {
         return _transmuter;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function minimumCollateralization() external view override(IAlchemistV3State) returns (uint256) {
         return _minimumCollateralization;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function globalMinimumCollateralization() external view override(IAlchemistV3State) returns (uint256) {
         return _globalMinimumCollateralization;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function collateralizationLowerBound() external view override(IAlchemistV3State) returns (uint256) {
         return _collateralizationLowerBound;
     }
 
+    /// @inheritdoc IAlchemistV3State
     function liquidationTargetCollateralization() external view override(IAlchemistV3State) returns (uint256) {
         return _liquidationTargetCollateralization;
     }
@@ -842,6 +883,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         _alchemistPositionNFT = nft;
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setAlchemistFeeVault(address value) external override(IAlchemistV3AdminActions) onlyAdmin {
         if (IFeeVault(value).token() != _underlyingToken) {
             revert IAlchemistV3Errors.AlchemistVaultTokenMismatchError();
@@ -850,11 +892,13 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit AlchemistFeeVaultUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setPendingAdmin(address value) external override(IAlchemistV3AdminActions) onlyAdmin {
         _pendingAdmin = value;
         emit PendingAdminUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function acceptAdmin() external override(IAlchemistV3AdminActions) {
         if (_pendingAdmin == address(0)) revert IllegalState();
         if (msg.sender != _pendingAdmin) revert Unauthorized();
@@ -864,12 +908,14 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit PendingAdminUpdated(address(0));
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setDepositCap(uint256 value) external override(IAlchemistV3AdminActions) onlyAdmin {
         if (value < IERC20(_myt).balanceOf(address(this))) revert IllegalArgument();
         _depositCap = value;
         emit DepositCapUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setProtocolFeeReceiver(address value)
         external
         override(IAlchemistV3AdminActions)
@@ -880,27 +926,32 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit ProtocolFeeReceiverUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setProtocolFee(uint256 fee) external override(IAlchemistV3AdminActions) onlyAdmin {
         _protocolFee = ConfiguratorLogic.feeBps(fee, BPS);
         emit ProtocolFeeUpdated(fee);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setLiquidatorFee(uint256 fee) external override(IAlchemistV3AdminActions) onlyAdmin {
         _liquidatorFee = ConfiguratorLogic.feeBps(fee, BPS);
         emit LiquidatorFeeUpdated(fee);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setRepaymentFee(uint256 fee) external override(IAlchemistV3AdminActions) onlyAdmin {
         _repaymentFee = ConfiguratorLogic.feeBps(fee, BPS);
         emit RepaymentFeeUpdated(fee);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setTokenAdapter(address value) external override(IAlchemistV3AdminActions) onlyAdmin {
         if (value == address(0)) revert IllegalArgument();
         _tokenAdapter = value;
         emit TokenAdapterUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setGuardian(address guardian, bool isActive)
         external
         override(IAlchemistV3AdminActions)
@@ -911,6 +962,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit GuardianSet(guardian, isActive);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setMinimumCollateralization(uint256 value)
         external
         override(IAlchemistV3AdminActions)
@@ -924,6 +976,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit MinimumCollateralizationUpdated(_minimumCollateralization);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setGlobalMinimumCollateralization(uint256 value)
         external
         override(IAlchemistV3AdminActions)
@@ -934,6 +987,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit GlobalMinimumCollateralizationUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setCollateralizationLowerBound(uint256 value)
         external
         override(IAlchemistV3AdminActions)
@@ -945,6 +999,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit CollateralizationLowerBoundUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function setLiquidationTargetCollateralization(uint256 value)
         external
         override(IAlchemistV3AdminActions)
@@ -958,6 +1013,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit LiquidationTargetCollateralizationUpdated(value);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function pauseDeposits(bool isPaused)
         external
         override(IAlchemistV3AdminActions)
@@ -967,6 +1023,7 @@ contract AlchemistV3 is IAlchemistV3, AlchemistV3Storage {
         emit DepositsPaused(isPaused);
     }
 
+    /// @inheritdoc IAlchemistV3AdminActions
     function pauseLoans(bool isPaused)
         external
         override(IAlchemistV3AdminActions)

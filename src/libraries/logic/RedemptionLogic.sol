@@ -5,7 +5,9 @@ import "../TokenUtils.sol";
 import {EarmarkLogic} from "./EarmarkLogic.sol";
 import {StateLogic} from "./StateLogic.sol";
 
+/// @dev Redemption flows that move earmarked debt into transmuter payouts.
 library RedemptionLogic {
+    /// @dev Inputs required to execute a redemption against the live earmark state.
     struct RedeemParams {
         address myt;
         address transmuter;
@@ -19,6 +21,7 @@ library RedemptionLogic {
         uint256 bps;
     }
 
+    /// @dev State updates produced by a redemption.
     struct RedeemResult {
         uint256 sharesSent;
         uint256 effectiveRedeemed;
@@ -39,6 +42,7 @@ library RedemptionLogic {
         bool epochAdvanced;
     }
 
+    /// @dev Commits pending earmarks, applies the redemption window, and transfers redeemed collateral.
     function redeem(RedeemParams memory params, EarmarkLogic.State memory state)
         internal
         returns (RedeemResult memory result)
@@ -102,6 +106,7 @@ library RedemptionLogic {
         result.sharesSent = collRedeemed;
     }
 
+    /// @dev Decrements the protocol's issued synthetic total after a redemption burn.
     function reduceSyntheticsIssued(uint256 totalSyntheticsIssued, uint256 amount)
         internal
         pure
@@ -110,6 +115,7 @@ library RedemptionLogic {
         return totalSyntheticsIssued - amount;
     }
 
+    /// @dev Reconciles the transmuter balance tracker and pending cover after an external balance update.
     function setTransmuterTokenBalance(uint256 lastTransmuterTokenBalance, uint256 pendingCoverShares, uint256 amount)
         internal
         pure

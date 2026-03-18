@@ -4,7 +4,9 @@ pragma solidity 0.8.28;
 import "../FixedPointMath.sol";
 import {StateLogic} from "./StateLogic.sol";
 
+/// @dev Earmark and redemption weight accounting built around epoch/index packed weights.
 library EarmarkLogic {
+    /// @dev Global state required to simulate or commit earmark windows.
     struct State {
         uint256 totalDebt;
         uint256 cumulativeEarmarked;
@@ -21,6 +23,7 @@ library EarmarkLogic {
         uint256 earmarkIndexMask;
     }
 
+    /// @dev State changes produced by committing an earmark window.
     struct CommitResult {
         uint256 lastTransmuterTokenBalance;
         uint256 pendingCoverShares;
@@ -32,6 +35,7 @@ library EarmarkLogic {
         uint256 epochBoundary;
     }
 
+    /// @dev State changes produced by applying a redemption window to earmarked debt.
     struct RedemptionWindowResult {
         uint256 effectiveRedeemed;
         uint256 totalDebt;
@@ -40,7 +44,7 @@ library EarmarkLogic {
         uint256 survivalAccumulator;
     }
 
-
+    /// @dev Packs the current earmark state into a reusable struct.
     function state(
         uint256 totalDebt,
         uint256 cumulativeEarmarked,
@@ -72,6 +76,8 @@ library EarmarkLogic {
             earmarkIndexMask: earmarkIndexMask
         });
     }
+
+    /// @dev Commits the latest graph-based earmark window against the current transmuter balance.
     function commitFromGraph(
         State memory state,
         address transmuter,
@@ -95,6 +101,7 @@ library EarmarkLogic {
         return commit(state, transmuterBalance, amount, blockNumber, myt, underlyingConversionFactor);
     }
 
+    /// @dev Applies a concrete earmark amount and updates packed weights, pending cover, and cumulative earmarks.
     function commit(
         State memory state,
         uint256 transmuterBalance,
@@ -151,6 +158,7 @@ library EarmarkLogic {
         }
     }
 
+    /// @dev Simulates the next graph-based earmark window without mutating state.
     function simulateFromGraph(
         State memory state,
         address transmuter,
@@ -166,6 +174,7 @@ library EarmarkLogic {
         return simulateUnrealizedEarmark(state, transmuterBalance, amount, myt, underlyingConversionFactor);
     }
 
+    /// @dev Simulates applying pending cover and a new earmark window to the current state.
     function simulateUnrealizedEarmark(
         State memory state,
         uint256 transmuterBalance,
@@ -191,6 +200,7 @@ library EarmarkLogic {
         );
     }
 
+    /// @dev Returns the surviving fraction of previously unearmarked exposure after earmark updates.
     function earmarkSurvivalRatio(
         uint256 oldPacked,
         uint256 newPacked,
@@ -212,6 +222,7 @@ library EarmarkLogic {
         return FixedPointMath.divQ128(newIdx, oldIdx);
     }
 
+    /// @dev Returns the surviving fraction of earmarked exposure after redemption updates.
     function redemptionSurvivalRatio(
         uint256 oldPacked,
         uint256 newPacked,
@@ -233,6 +244,7 @@ library EarmarkLogic {
         return FixedPointMath.divQ128(newIndexValue, oldIndexValue);
     }
 
+    /// @dev Applies a redemption window to live earmarked debt and updates redemption weights.
     function applyRedemptionWindow(State memory state, uint256 liveEarmarked, uint256 amount)
         internal
         pure
@@ -264,6 +276,7 @@ library EarmarkLogic {
         result.totalDebt = state.totalDebt - result.effectiveRedeemed;
     }
 
+    /// @dev Applies pending transmuter cover before new graph value is treated as fresh earmark demand.
     function applyPendingCover(
         uint256 amount,
         uint256 pendingCoverShares,
@@ -287,6 +300,7 @@ library EarmarkLogic {
         if (sharesUsed > pendingCoverShares) sharesUsed = pendingCoverShares;
     }
 
+    /// @dev Simulates one earmark window and reports the packed weight transition it would cause.
     function simulateEarmarkWindow(
         uint256 packedOld,
         uint256 liveUnearmarked,
@@ -321,6 +335,7 @@ library EarmarkLogic {
         effectiveEarmarked = effectiveAppliedAmount(liveUnearmarked, ratioApplied);
     }
 
+    /// @dev Updates a packed weight by applying `ratioWanted`, rolling to a new epoch on full depletion.
     function simulatePackedWeightUpdate(
         uint256 packedOld,
         uint256 ratioWanted,
@@ -355,6 +370,7 @@ library EarmarkLogic {
         ratioApplied = epochAdvanced ? 0 : FixedPointMath.divQ128(newIndex, oldIndex);
     }
 
+    /// @dev Converts a survival ratio into the amount effectively applied to `totalAmount`.
     function effectiveAppliedAmount(uint256 totalAmount, uint256 ratioApplied) internal pure returns (uint256) {
         uint256 remainingAmount = FixedPointMath.mulQ128(totalAmount, ratioApplied);
         return totalAmount - remainingAmount;
