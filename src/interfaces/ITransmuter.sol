@@ -146,7 +146,8 @@ interface ITransmuter {
     /// @notice Emits a {PositionCreated} event.
     ///
     /// @param depositAmount    Amount of debt tokens to deposit.
-    function createRedemption(uint256 depositAmount) external;
+    /// @param recipient        Address which will own the minted redemption position NFT.
+    function createRedemption(uint256 depositAmount, address recipient) external;
 
     /// @notice Claims a staking position from the transmuter.
     ///
@@ -156,7 +157,9 @@ interface ITransmuter {
     /// @notice Emits a {PositionClaimed} event.
     ///
     /// @param id   Id of the nft representing the position.
-    function claimRedemption(uint256 id) external;
+    function claimRedemption(
+        uint256 id
+    ) external returns (uint256 claimYield, uint256 feeYield, uint256 syntheticReturned, uint256 syntheticFee);
 
     /// @notice Queries the staking graph from `startBlock` to `endBlock`.
     ///

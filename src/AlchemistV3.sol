@@ -174,7 +174,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkArgument(params.protocolFee <= BPS);
         _checkArgument(params.liquidatorFee <= BPS);
         _checkArgument(params.repaymentFee <= BPS);
-
+        _checkArgument(params.liquidationTargetCollateralization >= params.minimumCollateralization);
+        
         debtToken = params.debtToken;
         underlyingToken = params.underlyingToken;
         underlyingConversionFactor = 10 ** (TokenUtils.expectDecimals(params.debtToken) - TokenUtils.expectDecimals(params.underlyingToken));
@@ -182,7 +183,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         minimumCollateralization = params.minimumCollateralization;
         globalMinimumCollateralization = params.globalMinimumCollateralization;
         collateralizationLowerBound = params.collateralizationLowerBound;
-        _checkArgument(params.liquidationTargetCollateralization >= params.minimumCollateralization);
         liquidationTargetCollateralization = params.liquidationTargetCollateralization;
         admin = params.admin;
         transmuter = params.transmuter;

@@ -173,10 +173,12 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
     }
 
     /// @inheritdoc ITransmuter
-    function createRedemption(uint256 syntheticDepositAmount) external {
+    function createRedemption(uint256 syntheticDepositAmount, address recipient) external {
         if (syntheticDepositAmount == 0) {
             revert DepositZeroAmount();
         }
+
+        _checkArgument(recipient != address(0));
 
         if (totalActiveLocked + syntheticDepositAmount > depositCap) {
             revert DepositCapReached();
@@ -198,13 +200,13 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         totalActiveLocked += syntheticDepositAmount;
         _countsTowardCap[_nonce] = true;
 
-        _mint(msg.sender, _nonce);
+        _mint(recipient, _nonce);
 
         emit PositionCreated(msg.sender, syntheticDepositAmount, _nonce);
     }
 
     /// @inheritdoc ITransmuter
-    function claimRedemption(uint256 id) external {
+    function claimRedemption(uint256 id) external returns (uint256 claimYield, uint256 feeYield, uint256 syntheticReturned, uint256 syntheticFee) {
         StakingPosition storage position = _positions[id];
 
         if (position.maturationBlock == 0) {
@@ -260,8 +262,8 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         uint256 distributable = totalYield <= sharesAvailable ? totalYield : sharesAvailable;
 
         // Split distributable amount. Round fee down. claimant gets the remainder.
-        uint256 feeYield = distributable * transmutationFee / BPS;
-        uint256 claimYield = distributable - feeYield;
+        feeYield = distributable * transmutationFee / BPS;
+        claimYield = distributable - feeYield;
 
         uint256 debtPaid = alchemist.convertYieldTokensToDebt(distributable);
         if (debtPaid > scaledTransmuted) {
@@ -272,8 +274,8 @@ contract Transmuter is ITransmuter, ERC721Enumerable {
         // We will return some synthetics instead of burning them all if this is the case
         uint256 shortfallDebt = scaledTransmuted > debtPaid ? scaledTransmuted - debtPaid : 0;
 
-        uint256 syntheticFee = amountNottransmuted * exitFee / BPS;
-        uint256 syntheticReturned = (amountNottransmuted - syntheticFee) + shortfallDebt;
+        syntheticFee = amountNottransmuted * exitFee / BPS;
+        syntheticReturned = (amountNottransmuted - syntheticFee) + shortfallDebt;
 
         uint256 burnAmountDebt = position.amount - (syntheticReturned + syntheticFee);
 

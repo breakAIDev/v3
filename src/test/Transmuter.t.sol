@@ -13,6 +13,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "../interfaces/ITransmuter.sol";
 
+import "../base/Errors.sol";
 import "../base/TransmuterErrors.sol";
 
 contract MockAlchemist {
@@ -153,7 +154,7 @@ contract TransmuterTest is Test {
 
     function testURI() public {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         Transmuter.StakingPosition memory position = transmuter.getPosition(1);
 
@@ -223,16 +224,29 @@ contract TransmuterTest is Test {
 
     function testCreateRedemption() public {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
         Transmuter.StakingPosition memory position = transmuter.getPosition(1);
         assertEq(position.amount, 100e18);
+        assertEq(transmuter.totalLocked(), 100e18);
+    }
+
+    function testCreateRedemptionForRecipient() public {
+        address recipient = address(0xcafe);
+
+        vm.prank(address(0xbeef));
+        transmuter.createRedemption(100e18, recipient);
+
+        Transmuter.StakingPosition memory position = transmuter.getPosition(1);
+
+        assertEq(position.amount, 100e18);
+        assertEq(transmuter.ownerOf(1), recipient);
         assertEq(transmuter.totalLocked(), 100e18);
     }
 
     function testCreateRedemptionTooLarge() public {
         vm.startPrank(address(0xbeef));
         vm.expectRevert(DepositCapReached.selector);
-        transmuter.createRedemption(uint256(type(int256).max) + 1);
+        transmuter.createRedemption(uint256(type(int256).max) + 1, address(0xbeef));
         vm.stopPrank();
     }
 
@@ -241,7 +255,7 @@ contract TransmuterTest is Test {
         vm.assume(amount < uint256(type(int256).max) / 1e50);
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(amount);
+        transmuter.createRedemption(amount, address(0xbeef));
 
         Transmuter.StakingPosition memory position = transmuter.getPosition(1);
 
@@ -251,14 +265,20 @@ contract TransmuterTest is Test {
 
     function testCreateRedemptionNoTokens() public {
         vm.expectRevert(DepositZeroAmount.selector);
-        transmuter.createRedemption(0);
+        transmuter.createRedemption(0, address(this));
+    }
+
+    function testCreateRedemptionZeroRecipientReverts() public {
+        vm.prank(address(0xbeef));
+        vm.expectRevert(IllegalArgument.selector);
+        transmuter.createRedemption(100e18, address(0));
     }
 
     function testCreateRedemptionDepositCapReached() public {
         transmuter.setDepositCap(90e18);
 
         vm.expectRevert(DepositCapReached.selector);
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(this));
     }
 
     function testCreateRedemptionDepositCapReachedSynthetic() public {
@@ -266,7 +286,7 @@ contract TransmuterTest is Test {
         alchemist.setSyntheticsIssued(90e18);
 
         vm.expectRevert(DepositCapReached.selector);
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(this));
     }
 
     function testClaimRedemptionNoPosition() public {
@@ -279,7 +299,7 @@ contract TransmuterTest is Test {
         deal(address(collateralToken), address(transmuter), uint256(type(int256).max) / 1e20);
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
         assertEq(collateralToken.balanceOf(address(0xbeef)), 0);
@@ -296,7 +316,7 @@ contract TransmuterTest is Test {
         deal(address(collateralToken), address(transmuter), 200e18);
         alchemist.setSyntheticsIssued(1200e18);
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -316,7 +336,7 @@ contract TransmuterTest is Test {
         deal(address(collateralToken), address(transmuter), uint256(type(int256).max) / 1e20);
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -332,7 +352,7 @@ contract TransmuterTest is Test {
 
     function testClaimRedemptionFromAlchemist() public {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -357,7 +377,7 @@ contract TransmuterTest is Test {
         vm.assume(amount < uint256(type(int256).max) / 1e50);
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(amount);
+        transmuter.createRedemption(amount, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -378,7 +398,7 @@ contract TransmuterTest is Test {
         transmuter.setProtocolFeeReceiver(address(this));
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -401,7 +421,7 @@ contract TransmuterTest is Test {
         transmuter.setProtocolFeeReceiver(address(this));
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -421,7 +441,7 @@ contract TransmuterTest is Test {
         uint256 balanceBefore = alETH.balanceOf(address(0xbeef));
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         // uint256 query = transmuter.queryGraph(block.number + 1, block.number + 5256000);
         // assertEq(query, 100e18);
@@ -450,7 +470,7 @@ contract TransmuterTest is Test {
         uint256 balanceBefore = alETH.balanceOf(address(0xbeef));
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         uint256 query = transmuter.queryGraph(block.number + 1, block.number + 5_256_000);
         assertEq(query, 100e18);
@@ -477,7 +497,7 @@ contract TransmuterTest is Test {
         transmuter.setExitFee(100);
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         uint256 balanceBefore = alETH.balanceOf(address(0xbeef));
 
@@ -496,7 +516,7 @@ contract TransmuterTest is Test {
 
     function testQueryGraph() external {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + 5_256_000);
 
@@ -507,7 +527,7 @@ contract TransmuterTest is Test {
 
     function testQueryGraphPartial() external {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + (5_256_000 / 2));
 
@@ -519,7 +539,7 @@ contract TransmuterTest is Test {
     function testClaimRedemption_division() public {
         deal(address(collateralToken), address(transmuter), uint256(type(int256).max) / 1e20);
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
         vm.roll(block.number + 5_256_000); // Mature the staking position
         alchemist.setUnderlyingValue(0); // Simulate all users exiting with 0 underlying left
         emit log_named_uint("total token there", alchemist.getTotalLockedUnderlyingValue());
@@ -625,12 +645,12 @@ contract TransmuterTest is Test {
         transmuter.setDepositCap(100e18);
 
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         // should fail before poke (still in-flight, not matured)
         vm.prank(address(0xbeef));
         vm.expectRevert(DepositCapReached.selector);
-        transmuter.createRedemption(1e18);
+        transmuter.createRedemption(1e18, address(0xbeef));
 
         // mature it
         vm.roll(block.number + transmuter.timeToTransmute());
@@ -640,12 +660,12 @@ contract TransmuterTest is Test {
 
         // now cap should be freed, deposit succeeds
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(1e18);
+        transmuter.createRedemption(1e18, address(0xbeef));
     }
 
     function testPokeMatured_RevertsIfNotMatured() public {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.expectRevert(); // PositionNotMatured (custom error)
         transmuter.pokeMatured(1);
@@ -653,7 +673,7 @@ contract TransmuterTest is Test {
 
     function testPokeMatured_RevertsIfAlreadyPoked() public {
         vm.prank(address(0xbeef));
-        transmuter.createRedemption(100e18);
+        transmuter.createRedemption(100e18, address(0xbeef));
 
         vm.roll(block.number + transmuter.timeToTransmute());
 

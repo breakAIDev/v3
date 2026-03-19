@@ -325,7 +325,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
@@ -1413,7 +1413,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000);
@@ -1452,7 +1452,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000 / 2);
@@ -1499,7 +1499,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000);
@@ -1544,7 +1544,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000 / 2);
@@ -1650,7 +1650,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000);
@@ -1682,7 +1682,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000);
@@ -1712,7 +1712,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000 / 2);
@@ -1886,7 +1886,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + (5_256_000));
@@ -1921,7 +1921,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + (5_256_000 / 2));
@@ -1953,7 +1953,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + (5_256_000 / 2));
@@ -2602,7 +2602,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + 5_256_000);
@@ -2648,7 +2648,7 @@ contract AlchemistV3Test is Test {
 
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
 
         vm.roll(block.number + (5_256_000 / 2));
@@ -2714,7 +2714,7 @@ contract AlchemistV3Test is Test {
         // Test that even though there is no active debt, that we can still create a position with the collateral sent to the transmuter.
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
     }
 
@@ -2872,7 +2872,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
@@ -2992,7 +2992,7 @@ contract AlchemistV3Test is Test {
         // create a redemption to start earmarking debt
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
         uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
         IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
@@ -3032,7 +3032,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         // skip to a future block. Lets say 5% of the way through the transmutation period (5_256_000 blocks)
@@ -3166,7 +3166,7 @@ contract AlchemistV3Test is Test {
         // Create transmuter redemption to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         // Advance ~5% through the transmutation period so only a small portion is earmarked
@@ -3307,7 +3307,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
@@ -3435,7 +3435,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
@@ -3552,7 +3552,7 @@ contract AlchemistV3Test is Test {
         // create a redemption to start earmarking debt
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
         uint256 initialVaultSupply = IERC20(address(mockStrategyYieldToken)).totalSupply();
         IMockYieldToken(mockStrategyYieldToken).updateMockTokenSupply(initialVaultSupply);
@@ -3599,7 +3599,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         uint256 transmuterPreviousBalance = IERC20(address(vault)).balanceOf(address(transmuterLogic));
@@ -3789,7 +3789,7 @@ contract AlchemistV3Test is Test {
         // Setup earmarked debt: create a redemption in transmuter
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
 
         // Roll forward ~50% of the transmutation period to get partial earmarking
@@ -4266,7 +4266,7 @@ contract AlchemistV3Test is Test {
         deal(address(alToken), address(0xdad), transmuterRedemptionAmount);
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
-        transmuterLogic.createRedemption(transmuterRedemptionAmount);
+        transmuterLogic.createRedemption(transmuterRedemptionAmount, address(0xdad));
         vm.stopPrank();
         // --- Advance time to allow earmarking ---
         vm.roll(block.number + 100); // Advance some blocks
@@ -4298,8 +4298,8 @@ contract AlchemistV3Test is Test {
         // 0xdad create redemption, here we create multiple redemptions to test the poc
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), amountToRedeem + amountToRedeem2);
-        transmuterLogic.createRedemption(amountToRedeem);
-        transmuterLogic.createRedemption(amountToRedeem2);
+        transmuterLogic.createRedemption(amountToRedeem, address(0xdad));
+        transmuterLogic.createRedemption(amountToRedeem2, address(0xdad));
         vm.stopPrank();
         // lets full mature the redemption
         vm.roll(block.number + (5_256_000) + 1);
@@ -4352,7 +4352,7 @@ contract AlchemistV3Test is Test {
         vm.stopPrank();
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xdad));
         vm.stopPrank();
         vm.roll(block.number + 5_256_000 / 2);
         uint256 synctectiAssetBefore = alchemist.totalSyntheticsIssued();
@@ -4381,7 +4381,7 @@ contract AlchemistV3Test is Test {
         // After timeToTransmute has passed, the amount to pull with earmarking
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowedAmount);
-        transmuterLogic.createRedemption(borrowedAmount);
+        transmuterLogic.createRedemption(borrowedAmount, address(0xdad));
         vm.stopPrank();
         // 3. Repay any amount.
         // This sends yield tokens to the transmuter and reduces total debt.
@@ -4421,7 +4421,7 @@ contract AlchemistV3Test is Test {
         // Create Redemption
         vm.startPrank(redeemer);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), maxBorrowable);
-        transmuterLogic.createRedemption(maxBorrowable);
+        transmuterLogic.createRedemption(maxBorrowable, redeemer);
         vm.stopPrank();
         // Advance time to complete redemption
         vm.roll(block.number + 5_256_000);
@@ -4474,7 +4474,7 @@ contract AlchemistV3Test is Test {
         vm.startPrank(address(0xbeef));
         //give alowance to transmuter to burn
         alToken.approve(address(transmuterLogic), alTokenBalanceBeef / 2);
-        transmuterLogic.createRedemption(alTokenBalanceBeef / 2);
+        transmuterLogic.createRedemption(alTokenBalanceBeef / 2, address(0xbeef));
         //make sure redemption can be claimed in full
         vm.roll(block.number + 6_256_000);
         transmuterLogic.claimRedemption(1);
@@ -4534,7 +4534,7 @@ contract AlchemistV3Test is Test {
         console.log("Step 4: User3 creates redemption");
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), redemptionAmount);
-        transmuterLogic.createRedemption(redemptionAmount);
+        transmuterLogic.createRedemption(redemptionAmount, anotherExternalUser);
         vm.stopPrank();
         // Step 5: User1 tries to burn his debt
         // This should succeed because transmuter has enough yield tokens to cover the redemption,
@@ -4566,7 +4566,7 @@ contract AlchemistV3Test is Test {
         vm.startPrank(alice);
         uint256 redemption = debt / 2;
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), amount);
-        transmuterLogic.createRedemption(redemption);
+        transmuterLogic.createRedemption(redemption, alice);
         uint256 aliceId = 1;
         vm.stopPrank();
         address admin = transmuterLogic.admin();
@@ -4604,7 +4604,7 @@ contract AlchemistV3Test is Test {
         alchemist.mint(tokenId, 80e18, address(0xbeef));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 9999e18);
         for (uint256 i = 1; i < 4; i++) {
-            transmuterLogic.createRedemption(1e18);
+            transmuterLogic.createRedemption(1e18, address(0xbeef));
         }
         vm.roll(block.number + 1);
         for (uint256 i = 1; i < 4; i++) {
@@ -4622,7 +4622,7 @@ contract AlchemistV3Test is Test {
         uint256 tokenId = AlchemistNFTHelper.getFirstTokenId(address(0xbeef), address(alchemistNFT));
         alchemist.mint(tokenId, (amount / 2), address(0xbeef));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), 50e18);
-        transmuterLogic.createRedemption(50e18);
+        transmuterLogic.createRedemption(50e18, address(0xbeef));
         vm.stopPrank();
         vm.roll(block.number + 1);
         alchemist.poke(tokenId);
@@ -4767,7 +4767,7 @@ contract AlchemistV3Test is Test {
         // Need to start a transmutator deposit, to start earmarking debt
         vm.startPrank(anotherExternalUser);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), mintAmount);
-        transmuterLogic.createRedemption(mintAmount);
+        transmuterLogic.createRedemption(mintAmount, anotherExternalUser);
         vm.stopPrank();
         vm.roll(block.number + (5_256_000));
         // modify yield token price via modifying underlying token supply
@@ -4801,17 +4801,17 @@ contract AlchemistV3Test is Test {
         alchemist.mint(tokenIdFor0xBeef, 1000e18, address(0xaaaa));
         alchemist.mint(tokenIdFor0xBeef, 500e18, address(0xbbbb));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
-        transmuterLogic.createRedemption(3500e18);
+        transmuterLogic.createRedemption(3500e18, address(0xbeef));
         vm.stopPrank();
 
         vm.startPrank(address(0xaaaa));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(1000e18, address(0xaaaa));
         vm.stopPrank();
 
         vm.startPrank(address(0xbbbb));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
-        transmuterLogic.createRedemption(500e18);
+        transmuterLogic.createRedemption(500e18, address(0xbbbb));
         vm.stopPrank();
 
         vm.startPrank(address(0xdad));
@@ -4863,15 +4863,15 @@ contract AlchemistV3Test is Test {
         vm.startPrank(address(0xdad));
         IERC20(alToken).approve(address(transmuterLogic), 4000e18);
         // Create redemption for 1_000 alUSD and claim
-        transmuterLogic.createRedemption(100e18);
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(100e18, address(0xdad));
+        transmuterLogic.createRedemption(1000e18, address(0xdad));
         vm.roll(vm.getBlockNumber() + 5_256_000);
         transmuterLogic.claimRedemption(2);
         // Create redemption for 1_000 alUSD
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(1000e18, address(0xdad));
         vm.roll(vm.getBlockNumber() + 5_256_000 / 2);
         // Create another redemption for 1_000 alUSD after passing half period
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(1000e18, address(0xdad));
         vm.roll(vm.getBlockNumber() + 5_256_000 / 2);
         // Claim the second redemption
         transmuterLogic.claimRedemption(3);
@@ -4892,14 +4892,14 @@ contract AlchemistV3Test is Test {
         vm.startPrank(address(0xdad));
         IERC20(alToken).approve(address(transmuterLogic), 3000e18);
         // Create redemption for 1_000 alUSD and claim
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(1000e18, address(0xdad));
         vm.roll(vm.getBlockNumber() + 5_256_000);
         transmuterLogic.claimRedemption(1);
         // Create redemption for 1_000 alUSD
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(1000e18, address(0xdad));
         vm.roll(vm.getBlockNumber() + 5_256_000 / 2);
         // Create another redemption for 1_000 alUSD after passing half period
-        transmuterLogic.createRedemption(1000e18);
+        transmuterLogic.createRedemption(1000e18, address(0xdad));
         vm.roll(vm.getBlockNumber() + 5_256_000 / 2);
         // Claim the second redemption
         transmuterLogic.claimRedemption(2);
@@ -5323,7 +5323,7 @@ contract AlchemistV3Test is Test {
         // Create transmuter redemption for full debt amount
         vm.startPrank(someWhale);
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowAmount);
-        transmuterLogic.createRedemption(borrowAmount);
+        transmuterLogic.createRedemption(borrowAmount, someWhale);
         vm.stopPrank();
 
         uint256 startEarmarkBlock = block.number + 1;
@@ -5366,7 +5366,7 @@ contract AlchemistV3Test is Test {
         // 2. redemption using the same amount
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), borrowedAmount);
-        transmuterLogic.createRedemption(borrowedAmount);
+        transmuterLogic.createRedemption(borrowedAmount, address(0xdad));
         vm.stopPrank();
 
         // 3. maturing 2/3 transmute amount
@@ -5422,8 +5422,8 @@ contract AlchemistV3Test is Test {
         vm.startPrank(address(0xdad));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), type(uint256).max);
         // create two redemption position
-        transmuterLogic.createRedemption(mintAmount/2);
-        transmuterLogic.createRedemption(mintAmount/2);
+        transmuterLogic.createRedemption(mintAmount/2, address(0xdad));
+        transmuterLogic.createRedemption(mintAmount/2, address(0xdad));
         vm.stopPrank();
 
         // maturing the redemption and maxing the earmarked
@@ -5496,7 +5496,7 @@ contract AlchemistV3Test is Test {
         // Step 2: Attacker creates redemption with ALL borrowed debt
         vm.startPrank(address(0xbeef));
         SafeERC20.safeApprove(address(alToken), address(transmuterLogic), maxBorrowable);
-        transmuterLogic.createRedemption(maxBorrowable);
+        transmuterLogic.createRedemption(maxBorrowable, address(0xbeef));
         console.log("\nStep 2: creates redemption");
         vm.stopPrank();
 
@@ -5576,7 +5576,7 @@ contract AlchemistV3Test is Test {
 
         IERC20(alToken).approve(address(transmuterLogic), 3000e18);
         IERC20(address(vault)).approve(address(alchemist), 100_000e18);
-        transmuterLogic.createRedemption(9e18 - 100);
+        transmuterLogic.createRedemption(9e18 - 100, user1);
 
         vm.roll(vm.getBlockNumber() + transmuterLogic.timeToTransmute()); // full dulration of the redemption.
 
@@ -5645,7 +5645,7 @@ contract AlchemistV3Test is Test {
         // === 2) Create a redemption so 0.1 debt gets earmarked next block ===
         vm.startPrank(alice);
         alToken.approve(address(transmuterLogic), type(uint256).max);
-        transmuterLogic.createRedemption(1e17); // 0.1 debt
+        transmuterLogic.createRedemption(1e17, alice); // 0.1 debt
         vm.roll(block.number + 1);
         vm.stopPrank();
 

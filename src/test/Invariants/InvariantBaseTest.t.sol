@@ -102,7 +102,7 @@ contract InvariantBaseTest is InvariantsTest {
         vm.startPrank(onBehalf);
         alToken.mint(onBehalf, amount);
         alToken.approve(address(transmuterLogic), amount);
-        transmuterLogic.createRedemption(amount);
+        transmuterLogic.createRedemption(amount, onBehalf);
         vm.stopPrank();
         _checkDebtInvariant("stake");
     }
