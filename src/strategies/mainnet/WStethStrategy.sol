@@ -76,22 +76,27 @@ contract WstethMainnetStrategy is MYTStrategy {
 
     function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256 depositReturn) {
         _ensureIdleBalance(address(weth), amount);
-        
-        // TODO no access to offchain quotes so setting minAmount to 1
-        uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, 1, callData);
+
+        uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, (10_000 - params.slippageBPS) / 10_000, callData);
         
         require(wstETHReceived > 0, "No wstETH received");
         
         return amount;
     }
 
+    
     /// @notice Deallocate with intermediate unwrap step
     /// @param amount WETH amount expected to be returned to vault
     /// @param callData 0x swap calldata for stETH -> WETH
     /// @param minIntermediateOut Minimum stETH to produce from unwrap (from quote's sellAmount)
-    function _deallocate(uint256 amount, bytes memory callData, uint256 minIntermediateOut) internal override returns (uint256) {        
-        // Convert minIntermediateOut (stETH) to wstETH equivalent
-        // Add 1 wei buffer to account for rounding in wstETH/stETH conversion
+    function _deallocate(uint256 amount, bytes memory callData, uint256 minIntermediateOut) internal override returns (uint256) {
+        // Check idle WETH balance first - only unwrap+swap if there's a shortfall
+        uint256 idleBalance = _idleAssets();
+        if (idleBalance >= amount) {
+            TokenUtils.safeApprove(address(weth), msg.sender, amount);
+            return amount;
+        }
+        
         uint256 wstETHToUnwrap = wsteth.getWstETHByStETH(minIntermediateOut) + 1;
         
         // Cap at actual balance
@@ -106,10 +111,11 @@ contract WstethMainnetStrategy is MYTStrategy {
         uint256 stETHAfter = TokenUtils.safeBalanceOf(address(steth), address(this));
         uint256 stETHReceived = stETHAfter - stETHBefore; 
         
-        // Swap stETH -> WETH via 0x (will return >= amount due to quote)
-        // Approve minIntermediateOut since that's what the swap calldata expects to pull
-        uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, amount, callData);
-        require(wethReceived >= amount, "Insufficient WETH received");
+        uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, 1, callData);
+        
+        uint256 wethBalance = IERC20(address(weth)).balanceOf(address(this));
+        require(wethBalance >= amount, InvalidAmount(amount, wethBalance));
+        
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
     }
