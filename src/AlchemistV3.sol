@@ -148,29 +148,23 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     uint256 private constant _EARMARK_INDEX_MASK = (uint256(1) << _EARMARK_INDEX_BITS) - 1;
 
     modifier onlyAdmin() {
-        if (msg.sender != admin) {
-            revert Unauthorized();
-        }
+        _onlyAdmin();
         _;
     }
 
     modifier onlyAdminOrGuardian() {
-        if (msg.sender != admin && !guardians[msg.sender]) {
-            revert Unauthorized();
-        }
+        _onlyAdminOrGuardian();
         _;
     }
 
     modifier onlyTransmuter() {
-        if (msg.sender != transmuter) {
-            revert Unauthorized();
-        }
+        _onlyTransmuter();
         _;
     }
 
     constructor() initializer {}
 
-    function initialize(AlchemistInitializationParams memory params) external initializer {
+    function initialize(AlchemistInitializationParams calldata params) external initializer {
         _checkArgument(params.protocolFee <= BPS);
         _checkArgument(params.liquidatorFee <= BPS);
         _checkArgument(params.repaymentFee <= BPS);
@@ -558,7 +552,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3Actions
-    function repay(uint256 amount, uint256 recipientTokenId) public returns (uint256) {
+    function repay(uint256 amount, uint256 recipientTokenId) external returns (uint256) {
         _checkArgument(amount > 0);
         _checkForValidAccountId(recipientTokenId);
         Account storage account = _accounts[recipientTokenId];
@@ -624,7 +618,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3Actions
-    function batchLiquidate(uint256[] memory accountIds)
+    function batchLiquidate(uint256[] calldata accountIds)
         external
         returns (uint256 totalAmountLiquidated, uint256 totalFeesInYield, uint256 totalFeesInUnderlying)
     {
@@ -738,7 +732,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @inheritdoc IAlchemistV3Actions
-    function selfLiquidate(uint256 accountId, address recipient) public returns (uint256 amountLiquidated) {
+    function selfLiquidate(uint256 accountId, address recipient) external returns (uint256 amountLiquidated) {
         _checkArgument(recipient != address(0));
         _checkForValidAccountId(accountId);
         _checkAccountOwnership(IAlchemistV3Position(alchemistPositionNFT).ownerOf(accountId), msg.sender);
@@ -1366,6 +1360,24 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function _checkForValidAccountId(uint256 tokenId) internal view {
         if (!_tokenExists(alchemistPositionNFT, tokenId)) {
             revert UnknownAccountOwnerIDError();
+        }
+    }
+
+    function _onlyAdmin() internal view {
+        if (msg.sender != admin) {
+            revert Unauthorized();
+        }
+    }
+
+    function _onlyAdminOrGuardian() internal view {
+        if (msg.sender != admin && !guardians[msg.sender]) {
+            revert Unauthorized();
+        }
+    }
+
+    function _onlyTransmuter() internal view {
+        if (msg.sender != transmuter) {
+            revert Unauthorized();
         }
     }
 
