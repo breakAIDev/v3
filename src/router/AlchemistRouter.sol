@@ -14,8 +14,6 @@ import {ITransmuter} from "../interfaces/ITransmuter.sol";
 /// @title  AlchemistRouter
 /// @notice Batches wrap + deposit + borrow into a single transaction for EOA users.
 /// @dev    Stateless — never holds tokens or NFTs between transactions.
-///         Uses before/after balance check to identify the newly minted NFT,
-///         immune to donation griefing.
 contract AlchemistRouter is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -146,10 +144,11 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         IWETH(underlying).deposit{value: msg.value}();
         IERC20(underlying).forceApprove(mytVault, msg.value);
         shares = IVaultV2(mytVault).deposit(msg.value, msg.sender);
-        require(shares >= minSharesOut, "Slippage");
 
-        // Clear residual approval
+        // Clear residual approval before slippage check so it runs on all paths
         IERC20(underlying).forceApprove(mytVault, 0);
+
+        require(shares >= minSharesOut, "Slippage");
     }
 
     // ─── Repay ───────────────────────────────────────────────────────────
@@ -182,22 +181,15 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         require(shares >= minSharesOut, "Slippage");
 
         IERC20(underlying).forceApprove(mytVault, 0);
-        IERC20(mytVault).forceApprove(alchemist, shares);
 
-        IAlchemistV3(alchemist).repay(shares, recipientTokenId);
-
-        IERC20(mytVault).forceApprove(alchemist, 0);
-
-        // Return any unused MYT shares (repay caps to outstanding debt)
-        uint256 remaining = IERC20(mytVault).balanceOf(address(this));
-        if (remaining > 0) {
-            IERC20(mytVault).safeTransfer(msg.sender, remaining);
-        }
+        _repayAndRefund(alchemist, mytVault, shares, recipientTokenId);
     }
 
     /// @notice Repay debt on a position using native ETH.
     /// @dev    WETH address is derived from alchemist.underlyingToken().
-    ///         Any MYT shares not consumed by the repayment are returned to the caller.
+    ///         Any MYT shares not consumed by the repayment are returned to the caller
+    ///         as MYT vault shares (not ETH). Callers must redeem shares separately if
+    ///         they want the underlying back.
     /// @param  alchemist         The Alchemist contract address.
     /// @param  recipientTokenId  The position NFT token ID to repay debt on.
     /// @param  minSharesOut      Minimum MYT shares from vault deposit (slippage protection).
@@ -221,17 +213,8 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         require(shares >= minSharesOut, "Slippage");
 
         IERC20(underlying).forceApprove(mytVault, 0);
-        IERC20(mytVault).forceApprove(alchemist, shares);
 
-        IAlchemistV3(alchemist).repay(shares, recipientTokenId);
-
-        IERC20(mytVault).forceApprove(alchemist, 0);
-
-        // Return any unused MYT shares (repay caps to outstanding debt)
-        uint256 remaining = IERC20(mytVault).balanceOf(address(this));
-        if (remaining > 0) {
-            IERC20(mytVault).safeTransfer(msg.sender, remaining);
-        }
+        _repayAndRefund(alchemist, mytVault, shares, recipientTokenId);
     }
 
     // ─── Withdraw ────────────────────────────────────────────────────────
@@ -254,9 +237,13 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ) external nonReentrant {
         require(block.timestamp <= deadline, "Expired");
         require(shares > 0, "Zero shares");
+        require(tokenId != 0, "Invalid tokenId");
 
         IAlchemistV3Position nft = IAlchemistV3Position(IAlchemistV3(alchemist).alchemistPositionNFT());
         address mytVault = IAlchemistV3(alchemist).myt();
+
+        // Only the position owner may withdraw (not merely an approved operator)
+        require(nft.ownerOf(tokenId) == msg.sender, "Not position owner");
 
         // Take custody of position NFT (caller must have approved router)
         nft.transferFrom(msg.sender, address(this), tokenId);
@@ -290,10 +277,14 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ) external nonReentrant {
         require(block.timestamp <= deadline, "Expired");
         require(shares > 0, "Zero shares");
+        require(tokenId != 0, "Invalid tokenId");
 
         IAlchemistV3Position nft = IAlchemistV3Position(IAlchemistV3(alchemist).alchemistPositionNFT());
         address mytVault = IAlchemistV3(alchemist).myt();
         address underlying = IAlchemistV3(alchemist).underlyingToken();
+
+        // Only the position owner may withdraw (not merely an approved operator)
+        require(nft.ownerOf(tokenId) == msg.sender, "Not position owner");
 
         // Take custody of position NFT (caller must have approved router)
         nft.transferFrom(msg.sender, address(this), tokenId);
@@ -357,15 +348,8 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         IAlchemistV3Position nft = IAlchemistV3Position(IAlchemistV3(alchemist).alchemistPositionNFT());
 
         if (tokenId == 0) {
-            // New position: deposit to this contract, discover minted NFT, transfer to caller
-            uint256 balanceBefore = nft.balanceOf(address(this));
-
-            IAlchemistV3(alchemist).deposit(shares, address(this), 0);
+            (tokenId, ) = IAlchemistV3(alchemist).deposit(shares, address(this), 0);
             IERC20(mytVault).forceApprove(alchemist, 0);
-
-            uint256 balanceAfter = nft.balanceOf(address(this));
-            require(balanceAfter == balanceBefore + 1, "No NFT minted");
-            tokenId = nft.tokenOfOwnerByIndex(address(this), balanceAfter - 1);
 
             if (borrowAmount > 0) {
                 IAlchemistV3(alchemist).mint(tokenId, borrowAmount, msg.sender);
@@ -387,6 +371,29 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         return tokenId;
     }
 
+    /// @dev Approve alchemist, repay, clear approval, refund unused MYT shares to caller.
+    ///      Uses balance delta (not absolute balanceOf) to be donation-resistant.
+    function _repayAndRefund(
+        address alchemist,
+        address mytVault,
+        uint256 shares,
+        uint256 recipientTokenId
+    ) internal {
+        IERC20(mytVault).forceApprove(alchemist, shares);
+
+        uint256 balBefore = IERC20(mytVault).balanceOf(address(this));
+        IAlchemistV3(alchemist).repay(shares, recipientTokenId);
+        uint256 consumed = balBefore - IERC20(mytVault).balanceOf(address(this));
+
+        IERC20(mytVault).forceApprove(alchemist, 0);
+
+        // Return any unused MYT shares (repay caps to outstanding debt)
+        uint256 remaining = shares - consumed;
+        if (remaining > 0) {
+            IERC20(mytVault).safeTransfer(msg.sender, remaining);
+        }
+    }
+
     /// @dev Shared claim logic: takes transmuter NFT, claims, forwards synthetic refund, redeems MYT.
     ///      When unwrapETH is true, redeems MYT → WETH → unwrap → send native ETH to caller.
     ///      When unwrapETH is false, redeems MYT → underlying sent directly to caller.
@@ -404,15 +411,17 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         IERC721(transmuter).transferFrom(msg.sender, address(this), positionId);
 
         // Claim — transmuter burns the NFT, sends MYT shares + synthetic refund to this contract
-        ITransmuter(transmuter).claimRedemption(positionId);
+        (uint256 claimYield, , uint256 syntheticReturned, ) = ITransmuter(transmuter).claimRedemption(positionId);
+        require(claimYield > 0, "No MYT to redeem");
 
-        // Redeem MYT shares
-        uint256 mytBalance = IERC20(mytVault).balanceOf(address(this));
-        require(mytBalance > 0, "No MYT to redeem");
+        // Forward any returned synthetic tokens before the untrusted ETH .call
+        if (syntheticReturned > 0) {
+            IERC20(syntheticToken).safeTransfer(msg.sender, syntheticReturned);
+        }
 
         if (unwrapETH) {
             address underlying = IAlchemistV3(alchemist).underlyingToken();
-            uint256 assets = IVaultV2(mytVault).redeem(mytBalance, address(this), address(this));
+            uint256 assets = IVaultV2(mytVault).redeem(claimYield, address(this), address(this));
             require(assets >= minAmountOut, "Slippage");
 
             _ethExpected = true;
@@ -421,14 +430,8 @@ contract AlchemistRouter is ReentrancyGuardTransient {
             (bool success, ) = msg.sender.call{value: assets}("");
             require(success, "ETH transfer failed");
         } else {
-            uint256 assets = IVaultV2(mytVault).redeem(mytBalance, msg.sender, address(this));
+            uint256 assets = IVaultV2(mytVault).redeem(claimYield, msg.sender, address(this));
             require(assets >= minAmountOut, "Slippage");
-        }
-
-        // Forward any returned synthetic tokens to caller
-        uint256 synthBalance = IERC20(syntheticToken).balanceOf(address(this));
-        if (synthBalance > 0) {
-            IERC20(syntheticToken).safeTransfer(msg.sender, synthBalance);
         }
     }
 
