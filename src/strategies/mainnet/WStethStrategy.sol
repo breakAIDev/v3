@@ -77,7 +77,7 @@ contract WstethMainnetStrategy is MYTStrategy {
     function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256 depositReturn) {
         _ensureIdleBalance(address(weth), amount);
 
-        uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, (10_000 - params.slippageBPS) / 10_000, callData);
+        uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, (amount * (10_000 - params.slippageBPS)) / 10_000, callData);
         
         require(wstETHReceived > 0, "No wstETH received");
         

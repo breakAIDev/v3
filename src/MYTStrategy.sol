@@ -54,7 +54,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     constructor(address _myt, StrategyParams memory _params) Ownable(_params.owner) {
         require(_params.owner != address(0));
         require(_myt != address(0));
-        require(_params.slippageBPS < 1000);
+        require(_params.slippageBPS < 5000);
         MYT = IVaultV2(_myt);
         params = _params;
         adapterId = keccak256(abi.encode("this", address(this)));
@@ -218,7 +218,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
 
     /// @notice Update the slippage tolerance for this strategy
     function setSlippageBPS(uint256 newSlippageBPS) public onlyOwner {
-        require(newSlippageBPS < 1000, "Slippage too high");
+        require(newSlippageBPS < 9999, "Slippage too high");
         params.slippageBPS = newSlippageBPS;
         emit SlippageBPSUpdated(newSlippageBPS);
     }

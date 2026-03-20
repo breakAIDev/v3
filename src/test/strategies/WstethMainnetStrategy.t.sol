@@ -110,7 +110,7 @@ contract WstethMainnetStrategyTest is Test {
             globalCap: 2_000_000e18,
             estimatedYield: 100e18,
             additionalIncentives: false,
-            slippageBPS: 1
+            slippageBPS: 2000 // 20%
         });
         mytStrategy = _createStrategy(vault, params);
         // Assign risk level to the strategy
@@ -639,14 +639,14 @@ contract WstethMainnetStrategyTest is Test {
         assertLt(preview, requestedAmount, "preview should be less than requested due to haircut");
         assertGt(preview, 0, "preview should be positive");
         
-        // Verify haircut is applied correctly (slippageBPS = 1 from setUp)
-        uint256 expectedPreview = (requestedAmount * (10_000 - 1)) / 10_000;
+        // Verify haircut is applied correctly (slippageBPS = 2000 from setUp)
+        uint256 expectedPreview = (requestedAmount * (10_000 - 2000)) / 10_000;
         assertEq(preview, expectedPreview, "preview should match expected after haircut");
 
         // Preview for amount exceeding capacity should cap at capacity
         uint256 excessAmount = maxCapacity + 100e18;
         uint256 previewExcess = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(excessAmount);
-        uint256 expectedCapped = (maxCapacity * (10_000 - 1)) / 10_000;
+        uint256 expectedCapped = (maxCapacity * (10_000 - 2000)) / 10_000;
         assertEq(previewExcess, expectedCapped, "preview should be capped at max capacity minus haircut");
     }
 
