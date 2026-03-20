@@ -79,6 +79,14 @@ contract LiquidationLogicHarness {
         return LiquidationLogic.computeSeizeAmounts(quote, effectiveCollateral);
     }
 
+    function clampCollateralToShares(uint256 collateralBalance, uint256 mytSharesDeposited)
+        external
+        pure
+        returns (uint256)
+    {
+        return LiquidationLogic.clampCollateralToShares(collateralBalance, mytSharesDeposited);
+    }
+
     function computeCloseoutAmounts(
         uint256 effectiveCollateral,
         uint256 debt,
@@ -285,6 +293,13 @@ contract LiquidationLogicTest is Test {
         assertEq(colRemove, 50e18);
         assertEq(debtBurn, 50e18);  // capDebtCredit(50, 100, 200) = 50
         assertEq(unbacked, 50e18);  // remaining 50, totalAfter 150, clearable = 50
+    }
+
+    function test_clampCollateralToShares() public {
+        LiquidationLogicHarness h = new LiquidationLogicHarness();
+        assertEq(h.clampCollateralToShares(100, 150), 100);
+        assertEq(h.clampCollateralToShares(150, 100), 100);
+        assertEq(h.clampCollateralToShares(50, 50), 50);
     }
 
     function test_computeCloseoutAmounts_NoRemainingDebt() public {

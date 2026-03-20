@@ -1010,17 +1010,23 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @dev Updates earmark and account state. Must be called before any liquidation logic.
+    /// @param accountId The tokenId of the account to sync.
     function _syncForLiquidation(uint256 accountId) internal {
         _earmark();
         _sync(accountId);
     }
 
     /// @dev Returns true if MYT share price is valid (non-zero). Liquidation is disabled when share price is zero.
+    /// @return True if share price > 0, false otherwise.
     function _hasValidSharePrice() internal view returns (bool) {
         return IVaultV2(myt).convertToAssets(1e18) > 0;
     }
 
     /// @dev Clears earmarked debt, optionally closeouts unbacked debt. Returns next step.
+    /// @param accountId The tokenId of the account to process.
+    /// @return repaidAmountInYield Amount of yield tokens used to repay earmarked debt.
+    /// @return feeInYield Repayment fee owed to liquidator in yield tokens.
+    /// @return step Next step: REPAYMENT_ONLY if healthy, FULL_LIQUIDATION if still unhealthy.
     function doRepayEarmarkedDebtStep(uint256 accountId)
         internal
         returns (uint256 repaidAmountInYield, uint256 feeInYield, LiquidationLogic.LiquidationStep step)
@@ -1033,13 +1039,25 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         feeInYield = LiquidationLogic.calculateRepaymentFee(repaidAmountInYield, repaymentFee);
 
         if (account.collateralBalance == 0 && account.debt > 0) {
-            _closeoutAccount(accountId);
+            uint256 effectiveCollateral = LiquidationLogic.clampCollateralToShares(account.collateralBalance, _mytSharesDeposited);
+            uint256 collateralInDebt = convertYieldTokensToDebt(effectiveCollateral);
+            (uint256 collateralToRemove, uint256 debtToBurn, uint256 unbackedDebtToClear) =
+                LiquidationLogic.computeCloseoutAmounts(effectiveCollateral, account.debt, totalDebt, collateralInDebt);
+            if (collateralToRemove > 0) {
+                _subCollateralBalance(collateralToRemove, accountId);
+                if (debtToBurn > 0) _subDebt(accountId, debtToBurn);
+            }
+            if (unbackedDebtToClear > 0) _subDebt(accountId, unbackedDebtToClear);
         }
 
         step = _isAccountHealthy(accountId, false) ? LiquidationLogic.LiquidationStep.REPAYMENT_ONLY : LiquidationLogic.LiquidationStep.FULL_LIQUIDATION;
     }
 
     /// @dev Fetches quote and executes full liquidation.
+    /// @param accountId The tokenId of the account to liquidate.
+    /// @return amountLiquidated Collateral seized in yield tokens.
+    /// @return feeInYield Liquidator fee paid in yield tokens.
+    /// @return feeInUnderlying Liquidator fee paid in underlying (from fee vault) when yield insufficient.
     function doFullLiquidationStep(uint256 accountId)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying)
@@ -1050,6 +1068,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return _doLiquidation(accountId, quote);
     }
 
+    /// @dev Main liquidation entrypoint. Syncs state, repays earmarked debt if any, then either resolves repayment fee or runs full liquidation.
+    /// @param accountId The tokenId of the account to liquidate.
+    /// @return amountLiquidated Collateral seized in yield tokens (0 for repayment-only path).
+    /// @return feeInYield Liquidator fee paid in yield tokens.
+    /// @return feeInUnderlying Liquidator fee paid in underlying tokens (from fee vault).
     function _liquidate(uint256 accountId) internal returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying) {
         _syncForLiquidation(accountId);
 
@@ -1069,7 +1092,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /// @dev Pays liquidator fee. If deductFromAccount, takes from account collateral when safe; else pays from fee vault.
+    /// @param accountId The tokenId of the account (used when deductFromAccount is true).
+    /// @param feeInYield Target fee in yield tokens to pay.
+    /// @param outsourcedFeeInUnderlying Fee in underlying when debt-only liquidation (no collateral to seize).
     /// @param deductFromAccount True for repayment-only path (fee not yet sourced). False for full liquidation (fee already seized).
+    /// @return actualYield Amount paid in yield tokens.
+    /// @return actualUnderlying Amount paid in underlying tokens from fee vault.
     function _payLiquidatorFee(
         uint256 accountId,
         uint256 feeInYield,
@@ -1094,7 +1122,9 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
     }
 
-    /// @dev Returns the max repayment fee in yield tokens the account can safely cover.
+    /// @dev Returns the max repayment fee in yield tokens the account can safely cover without falling below collateralization lower bound.
+    /// @param accountId The tokenId of the account.
+    /// @return Max fee in yield tokens that can be taken from collateral while keeping account healthy.
     function _maxSafeFeeInYield(uint256 accountId) internal view returns (uint256) {
         Account storage account = _accounts[accountId];
         uint256 removableInDebt = LiquidationLogic.maxRepaymentFeeInDebt(
@@ -1144,25 +1174,17 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return collateralizationRatio > collateralizationLowerBound;
     }
 
-    /// @dev Returns effective collateral for liquidation (reconciled against global shares).
-    function _effectiveCollateralForLiquidation(uint256 accountId) internal view returns (uint256) {
-        Account storage account = _accounts[accountId];
-        uint256 collateralBalance = account.collateralBalance;
-        if (collateralBalance > _mytSharesDeposited) {
-            collateralBalance = _mytSharesDeposited;
-        }
-        return collateralBalance;
-    }
-
     /// @dev Pure computation of liquidation plan. No state mutations.
-    function _computeLiquidationPlan(uint256 accountId, LiquidationLogic.LiquidationQuote memory quote)
-        internal
-        view
-        returns (LiquidationLogic.LiquidationPlan memory plan)
-    {
-        uint256 effectiveCollateral = _effectiveCollateralForLiquidation(accountId);
-        Account storage account = _accounts[accountId];
-        uint256 accountDebt = account.debt;
+    /// @param collateralBalance Account collateral balance in yield tokens.
+    /// @param debt Account debt in debt tokens.
+    /// @param quote Pre-computed liquidation quote from LiquidationLogic.buildQuote.
+    /// @return plan The computed liquidation plan to apply later.
+    function _computeLiquidationPlan(
+        uint256 collateralBalance,
+        uint256 debt,
+        LiquidationLogic.LiquidationQuote memory quote
+    ) internal view returns (LiquidationLogic.LiquidationPlan memory plan) {
+        uint256 effectiveCollateral = LiquidationLogic.clampCollateralToShares(collateralBalance, _mytSharesDeposited);
 
         (plan.collateralToSeize, plan.feeInYield, plan.netToTransmuter) = LiquidationLogic.computeSeizeAmounts(
             quote,
@@ -1172,12 +1194,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         plan.debtToBurn = LiquidationLogic.clampDebtBurn(
             quote.debtToBurn,
             convertYieldTokensToDebt(plan.netToTransmuter),
-            accountDebt,
+            debt,
             totalDebt
         );
 
         uint256 newCollateral = effectiveCollateral - plan.collateralToSeize;
-        uint256 newDebt = accountDebt - plan.debtToBurn;
+        uint256 newDebt = debt - plan.debtToBurn;
         uint256 newCollateralInUnderlying = convertYieldTokensToUnderlying(newCollateral);
         plan.doCloseout = newDebt > 0 && (quote.isDebtOnly || !LiquidationLogic.isHealthy(newCollateralInUnderlying, newDebt, collateralizationLowerBound));
 
@@ -1192,7 +1214,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         plan.outsourcedFeeInUnderlying = quote.outsourcedFeeInUnderlying;
     }
 
-    /// @dev Applies a pre-computed liquidation plan. Mutates state.
+    /// @dev Applies a pre-computed liquidation plan. Mutates state (collateral/debt, transfers).
+    /// @param accountId The tokenId of the account to liquidate.
+    /// @param plan The pre-computed plan from _computeLiquidationPlan.
+    /// @return amountLiquidated Total collateral seized (seize + closeout).
+    /// @return feeInYield Liquidator fee in yield tokens.
+    /// @return feeInUnderlying Liquidator fee in underlying tokens.
     function _applyLiquidationPlan(uint256 accountId, LiquidationLogic.LiquidationPlan memory plan)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying)
@@ -1229,14 +1256,26 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         }
     }
 
+    /// @dev Computes and applies a liquidation plan for a given account and quote.
+    /// @param accountId The tokenId of the account to liquidate.
+    /// @param quote Pre-computed liquidation quote.
+    /// @return amountLiquidated Total collateral seized.
+    /// @return feeInYield Liquidator fee in yield tokens.
+    /// @return feeInUnderlying Liquidator fee in underlying tokens.
     function _doLiquidation(uint256 accountId, LiquidationLogic.LiquidationQuote memory quote)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying)
     {
-        LiquidationLogic.LiquidationPlan memory plan = _computeLiquidationPlan(accountId, quote);
+        Account storage account = _accounts[accountId];
+        LiquidationLogic.LiquidationPlan memory plan =
+            _computeLiquidationPlan(account.collateralBalance, account.debt, quote);
         return _applyLiquidationPlan(accountId, plan);
     }
 
+    /// @dev Builds a liquidation quote from current params (collateral, debt, global state).
+    /// @param debt Account debt in debt tokens.
+    /// @param collateralInUnderlying Account collateral value in underlying tokens.
+    /// @return LiquidationQuote with seize amounts, fees, and outsourced fee.
     function _fetchLiquidationQuote(uint256 debt, uint256 collateralInUnderlying)
         internal
         view
@@ -1259,23 +1298,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             liquidationAmount > 0 ? convertDebtTokensToYield(baseFee) : 0,
             outsourcedFee > 0 ? normalizeDebtTokensToUnderlying(outsourcedFee) : 0
         );
-    }
-
-    /// @dev Sweeps all remaining collateral to transmuter and clears any unbacked debt.
-    function _closeoutAccount(uint256 accountId) internal returns (uint256 collateralRemoved) {
-        Account storage account = _accounts[accountId];
-
-        uint256 remainingShares = account.collateralBalance;
-        if (remainingShares > 0) {
-            collateralRemoved = _subCollateralBalance(remainingShares, accountId);
-            uint256 debtBurn = AccountingLogic.capDebtCredit(convertYieldTokensToDebt(collateralRemoved), account.debt, totalDebt);
-            if (debtBurn > 0) _subDebt(accountId, debtBurn);
-        }
-
-        if (account.collateralBalance == 0 && account.debt > 0) {
-            uint256 unbackedDebt = AccountingLogic.clearableDebt(account.debt, totalDebt);
-            if (unbackedDebt > 0) _subDebt(accountId, unbackedDebt);
-        }
     }
 
 
