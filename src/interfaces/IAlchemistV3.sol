@@ -783,27 +783,6 @@ interface IAlchemistV3State {
     /// @param amount   The amount to convert.
     function convertUnderlyingTokensToYield(uint256 amount) external view returns (uint256);
 
-    /// @notice Calculates fee, net debt burn, and gross collateral seize,
-    ///         using a single minCollateralization factor (FIXED_POINT_SCALAR scaled).
-    /// @param collateral               Current collateral value
-    /// @param debt                     Current debt value
-    /// @param targetCollateralization  Target collateralization ratio, (e.g. 100/90 =  1.1111e18 for 111.11%)
-    /// @param alchemistCurrentCollateralization Current collateralization ratio of the alchemist
-    /// @param alchemistMinimumCollateralization Minimum collateralization ratio of the alchemist to trigger full liquidation
-    /// @param feeBps                   Fee in basis points on the surplus (0–10000)
-    /// @return grossCollateralToSeize  Total collateral to take (fee + net)
-    /// @return debtToBurn              Amount of debt to erase (sent to protocol)
-    /// @return fee                     Amount of collateral paid to liquidator
-    /// @return outsourcedFee           Amount of fee paid to liquidator in underlying tokens in the event that account funds are insufficient to cover the fee
-    function calculateLiquidation(
-        uint256 collateral,
-        uint256 debt,
-        uint256 targetCollateralization,
-        uint256 alchemistCurrentCollateralization,
-        uint256 alchemistMinimumCollateralization,
-        uint256 feeBps
-    ) external view returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee);
-
     /// @dev Normalizes underlying tokens to debt tokens.
     /// @notice This is to handle decimal conversion in the case where underlying tokens have < 18 decimals.
     ///

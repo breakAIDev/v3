@@ -26,6 +26,7 @@ import {ITestYieldToken} from "../interfaces/test/ITestYieldToken.sol";
 import {InsufficientAllowance} from "../base/Errors.sol";
 import {Unauthorized, IllegalArgument, IllegalState, MissingInputData} from "../base/Errors.sol";
 import {AlchemistNFTHelper} from "./libraries/AlchemistNFTHelper.sol";
+import {LiquidationLogic} from "../libraries/LiquidationLogic.sol";
 import {IAlchemistV3Position} from "../interfaces/IAlchemistV3Position.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {TokenUtils} from "../libraries/TokenUtils.sol";
@@ -295,7 +296,7 @@ contract AlchemistV3Test is Test {
         uint256 liquidatorPrevUnderlyingBalance = IERC20(vault.asset()).balanceOf(address(externalUser));
         uint256 alchemistCurrentCollateralization =
             alchemist.normalizeUnderlyingTokensToDebt(alchemist.getTotalUnderlyingValue()) * FIXED_POINT_SCALAR / alchemist.totalDebt();
-        (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = alchemist.calculateLiquidation(
+        (uint256 liquidationAmount, uint256 expectedDebtToBurn, uint256 expectedBaseFee,) = LiquidationLogic.calculateLiquidation(
             alchemist.totalValue(tokenIdFor0xBeef),
             prevDebt,
             alchemist.minimumCollateralization(),

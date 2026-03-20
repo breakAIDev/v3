@@ -782,21 +782,6 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return repaidEarmarkedDebtInYield + repaidDebtInYield;
     }
 
-    /// @inheritdoc IAlchemistV3State
-    function calculateLiquidation(
-        uint256 collateral,
-        uint256 debt,
-        uint256 targetCollateralization,
-        uint256 alchemistCurrentCollateralization,
-        uint256 alchemistMinimumCollateralization,
-        uint256 feeBps
-    ) public pure returns (uint256 grossCollateralToSeize, uint256 debtToBurn, uint256 fee, uint256 outsourcedFee) {
-        return LiquidationLogic.calculateLiquidation(
-            collateral, debt, targetCollateralization,
-            alchemistCurrentCollateralization, alchemistMinimumCollateralization, feeBps
-        );
-    }
-
     ///@inheritdoc IAlchemistV3Actions
     function reduceSyntheticsIssued(uint256 amount) external onlyTransmuter {
         totalSyntheticsIssued -= amount;
