@@ -11,6 +11,7 @@ interface IMToken {
     function redeem(uint256 redeemTokens) external returns (uint256);
     function balanceOf(address owner) external view returns (uint256);
     function exchangeRateStored() external view returns (uint256);
+    function accrueInterest() external returns (uint);
 }
 
 interface IComptroller {
@@ -66,6 +67,7 @@ contract MoonwellStrategy is MYTStrategy {
     }
 
     function _deallocate(uint256 amount) internal virtual override returns (uint256) {
+        require(mToken.accrueInterest() == uint(0), "interest"); // 0 is Error.NO_ERROR
         uint256 idleBalance = _idleAssets();
         if (idleBalance < amount) {
             uint256 shortfall = amount - idleBalance;
