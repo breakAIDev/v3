@@ -77,11 +77,15 @@ contract WstethMainnetStrategy is MYTStrategy {
     function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256 depositReturn) {
         _ensureIdleBalance(address(weth), amount);
 
-        uint256 wstETHReceived = dexSwap(address(wsteth), address(weth), amount, (amount * (10_000 - params.slippageBPS)) / 10_000, callData);
-        
-        require(wstETHReceived > 0, "No wstETH received");
-        
-        return amount;
+        uint256 minStEthOut = (amount * (10_000 - params.slippageBPS)) / 10_000;
+        uint256 stETHReceived = dexSwap(address(steth), address(weth), amount, minStEthOut, callData);
+        require(stETHReceived > 0, "No stETH received");
+
+        TokenUtils.safeApprove(address(steth), address(wsteth), stETHReceived);
+        wsteth.wrap(stETHReceived);
+
+        return stETHReceived;
+
     }
 
     
@@ -112,9 +116,10 @@ contract WstethMainnetStrategy is MYTStrategy {
         uint256 stETHReceived = stETHAfter - stETHBefore; 
         
         uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, 1, callData);
-        
         uint256 wethBalance = IERC20(address(weth)).balanceOf(address(this));
-        require(wethBalance >= amount, InvalidAmount(amount, wethBalance));
+        uint256 expected = (amount * (10_000 - params.slippageBPS)) / 10_000;
+        require(wethBalance >= expected, InvalidAmount(expected, wethBalance));
+
         
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
