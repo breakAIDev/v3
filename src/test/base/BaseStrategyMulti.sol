@@ -91,19 +91,32 @@ abstract contract BaseStrategyMulti is StrategyOps {
         // Warp 14 days
         _warpWithHook(14 days);
 
+        vm.startPrank(admin);
+
         // Partial deallocation
         uint256 totalAllocation = IVaultV2(vault).allocation(allocationId);
         uint256 deallocAmount = (totalAllocation * deallocationPercent) / 100;
         bool partialOk = _deallocateEstimate(deallocAmount, RevertContext.FuzzDeallocate);
-        if (!partialOk) return;
+        if (!partialOk) {
+            vm.stopPrank();
+            return;
+        }
         uint256 realAssetsAfterDealloc = IMYTStrategy(strategy).realAssets();
         assertLt(realAssetsAfterDealloc, realAssetsAfterIncrease, "Real assets should decrease after deallocation");
 
         // Warp 30 days
         _warpWithHook(30 days);
 
-        // Final deallocation of remaining
-        _deallocateFromRealAssetsEstimate(RevertContext.FuzzDeallocate);
+        // Final deallocation of remaining. Some strategies cap each deallocation step
+        // (e.g. due to adapter accounting constraints), so iterate a few times.
+        for (uint256 i = 0; i < 16; i++) {
+            uint256 before = IMYTStrategy(strategy).realAssets();
+            if (before == 0) break;
+            bool ok = _deallocateFromRealAssetsEstimate(RevertContext.FuzzDeallocate);
+            if (!ok) break;
+            uint256 after_ = IMYTStrategy(strategy).realAssets();
+            if (after_ >= before) break;
+        }
 
         // Verify final state
         // Allow tolerance for slippage/rounding (up to 2% of vault initial deposit)
@@ -114,6 +127,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
             "All real assets should be deallocated"
         );
         assertApproxEqAbs(IVaultV2(vault).allocation(allocationId), 0, 2 * 10 ** testConfig.decimals);
+        vm.stopPrank();
     }
 
     /// @notice Fuzz test: Real assets should always be non-negative after any operation
@@ -143,12 +157,14 @@ abstract contract BaseStrategyMulti is StrategyOps {
                 uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
                 amount = bound(amount, 0, currentRealAssets);
                 if (amount > 0) {
-                    uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(amount);
+                    uint256 target = _effectiveDeallocateAmount(amount);
+                    if (target == 0) continue;
+                    uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(target);
                     if (preview > 0) _deallocateOrSkipWhitelisted(preview, RevertContext.FuzzDeallocate);
                 }
             } else {
                 // Time warp
-                vm.warp(block.timestamp + bound(amount, 0, 365 days));
+                _warpWithHook(bound(amount, 0, 365 days));
             }
         }
 
@@ -213,7 +229,12 @@ abstract contract BaseStrategyMulti is StrategyOps {
 
         // Deallocate
         uint256 amountToDeallocate = realAssetsBefore * fractionToDeallocate / 100;
-        uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(amountToDeallocate);
+        uint256 targetDeallocate = _effectiveDeallocateAmount(amountToDeallocate);
+        if (targetDeallocate == 0) {
+            vm.stopPrank();
+            return;
+        }
+        uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
         if (preview > 0) {
             bool deallocated = _deallocateOrSkipWhitelisted(preview, RevertContext.FuzzDeallocate);
             if (!deallocated) {
@@ -236,6 +257,14 @@ abstract contract BaseStrategyMulti is StrategyOps {
 
         // After full deallocation (or nearly full), real assets should be close to zero
         if (fractionToDeallocate >= 99) {
+            uint256 requested = realAssetsBefore * fractionToDeallocate / 100;
+            uint256 effective = _effectiveDeallocateAmount(requested);
+            // Only enforce near-zero postcondition when the strategy hook allows near-full
+            // deallocation in a single step.
+            if (effective * 100 < realAssetsBefore * 99) {
+                vm.stopPrank();
+                return;
+            }
             assertLe(realAssetsAfter, realAssetsBefore / 10, "Invariant violation: Real assets should be near zero after large deallocation");
         }
 
@@ -311,7 +340,9 @@ abstract contract BaseStrategyMulti is StrategyOps {
                 currentRealAssets = IMYTStrategy(strategy).realAssets();
                 if (currentRealAssets > 0) {
                     uint256 deallocationAmount = currentRealAssets > amount ? amount : currentRealAssets;
-                    uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(deallocationAmount);
+                    uint256 target = _effectiveDeallocateAmount(deallocationAmount);
+                    if (target == 0) continue;
+                    uint256 preview = IMYTStrategy(strategy).previewAdjustedWithdraw(target);
                     if (preview > 0) {
                         _deallocateOrSkipWhitelisted(preview, RevertContext.FuzzDeallocate);
                     }
@@ -355,7 +386,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         // Perform multiple time warps
         for (uint8 i = 0; i < numWarps; i++) {
             warpAmount = bound(warpAmount, 1 hours, 365 days);
-            vm.warp(block.timestamp + warpAmount);
+            _warpWithHook(warpAmount);
 
             uint256 currentRealAssets = IMYTStrategy(strategy).realAssets();
 

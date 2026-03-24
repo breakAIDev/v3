@@ -52,6 +52,30 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
     function isProtocolRevertAllowed(bytes4, RevertContext) external view virtual returns (bool) {
         return false;
     }
+
+    function getAllocateVaultParams(uint256) internal view virtual returns (bytes memory) {
+        IMYTStrategy.VaultAdapterParams memory params;
+        params.action = IMYTStrategy.ActionType.direct;
+        return abi.encode(params);
+    }
+
+    /// @dev Optional strategy-specific deallocation params hook.
+    ///      Default behavior uses direct action, matching `getVaultParams()`.
+    function getDeallocateVaultParams(uint256) internal view virtual returns (bytes memory) {
+        return getVaultParams();
+    }
+
+    /// @dev Optional strategy-specific allocator deallocate mode.
+    ///      Default behavior uses direct allocator deallocate.
+    function _useAllocatorDeallocateSwap() internal pure virtual returns (bool) {
+        return false;
+    }
+
+    /// @dev Optional strategy-specific calldata provider for allocator swap deallocate.
+    function _allocatorDeallocateSwapData(uint256) internal view virtual returns (bytes memory) {
+        return bytes("");
+    }
+
     function isMytRevertAllowed(bytes4, RevertContext) external view virtual returns (bool) {
         return false;
     }
