@@ -118,12 +118,8 @@ contract WstethMainnetStrategy is MYTStrategy {
             wstETHToUnwrap = wstETHBalance;
         }
         
-        // Unwrap wstETH -> stETH
-        uint256 stETHBefore = TokenUtils.safeBalanceOf(address(steth), address(this));
+      
         wsteth.unwrap(wstETHToUnwrap);
-        uint256 stETHAfter = TokenUtils.safeBalanceOf(address(steth), address(this));
-        uint256 stETHReceived = stETHAfter - stETHBefore;
-
         uint256 minWethOut = (shortfall * (10_000 - params.slippageBPS)) / 10_000;
         if (minWethOut == 0) minWethOut = 1;
 
