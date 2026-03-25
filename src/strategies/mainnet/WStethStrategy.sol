@@ -155,7 +155,7 @@ contract WstethMainnetStrategy is MYTStrategy {
     }
 
     function _isProtectedToken(address token) internal view override returns (bool) {
-        return token == MYT.asset() || token == address(wsteth) || token == address(steth);
+        return token == MYT.asset() || token == address(wsteth) || token == address(steth) || token == address(weth);
     }
 
     function _idleAssets() internal view override returns (uint256) {
