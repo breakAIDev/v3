@@ -115,9 +115,9 @@ contract WstethMainnetStrategy is MYTStrategy {
         uint256 stETHAfter = TokenUtils.safeBalanceOf(address(steth), address(this));
         uint256 stETHReceived = stETHAfter - stETHBefore; 
         
-        uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, 1, callData);
-        uint256 wethBalance = IERC20(address(weth)).balanceOf(address(this));
         uint256 expected = (amount * (10_000 - params.slippageBPS)) / 10_000;
+        uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, expected, callData);
+        uint256 wethBalance = IERC20(address(weth)).balanceOf(address(this));
         require(wethBalance >= expected, InvalidAmount(expected, wethBalance));
 
         
