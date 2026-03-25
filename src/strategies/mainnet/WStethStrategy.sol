@@ -5,36 +5,27 @@ import {OraclePricedSwapStrategy} from "./OraclePricedSwapStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {IWETH} from "../../interfaces/IWETH.sol";
 
-interface stETH {
-    function sharesOf(address account) external view returns (uint256);
-    function getPooledEthByShares(uint256 sharesAmount) external view returns (uint256);
-    function submit(address referral) external payable returns (uint256);
-}
-
 interface wstETH {
-    function getWstETHByStETH(uint256 amount) external view returns (uint256);
-    function getStETHByWstETH(uint256 amount) external view returns (uint256);
-    function wrap(uint256 amount) external returns (uint256);
-    function unwrap(uint256 amount) external returns (uint256);
     function balanceOf(address account) external view returns (uint256);
 }
 
-contract WstethMainnetStrategy is OraclePricedSwapStrategy {
-    stETH public immutable steth;
+contract WstethStrategy is OraclePricedSwapStrategy {
     wstETH public immutable wsteth;
+    bool public immutable directDepositEnabled;
 
     constructor(
         address _myt,
         StrategyParams memory _params,
-        address _stETH,
         address _wstETH,
-        address _stEthEthOracle
-    ) OraclePricedSwapStrategy(_myt, _params, _stEthEthOracle) {
-        steth = stETH(_stETH);
+        address _pricedTokenEthOracle,
+        bool _directDepositEnabled
+    ) OraclePricedSwapStrategy(_myt, _params, _pricedTokenEthOracle) {
         wsteth = wstETH(_wstETH);
+        directDepositEnabled = _directDepositEnabled;
     }
 
     function _allocate(uint256 amount) internal override returns (uint256 depositReturn) {
+        if (!directDepositEnabled) revert ActionNotSupported();
         _ensureIdleBalance(_asset(), amount);
         
         uint256 wstETHBefore = wsteth.balanceOf(address(this));
@@ -54,23 +45,47 @@ contract WstethMainnetStrategy is OraclePricedSwapStrategy {
         return amount;
     }
 
-    /// @notice Deallocate with intermediate unwrap step
-    /// @param amount WETH amount expected to be returned to vault
-    /// @param callData 0x swap calldata for stETH -> WETH
-    /// @dev Pricing and sizing are derived from the oracle instead of trusting frontend sizing.
+    function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256) {
+        _ensureIdleBalance(_asset(), amount);
+
+        uint256 minWstEthOut = _assetToPricedDown((amount * (10_000 - params.slippageBPS)) / 10_000);
+        if (minWstEthOut == 0) minWstEthOut = 1;
+
+        dexSwap(address(wsteth), _asset(), amount, minWstEthOut, callData);
+        return amount;
+    }
+
     function _deallocate(uint256 amount, bytes memory callData) internal override returns (uint256) {
-        return _deallocateViaPricedSwap(amount, callData);
+        uint256 idleBalance = _idleAssets();
+        if (idleBalance >= amount) {
+            TokenUtils.safeApprove(_asset(), msg.sender, amount);
+            return amount;
+        }
+
+        uint256 shortfall = amount - idleBalance;
+        uint256 maxAssetIn = _roundUpMulDiv(shortfall, 10_000, 10_000 - params.slippageBPS);
+        uint256 maxWstEthIn = _assetToPricedUp(maxAssetIn);
+        if (maxWstEthIn == 0) maxWstEthIn = 1;
+
+        uint256 wstETHBalance = wsteth.balanceOf(address(this));
+        uint256 wstEthToSwap = maxWstEthIn > wstETHBalance ? wstETHBalance : maxWstEthIn;
+        require(wstEthToSwap > 0, "No wstETH to swap");
+
+        dexSwap(_asset(), address(wsteth), wstEthToSwap, shortfall, callData);
+        require(_idleAssets() >= amount, "Insufficient WETH received");
+        TokenUtils.safeApprove(_asset(), msg.sender, amount);
+        return amount;
     }
 
     receive() external payable {
     }
 
     function _isProtectedToken(address token) internal view override returns (bool) {
-        return token == MYT.asset() || token == address(wsteth) || token == address(steth);
+        return token == MYT.asset() || token == address(wsteth);
     }
 
     function _pricedToken() internal view override returns (address) {
-        return address(steth);
+        return address(wsteth);
     }
 
     function _positionBalance() internal view override returns (uint256) {
@@ -78,35 +93,17 @@ contract WstethMainnetStrategy is OraclePricedSwapStrategy {
     }
 
     function _positionToPriced(uint256 positionAmount) internal view override returns (uint256) {
-        return wsteth.getStETHByWstETH(positionAmount);
+        return positionAmount;
     }
 
     function _idlePricedAssets() internal view override returns (uint256) {
-        return TokenUtils.safeBalanceOf(address(steth), address(this));
+        return 0;
     }
 
-    function _afterAllocateSwap(uint256 pricedReceived) internal override {
-        TokenUtils.safeApprove(address(steth), address(wsteth), pricedReceived);
-        wsteth.wrap(pricedReceived);
-        TokenUtils.safeApprove(address(steth), address(wsteth), 0);
-    }
+    function _afterAllocateSwap(uint256) internal override {}
 
-    function _preparePricedForSwap(uint256 maxPricedIn) internal override returns (uint256) {
-        uint256 currentStETHBalance = TokenUtils.safeBalanceOf(address(steth), address(this));
-        if (currentStETHBalance < maxPricedIn) {
-            uint256 additionalStETHNeeded = maxPricedIn - currentStETHBalance;
-            uint256 wstETHBalance = wsteth.balanceOf(address(this));
-            if (wstETHBalance > 0) {
-                uint256 wstETHToUnwrap = wsteth.getWstETHByStETH(additionalStETHNeeded) + 1;
-                if (wstETHToUnwrap > wstETHBalance) {
-                    wstETHToUnwrap = wstETHBalance;
-                }
-                if (wstETHToUnwrap > 0) {
-                    wsteth.unwrap(wstETHToUnwrap);
-                }
-                currentStETHBalance = TokenUtils.safeBalanceOf(address(steth), address(this));
-            }
-        }
-        return currentStETHBalance > maxPricedIn ? maxPricedIn : currentStETHBalance;
+    function _preparePricedForSwap(uint256 maxPricedIn) internal view override returns (uint256) {
+        uint256 wstETHBalance = wsteth.balanceOf(address(this));
+        return maxPricedIn > wstETHBalance ? wstETHBalance : maxPricedIn;
     }
 }
