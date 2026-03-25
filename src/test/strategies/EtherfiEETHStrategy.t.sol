@@ -27,7 +27,6 @@ contract MockEtherfiEETHStrategy is EtherfiEETHMYTStrategy {
         StrategyParams memory _params,
         address _eETH,
         address _weETH,
-        address _weth,
         address _depositAdapter,
         address _redemptionManager,
         address _weEthEthOracle
@@ -37,7 +36,6 @@ contract MockEtherfiEETHStrategy is EtherfiEETHMYTStrategy {
             _params,
             _eETH,
             _weETH,
-            _weth,
             _depositAdapter,
             _redemptionManager,
             _weEthEthOracle
@@ -95,7 +93,7 @@ contract EtherfiEETHStrategyTest is BaseStrategyTest {
 
     function createStrategy(address vault_, IMYTStrategy.StrategyParams memory params) internal override returns (address) {
         return address(
-            new MockEtherfiEETHStrategy(vault_, params, EETH, WEETH, WETH, DEPOSIT_ADAPTER, REDEMPTION_MANAGER, WEETH_ETH_ORACLE)
+            new MockEtherfiEETHStrategy(vault_, params, EETH, WEETH, DEPOSIT_ADAPTER, REDEMPTION_MANAGER, WEETH_ETH_ORACLE)
         );
     }
 
@@ -143,11 +141,16 @@ contract EtherfiEETHStrategyTest is BaseStrategyTest {
     }
 
     function _swapCallDataForWethOut(uint256 wethOut) internal view returns (bytes memory) {
+        uint256 idleBalance = IERC20(WETH).balanceOf(strategy);
+        uint256 shortfall = wethOut > idleBalance ? wethOut - idleBalance : 0;
+        if (shortfall == 0) {
+            return abi.encodeCall(MockSwapper.swap, (WEETH, WETH, 0, 0));
+        }
         uint256 weETHBalance = IWeETH(WEETH).balanceOf(strategy);
-        uint256 weETHToSwap = _maxWeEthIn(wethOut);
+        uint256 weETHToSwap = _maxWeEthIn(shortfall);
         if (weETHToSwap > weETHBalance) weETHToSwap = weETHBalance;
         if (weETHToSwap == 0 && weETHBalance > 0) weETHToSwap = 1;
-        return abi.encodeCall(MockSwapper.swap, (WEETH, WETH, weETHToSwap, wethOut));
+        return abi.encodeCall(MockSwapper.swap, (WEETH, WETH, weETHToSwap, shortfall));
     }
 
     function test_allocate_swap_mock_success() public {

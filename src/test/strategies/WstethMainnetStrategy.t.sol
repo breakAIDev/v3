@@ -41,22 +41,26 @@ contract MockSwapExecutor {
     }
 }
 
-/// @notice Smart allowanceHolder mock that returns the minIntermediateOut amount
-/// to properly simulate swaps that match the expected deallocation amounts.
+/// @notice Smart allowanceHolder mock that transfers buy token to the caller and
+/// pulls the full approved sell token amount, matching dexSwap's balance-delta semantics.
 contract MockSwapExecutorDynamic {
-    IERC20 public immutable token;
+    IERC20 public immutable buyToken;
+    IERC20 public immutable sellToken;
 
-    constructor(address _token) {
-        token = IERC20(_token);
+    constructor(address _sellToken, address _buyToken) {
+        sellToken = IERC20(_sellToken);
+        buyToken = IERC20(_buyToken);
     }
 
     fallback() external {
-        // Decode minIntermediateOut from SwapParams in VaultAdapterParams
-        // The calldata is the encoded 0x swap data, but we can't easily decode it.
-        // Instead, transfer the full balance to cover any swap amount.
-        uint256 balance = token.balanceOf(address(this));
-        if (balance > 0) {
-            token.transfer(msg.sender, balance);
+        uint256 sellAllowance = sellToken.allowance(msg.sender, address(this));
+        if (sellAllowance > 0) {
+            sellToken.transferFrom(msg.sender, address(this), sellAllowance);
+        }
+
+        uint256 buyBalance = buyToken.balanceOf(address(this));
+        if (buyBalance > 0) {
+            buyToken.transfer(msg.sender, buyBalance);
         }
     }
 }
@@ -87,16 +91,17 @@ contract MockWstethMainnetStrategy is WstethMainnetStrategy {
     constructor(
         address _myt,
         StrategyParams memory _params,
-        address _weth,
         address _stETH,
         address _wstETH,
         address _stEthEthOracle
     )
-        WstethMainnetStrategy(_myt, _params, _weth, _stETH, _wstETH, _stEthEthOracle)
+        WstethMainnetStrategy(_myt, _params, _stETH, _wstETH, _stEthEthOracle)
     {}
 }
 
 contract WstethMainnetStrategyTest is Test {
+    uint256 public constant STRATEGY_SLIPPAGE_BPS = 200;
+
     address public mytStrategy;
     address public vault;
     address public allocator;
@@ -160,9 +165,23 @@ contract WstethMainnetStrategyTest is Test {
     function _createStrategy(address _vault, IMYTStrategy.StrategyParams memory params) internal returns (address) {
         return address(
             new MockWstethMainnetStrategy{salt: bytes32("wsteth_strategy")}(
-                _vault, params, weth, stETH, wstETH, stEthEthOracle
+                _vault, params, stETH, wstETH, stEthEthOracle
             )
         );
+    }
+
+    function _stEthOracleAnswer() internal view returns (uint256) {
+        (, int256 answer,, uint256 updatedAt,) = AggregatorV3Interface(stEthEthOracle).latestRoundData();
+        require(answer > 0 && updatedAt != 0, "invalid oracle answer");
+        return uint256(answer);
+    }
+
+    function _maxStEthIn(uint256 wethAmount) internal view returns (uint256) {
+        uint256 maxWethIn = (wethAmount * 10_000 + (10_000 - STRATEGY_SLIPPAGE_BPS) - 1) / (10_000 - STRATEGY_SLIPPAGE_BPS);
+        uint256 scale = 10 ** AggregatorV3Interface(stEthEthOracle).decimals();
+        uint256 answer = _stEthOracleAnswer();
+        uint256 stEthAmount = (maxWethIn * scale + answer - 1) / answer;
+        return stEthAmount == 0 ? 1 : stEthAmount;
     }
 
     function test_strategy_allocate_direct() public {
@@ -247,11 +266,15 @@ contract WstethMainnetStrategyTest is Test {
         uint256 expectedStETH = IWstETH(wstETH).getStETHByWstETH(wstETHToUnwrap);
         emit WstethMainnetStrategyTestLog("wstETH to unwrap", wstETHToUnwrap);
         emit WstethMainnetStrategyTestLog("expected stETH after unwrap", expectedStETH);
+
+        uint256 targetWethOut = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(IMYTStrategy(mytStrategy).realAssets());
+        uint256 stEthSellAmount = _maxStEthIn(targetWethOut);
+        if (stEthSellAmount > expectedStETH) stEthSellAmount = expectedStETH;
         
         // Encode the VaultAdapterParams with stETH->WETH swap data
         IMYTStrategy.SwapParams memory swapParams2 = IMYTStrategy.SwapParams({
-            txData: getStethToWethCalldata(address(mytStrategy), expectedStETH), 
-            minIntermediateOut: expectedStETH
+            txData: getStethToWethCalldata(address(mytStrategy), stEthSellAmount), 
+            minIntermediateOut: stEthSellAmount
         });
         IMYTStrategy.VaultAdapterParams memory params2 = IMYTStrategy.VaultAdapterParams({
             action: IMYTStrategy.ActionType.unwrapAndSwap, 
@@ -262,8 +285,7 @@ contract WstethMainnetStrategyTest is Test {
         // Use previewAdjustedWithdraw to get a reasonable expected WETH output
         // This accounts for slippage and gives us a valid minimum for the dexSwap check
         // Apply additional 1% buffer for swap execution variability (DEX slippage, fees)
-        uint256 expectedWethOut = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(expectedStETH);
-        expectedWethOut = (expectedWethOut * 9900) / 10000;
+        uint256 expectedWethOut = targetWethOut;
         
         // Deallocate - pass expected WETH output with slippage adjustment
         (bytes32[] memory strategyIds2, int256 change2) = IMYTStrategy(mytStrategy).deallocate(
@@ -297,22 +319,21 @@ contract WstethMainnetStrategyTest is Test {
 
         vm.startPrank(vault);
         
-        // Calculate wstETH amount that corresponds to expectedOut (what mock returns)
-        uint256 wstETHToDeallocate = IWstETH(wstETH).getWstETHByStETH(expectedOut);
-
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: hex"01", minIntermediateOut: expectedOut});
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
+            txData: hex"01",
+            minIntermediateOut: _maxStEthIn(expectedOut)
+        });
         IMYTStrategy.VaultAdapterParams memory deallocParams =
             IMYTStrategy.VaultAdapterParams({action: IMYTStrategy.ActionType.unwrapAndSwap, swapParams: swapParams});
 
         (bytes32[] memory strategyIds,) = IMYTStrategy(mytStrategy).deallocate(
-            abi.encode(deallocParams), wstETHToDeallocate, "", vault
+            abi.encode(deallocParams), expectedOut, "", vault
         );
         vm.stopPrank();
 
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(mytStrategy).adapterId(), "adapter id not in strategyIds");
-        // Vault allowance is set based on the wstETH amount being deallocated
-        assertEq(IERC20(weth).allowance(mytStrategy, vault), wstETHToDeallocate, "vault allowance should equal wstETH deallocated");
+        assertEq(IERC20(weth).allowance(mytStrategy, vault), expectedOut, "vault allowance should equal WETH deallocated");
         // Strategy receives the mocked WETH output from the swap
         assertEq(IERC20(weth).balanceOf(mytStrategy), expectedOut, "strategy should receive mocked WETH output");
     }
@@ -336,14 +357,14 @@ contract WstethMainnetStrategyTest is Test {
         MYTStrategy(mytStrategy).setAllowanceHolder(address(mockSwap));
 
         vm.startPrank(vault);
-        uint256 wstETHBalance = IWstETH(wstETH).balanceOf(mytStrategy);
-        uint256 expectedStETH = IWstETH(wstETH).getStETHByWstETH(wstETHBalance);
-
-        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: hex"01", minIntermediateOut: expectedStETH});
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
+            txData: hex"01",
+            minIntermediateOut: _maxStEthIn(requiredOut)
+        });
         IMYTStrategy.VaultAdapterParams memory deallocParams =
             IMYTStrategy.VaultAdapterParams({action: IMYTStrategy.ActionType.unwrapAndSwap, swapParams: swapParams});
 
-        vm.expectRevert(bytes("inconsistent totalValue"));
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, requiredOut, mockedOut));
         IMYTStrategy(mytStrategy).deallocate(abi.encode(deallocParams), requiredOut, "", vault);
         vm.stopPrank();
     }
@@ -430,15 +451,15 @@ contract WstethMainnetStrategyTest is Test {
         uint256 expectedStETH = IWstETH(wstETH).getStETHByWstETH(wstETHToUnwrap);
         emit WstethMainnetStrategyTestLog("wstETH to unwrap", wstETHToUnwrap);
         emit WstethMainnetStrategyTestLog("expected stETH after unwrap", expectedStETH);
-        
-        // Get actual expected WETH output from 0x API for the stETH amount we'll swap
-        uint256 expectedWethOut = get0xBuyAmount(stETH, weth, address(mytStrategy), expectedStETH);
+
+        uint256 expectedWethOut = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(currentRealAssets);
+        uint256 stEthSellAmount = _maxStEthIn(expectedWethOut);
+        if (stEthSellAmount > expectedStETH) stEthSellAmount = expectedStETH;
         
         // Encode the VaultAdapterParams with stETH->WETH swap data
-        // Use actual stETH amount for the swap calldata (not WETH-converted amount)
         IMYTStrategy.SwapParams memory swapParams2 = IMYTStrategy.SwapParams({
-            txData: getStethToWethCalldata(address(mytStrategy), expectedStETH), 
-            minIntermediateOut: expectedStETH
+            txData: getStethToWethCalldata(address(mytStrategy), stEthSellAmount), 
+            minIntermediateOut: stEthSellAmount
         });
         IMYTStrategy.VaultAdapterParams memory params2 = IMYTStrategy.VaultAdapterParams({
             action: IMYTStrategy.ActionType.unwrapAndSwap, 
@@ -717,7 +738,7 @@ contract WstethMainnetStrategyTest is Test {
     // (wstETH accrues yield via staking rewards reflected in exchange rate)
     function test_wsteth_mainnet_yield_accumulation() public {
         // Set up mocked swap executor for deallocations (avoids 0x signature deadline issues with vm.warp)
-        MockSwapExecutorDynamic mockSwap = new MockSwapExecutorDynamic(weth);
+        MockSwapExecutorDynamic mockSwap = new MockSwapExecutorDynamic(stETH, weth);
         vm.prank(admin);
         MYTStrategy(mytStrategy).setAllowanceHolder(address(mockSwap));
         

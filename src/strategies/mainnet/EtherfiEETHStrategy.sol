@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {MYTStrategy} from "../../MYTStrategy.sol";
+import {OraclePricedSwapStrategy} from "./OraclePricedSwapStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
-import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IWETH} from "../../interfaces/IWETH.sol";
 
@@ -27,59 +26,38 @@ interface IWeETH {
  * @notice Allocates WETH into weETH via Ether.fi DepositAdapter and deallocates
  *         by directly swapping weETH -> WETH through 0x.
  */
-contract EtherfiEETHMYTStrategy is MYTStrategy {
-    uint256 public constant MAX_ORACLE_STALENESS = 7 days;
-
+contract EtherfiEETHMYTStrategy is OraclePricedSwapStrategy {
     IDepositAdapter public immutable depositAdapter;
     IRedemptionManager public immutable redemptionManager;
     IWeETH public immutable weETH;
     IERC20 public immutable eETH;
-    IWETH public immutable weth;
-    AggregatorV3Interface public immutable weEthEthOracle;
-    uint8 public immutable weEthEthOracleDecimals;
     address public constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
     constructor(
         address _myt,
         StrategyParams memory _params,
         address _eETH,
         address _weETH,
-        address _weth,
         address _depositAdapter,
         address _redemptionManager,
         address _weEthEthOracle
-    ) MYTStrategy(_myt, _params) {
+    ) OraclePricedSwapStrategy(_myt, _params, _weEthEthOracle) {
         require(_eETH != address(0), "Zero eETH address");
         require(_weETH != address(0), "Zero weETH address");
-        require(_weth != address(0), "Zero WETH address");
         require(_depositAdapter != address(0), "Zero deposit adapter address");
         require(_redemptionManager != address(0), "Zero redemption manager address");
-        require(_weEthEthOracle != address(0), "Zero oracle address");
 
         eETH = IERC20(_eETH);
         weETH = IWeETH(_weETH);
-        weth = IWETH(_weth);
         depositAdapter = IDepositAdapter(_depositAdapter);
         redemptionManager = IRedemptionManager(_redemptionManager);
-        weEthEthOracle = AggregatorV3Interface(_weEthEthOracle);
-        weEthEthOracleDecimals = weEthEthOracle.decimals();
     }
 
     function _allocate(uint256 amount) internal override returns (uint256) {
-        require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than amount");
-        TokenUtils.safeApprove(address(weth), address(depositAdapter), amount);
+        _ensureIdleBalance(_asset(), amount);
+        TokenUtils.safeApprove(_asset(), address(depositAdapter), amount);
         depositAdapter.depositWETHForWeETH(amount, address(0));
-        TokenUtils.safeApprove(address(weth), address(depositAdapter), 0);
-        return amount;
-    }
-
-    /// @notice Allocate via direct WETH -> weETH swap through 0x.
-    /// @param amount WETH amount to sell.
-    /// @param callData 0x swap calldata for WETH -> weETH.
-    function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256) {
-        require(TokenUtils.safeBalanceOf(address(weth), address(this)) >= amount, "Strategy balance is less than amount");
-        uint256 minWeETHOut = _wethToWeEth((amount * (10_000 - params.slippageBPS)) / 10_000);
-        if (minWeETHOut == 0) minWeETHOut = 1;
-        dexSwap(address(weETH), address(weth), amount, minWeETHOut, callData);
+        TokenUtils.safeApprove(_asset(), address(depositAdapter), 0);
         return amount;
     }
 
@@ -89,7 +67,7 @@ contract EtherfiEETHMYTStrategy is MYTStrategy {
     function _deallocate(uint256 amount) internal override returns (uint256) {
         uint256 idleBalance = _idleAssets();
         if (idleBalance >= amount) {
-            TokenUtils.safeApprove(address(weth), msg.sender, amount);
+            TokenUtils.safeApprove(_asset(), msg.sender, amount);
             return amount;
         }
 
@@ -112,75 +90,30 @@ contract EtherfiEETHMYTStrategy is MYTStrategy {
         TokenUtils.safeApprove(address(weETH), address(redemptionManager), 0);
 
         require(ethReceived >= shortfall, "Insufficient ETH redeemed");
-        weth.deposit{value: ethReceived}();
+        IWETH(MYT.asset()).deposit{value: ethReceived}();
         require(_idleAssets() >= amount, "Insufficient WETH available");
-        TokenUtils.safeApprove(address(weth), msg.sender, amount);
+        TokenUtils.safeApprove(_asset(), msg.sender, amount);
         return amount;
     }
 
-    /// @notice Deallocate via direct weETH -> WETH swap.
-    /// @param amount WETH amount expected to be returned to vault.
-    /// @param callData 0x swap calldata for weETH -> WETH.
-    function _deallocate(uint256 amount, bytes memory callData) internal override returns (uint256) {
-        uint256 idleBalance = _idleAssets();
-        if (idleBalance >= amount) {
-            TokenUtils.safeApprove(address(weth), msg.sender, amount);
-            return amount;
-        }
-        uint256 shortfall = amount - idleBalance;
 
+    function _pricedToken() internal view override returns (address) {
+        return address(weETH);
+    }
+
+    function _positionBalance() internal view override returns (uint256) {
+        return weETH.balanceOf(address(this));
+    }
+
+    function _positionToPriced(uint256 positionAmount) internal view override returns (uint256) {
+        return positionAmount;
+    }
+
+    function _afterAllocateSwap(uint256) internal override {}
+
+    function _preparePricedForSwap(uint256 maxPricedIn) internal override returns (uint256) {
         uint256 weETHBalance = weETH.balanceOf(address(this));
-        require(weETHBalance > 0, "No weETH available");
-
-        uint256 maxWETHIn = (shortfall * 10_000 + (10_000 - params.slippageBPS) - 1) / (10_000 - params.slippageBPS);
-        uint256 quotedWeETH = _wethToWeEthUp(maxWETHIn);
-        if (quotedWeETH == 0 && weETHBalance > 0) {
-            // Avoid dust-size deallocations reverting due to floor rounding to zero.
-            quotedWeETH = 1;
-        }
-        uint256 weETHToSwap = quotedWeETH > weETHBalance ? weETHBalance : quotedWeETH;
-        require(weETHToSwap > 0, "No weETH to swap");
-
-        dexSwap(address(weth), address(weETH), weETHToSwap, shortfall, callData);
-        require(_idleAssets() >= amount, "Insufficient WETH received");
-        TokenUtils.safeApprove(address(weth), msg.sender, amount);
-        return amount;
-    }
-
-    function _totalValue() internal view override returns (uint256) {
-        return _weEthToWeth(weETH.balanceOf(address(this))) + _idleAssets();
-    }
-
-    function _idleAssets() internal view virtual override returns (uint256) {
-        return TokenUtils.safeBalanceOf(address(weth), address(this));
-    }
-
-    function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
-        uint256 maxWETH = _weEthToWeth(weETH.balanceOf(address(this)));
-        uint256 fundable = amount <= maxWETH ? amount : maxWETH;
-        return (fundable * (10_000 - params.slippageBPS)) / 10_000;
-    }
-
-    function _weEthToWeth(uint256 weEthAmount) internal view returns (uint256) {
-        (, int256 answer,, uint256 updatedAt,) = weEthEthOracle.latestRoundData();
-        require(answer > 0 && updatedAt != 0, "Invalid oracle answer");
-        require(updatedAt <= block.timestamp && block.timestamp - updatedAt <= MAX_ORACLE_STALENESS, "Stale oracle answer");
-        return weEthAmount * uint256(answer) / (10 ** weEthEthOracleDecimals);
-    }
-
-    function _wethToWeEth(uint256 wethAmount) internal view returns (uint256) {
-        (, int256 answer,, uint256 updatedAt,) = weEthEthOracle.latestRoundData();
-        require(answer > 0 && updatedAt != 0, "Invalid oracle answer");
-        require(updatedAt <= block.timestamp && block.timestamp - updatedAt <= MAX_ORACLE_STALENESS, "Stale oracle answer");
-        return wethAmount * (10 ** weEthEthOracleDecimals) / uint256(answer);
-    }
-
-    function _wethToWeEthUp(uint256 wethAmount) internal view returns (uint256) {
-        (, int256 answer,, uint256 updatedAt,) = weEthEthOracle.latestRoundData();
-        require(answer > 0 && updatedAt != 0, "Invalid oracle answer");
-        require(updatedAt <= block.timestamp && block.timestamp - updatedAt <= MAX_ORACLE_STALENESS, "Stale oracle answer");
-        uint256 scale = 10 ** weEthEthOracleDecimals;
-        return (wethAmount * scale + uint256(answer) - 1) / uint256(answer);
+        return maxPricedIn > weETHBalance ? weETHBalance : maxPricedIn;
     }
 
     receive() external payable {}

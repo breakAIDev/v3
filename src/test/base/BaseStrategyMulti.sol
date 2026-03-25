@@ -474,10 +474,16 @@ abstract contract BaseStrategyMulti is StrategyOps {
         _warpWithHook(30 days);
 
         // Full deallocation
-        bool finalDeallocOk = _deallocateFromRealAssetsEstimate(RevertContext.FuzzDeallocate);
-        if (!finalDeallocOk) {
-            vm.stopPrank();
-            return;
+        for (uint256 i = 0; i < 16; i++) {
+            uint256 before = IMYTStrategy(strategy).realAssets();
+            if (before == 0) break;
+            bool ok = _deallocateFromRealAssetsEstimate(RevertContext.FuzzDeallocate);
+            if (!ok) {
+                vm.stopPrank();
+                return;
+            }
+            uint256 after_ = IMYTStrategy(strategy).realAssets();
+            if (after_ >= before) break;
         }
         uint256 realAssetsAfterFinal = IMYTStrategy(strategy).realAssets();
         assertLt(realAssetsAfterFinal, realAssetsAfterDealloc1, "Real assets should be near zero after final deallocation");
