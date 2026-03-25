@@ -100,8 +100,17 @@ contract WstethMainnetStrategy is MYTStrategy {
             TokenUtils.safeApprove(address(weth), msg.sender, amount);
             return amount;
         }
-        
-        uint256 wstETHToUnwrap = wsteth.getWstETHByStETH(minIntermediateOut) + 1;
+
+        uint256 shortfall = amount - idleBalance;
+        uint256 idleStEthEquivalent = _wethToStEth(idleBalance);
+        uint256 stEthToSwap = minIntermediateOut > idleStEthEquivalent ? minIntermediateOut - idleStEthEquivalent : 0;
+
+        if (stEthToSwap == 0) {
+            TokenUtils.safeApprove(address(weth), msg.sender, amount);
+            return amount;
+        }
+
+        uint256 wstETHToUnwrap = wsteth.getWstETHByStETH(stEthToSwap) + 1;
         
         // Cap at actual balance
         uint256 wstETHBalance = wsteth.balanceOf(address(this));
@@ -113,14 +122,14 @@ contract WstethMainnetStrategy is MYTStrategy {
         uint256 stETHBefore = TokenUtils.safeBalanceOf(address(steth), address(this));
         wsteth.unwrap(wstETHToUnwrap);
         uint256 stETHAfter = TokenUtils.safeBalanceOf(address(steth), address(this));
-        uint256 stETHReceived = stETHAfter - stETHBefore; 
-        
-        uint256 wethReceived = dexSwap(address(weth), address(steth), minIntermediateOut, 1, callData);
-        uint256 wethBalance = IERC20(address(weth)).balanceOf(address(this));
-        uint256 expected = (amount * (10_000 - params.slippageBPS)) / 10_000;
-        require(wethBalance >= expected, InvalidAmount(expected, wethBalance));
+        uint256 stETHReceived = stETHAfter - stETHBefore;
 
-        
+        uint256 minWethOut = (shortfall * (10_000 - params.slippageBPS)) / 10_000;
+        if (minWethOut == 0) minWethOut = 1;
+
+        dexSwap(address(weth), address(steth), stEthToSwap, minWethOut, callData);
+        uint256 wethBalance = IERC20(address(weth)).balanceOf(address(this));
+        require(wethBalance >= amount, InvalidAmount(amount, wethBalance));
         TokenUtils.safeApprove(address(weth), msg.sender, amount);
         return amount;
     }
@@ -167,5 +176,12 @@ contract WstethMainnetStrategy is MYTStrategy {
         require(answer > 0 && updatedAt != 0, "Invalid oracle answer");
         require(updatedAt <= block.timestamp && block.timestamp - updatedAt <= MAX_ORACLE_STALENESS, "Stale oracle answer");
         return stEthAmount * uint256(answer) / (10 ** stEthEthOracleDecimals);
+    }
+
+    function _wethToStEth(uint256 wethAmount) internal view returns (uint256) {
+        (, int256 answer,, uint256 updatedAt,) = stEthEthOracle.latestRoundData();
+        require(answer > 0 && updatedAt != 0, "Invalid oracle answer");
+        require(updatedAt <= block.timestamp && block.timestamp - updatedAt <= MAX_ORACLE_STALENESS, "Stale oracle answer");
+        return Math.ceilDiv(wethAmount * (10 ** stEthEthOracleDecimals), uint256(answer));
     }
 }

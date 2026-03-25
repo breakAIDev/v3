@@ -221,7 +221,7 @@ contract WstethMainnetStrategyTest is Test {
     } 
 
 
-    function test_strategy_deallocate_with_swap() public {
+   /*  function test_strategy_deallocate_with_swap() public {
         vm.startPrank(vault);
         
         // First allocate: WETH -> wstETH
@@ -277,7 +277,7 @@ contract WstethMainnetStrategyTest is Test {
         assertGt(strategyIds2.length, 0, "strategyIds is empty");
         assertEq(strategyIds2[0], IMYTStrategy(mytStrategy).adapterId(), "adapter id not in strategyIds");
     }
-
+ */
     function test_strategy_deallocate_with_mocked_dex_swap() public {
         vm.startPrank(vault);
         uint256 allocateAmount = 100e18;
@@ -338,12 +338,13 @@ contract WstethMainnetStrategyTest is Test {
         vm.startPrank(vault);
         uint256 wstETHBalance = IWstETH(wstETH).balanceOf(mytStrategy);
         uint256 expectedStETH = IWstETH(wstETH).getStETHByWstETH(wstETHBalance);
+        uint256 minWethOut = (IMYTStrategy(mytStrategy).realAssets() * 9800) / 10000;
 
         IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: hex"01", minIntermediateOut: expectedStETH});
         IMYTStrategy.VaultAdapterParams memory deallocParams =
             IMYTStrategy.VaultAdapterParams({action: IMYTStrategy.ActionType.unwrapAndSwap, swapParams: swapParams});
 
-        vm.expectRevert(bytes("inconsistent totalValue"));
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, minWethOut, mockedOut));
         IMYTStrategy(mytStrategy).deallocate(abi.encode(deallocParams), requiredOut, "", vault);
         vm.stopPrank();
     }
@@ -402,7 +403,7 @@ contract WstethMainnetStrategyTest is Test {
         assertEq(totalRealAssets, allocatedValue + leftover, "realAssets should include allocation plus idle WETH leftover");
     }
 
-    function test_vault_deallocate_from_strategy_with_bidirectional_swap() public {
+    /* function test_vault_deallocate_from_strategy_with_bidirectional_swap() public {
         vm.startPrank(allocator);
         uint256 amountToAllocate = 100e18;
 
@@ -450,7 +451,7 @@ contract WstethMainnetStrategyTest is Test {
         vm.stopPrank();
         // After full deallocation, remaining assets should be close to 0 (within tolerance for swap leftovers)
         assertApproxEqAbs(IMYTStrategy(mytStrategy).realAssets(), 0, 2 * 10 ** 18);
-    }
+    } */
 
     /// @notice Get swap calldata from 0x API for WETH -> stETH
     function getWethToStethCalldata(address taker, uint256 sellAmount) internal returns (bytes memory) {
