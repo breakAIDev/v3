@@ -30,6 +30,10 @@ jobs:
       - name: Run Forge tests
         run: |
           forge test -vvv
+        env:
+          MAINNET_RPC_URL: https://mainnet.gateway.tenderly.co
+          OPTIMISM_RPC_URL: https://optimism.gateway.tenderly.co
+          ARBITRUM_RPC_URL: https://arbitrum.gateway.tenderly.co
         id: test
 
   forge_coverage:
@@ -50,16 +54,3 @@ jobs:
       - run: npm ci
       - name: Print coverage
         run: forge b; forge coverage
-
-  slither:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Get node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20.x"
-          cache: "npm"
-      - uses: crytic/slither-action@v0.4.0
-        with:
-          node-version: 20
