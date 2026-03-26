@@ -70,6 +70,8 @@ contract MockWstethStrategy is WstethStrategy {
 
 contract WstethStrategyTest is Test {
     uint256 public constant STRATEGY_SLIPPAGE_BPS = 200;
+    uint256 public constant QUOTED_WSTETH_SELL_AMOUNT = 1_000_000_000_000;
+    uint256 public constant QUOTED_WETH_BUY_AMOUNT = 1_222_732_076_605;
 
     address public mytStrategy;
     address public vault;
@@ -152,6 +154,10 @@ contract WstethStrategyTest is Test {
         return wstEthAmount == 0 ? 1 : wstEthAmount;
     }
 
+    function _quoteScaledWethOut(uint256 wstEthAmountIn) internal pure returns (uint256) {
+        return (wstEthAmountIn * QUOTED_WETH_BUY_AMOUNT) / QUOTED_WSTETH_SELL_AMOUNT;
+    }
+
     function test_strategy_allocate_direct() public {
         vm.startPrank(vault);
         uint256 amount = 100e18;
@@ -177,7 +183,7 @@ contract WstethStrategyTest is Test {
         vm.stopPrank();
     }
 
-    function test_strategy_deallocate_with_mocked_dex_swap() public {
+    function test_strategy_deallocate_with_mocked_dex_swap(uint256 requestedOut) public {
         vm.startPrank(vault);
         uint256 allocateAmount = 100e18;
         deal(weth, mytStrategy, allocateAmount);
@@ -187,7 +193,15 @@ contract WstethStrategyTest is Test {
         IMYTStrategy(mytStrategy).allocate(abi.encode(allocParams), allocateAmount, "", vault);
         vm.stopPrank();
 
-        uint256 expectedOut = 5e18;
+        requestedOut = bound(requestedOut, 1e18, 100e18);
+
+        uint256 wstETHBalanceBefore = IWstETH(wstETH).balanceOf(mytStrategy);
+        uint256 wstEthToSwap = _maxWstEthIn(requestedOut);
+        if (wstEthToSwap > wstETHBalanceBefore) {
+            wstEthToSwap = wstETHBalanceBefore;
+        }
+        uint256 expectedOut = _quoteScaledWethOut(wstEthToSwap);
+
         MockSwapExecutor mockSwap = new MockSwapExecutor(weth, expectedOut);
         deal(weth, address(mockSwap), expectedOut);
 
@@ -204,13 +218,13 @@ contract WstethStrategyTest is Test {
             IMYTStrategy.VaultAdapterParams({action: IMYTStrategy.ActionType.swap, swapParams: swapParams});
 
         (bytes32[] memory strategyIds,) = IMYTStrategy(mytStrategy).deallocate(
-            abi.encode(deallocParams), expectedOut, "", vault
+            abi.encode(deallocParams), requestedOut, "", vault
         );
         vm.stopPrank();
 
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(mytStrategy).adapterId(), "adapter id not in strategyIds");
-        assertEq(IERC20(weth).allowance(mytStrategy, vault), expectedOut, "vault allowance should equal WETH deallocated");
+        assertEq(IERC20(weth).allowance(mytStrategy, vault), requestedOut, "vault allowance should equal WETH deallocated");
         // Strategy receives the mocked WETH output from the swap
         assertEq(IERC20(weth).balanceOf(mytStrategy), expectedOut, "strategy should receive mocked WETH output");
     }
