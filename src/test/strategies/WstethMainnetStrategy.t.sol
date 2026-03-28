@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import "forge-std/Test.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
+import {OraclePricedSwapStrategy} from "../../strategies/OraclePricedSwapStrategy.sol";
 import {WstethStrategy} from "../../strategies/WStethStrategy.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
@@ -64,13 +65,14 @@ contract MockWstethStrategy is WstethStrategy {
         address _wstETH,
         address _wstEthEthOracle
     )
-        WstethStrategy(_myt, _params, _wstETH, _wstEthEthOracle, true)
+        WstethStrategy(_myt, _params, _wstETH, _wstEthEthOracle, true, 7000)
     {}
 }
 
 contract WstethStrategyTest is Test {
     uint256 public constant STRATEGY_SLIPPAGE_BPS = 200;
     uint256 public constant TEST_RESIDUAL_TOLERANCE_BPS = 100;
+    uint256 public constant ALLOCATION_BPS = 7000;
     uint256 public constant ASSUMED_WSTETH_ETH_ORACLE_ANSWER = 1.23e18;
     uint256 public constant QUOTED_WSTETH_SELL_AMOUNT = 1_000_000_000_000;
     uint256 public constant QUOTED_WETH_BUY_AMOUNT = 1_222_732_076_605;
@@ -324,6 +326,52 @@ contract WstethStrategyTest is Test {
         assertGt(change, 0, "allocation change should be positive");
     }
 
+    function test_strategy_allocate_with_mocked_dex_swap_reverts_below_allocation_floor_when_oracle_min_is_weakened() public {
+        uint256 amountIn = 10e18;
+        uint256 floorMinOut = (amountIn * ALLOCATION_BPS) / 10_000;
+        uint256 mockedOut = floorMinOut - 1;
+
+        _mockWstEthEthOracleAnswer(100e18);
+
+        MockSwapExecutor mockSwap = new MockSwapExecutor(wstETH, mockedOut);
+        deal(wstETH, address(mockSwap), mockedOut);
+
+        vm.prank(admin);
+        MYTStrategy(mytStrategy).setAllowanceHolder(address(mockSwap));
+
+        vm.startPrank(vault);
+        deal(weth, mytStrategy, amountIn);
+
+        IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({txData: hex"01", minIntermediateOut: 0});
+        IMYTStrategy.VaultAdapterParams memory allocParams =
+            IMYTStrategy.VaultAdapterParams({action: IMYTStrategy.ActionType.swap, swapParams: swapParams});
+
+        vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, floorMinOut, mockedOut));
+        IMYTStrategy(mytStrategy).allocate(abi.encode(allocParams), amountIn, "", vault);
+        vm.stopPrank();
+    }
+
+    function test_setMinAllocationOutBps_onlyOwner_updatesValue() public {
+        assertEq(OraclePricedSwapStrategy(mytStrategy).minAllocationOutBps(), ALLOCATION_BPS, "unexpected initial minAllocationOutBps");
+
+        vm.prank(admin);
+        OraclePricedSwapStrategy(mytStrategy).setMinAllocationOutBps(6500);
+
+        assertEq(OraclePricedSwapStrategy(mytStrategy).minAllocationOutBps(), 6500, "minAllocationOutBps should update");
+    }
+
+    function test_setMinAllocationOutBps_reverts_for_non_owner() public {
+        vm.expectRevert();
+        vm.prank(vault);
+        OraclePricedSwapStrategy(mytStrategy).setMinAllocationOutBps(6500);
+    }
+
+    function test_setMinAllocationOutBps_reverts_above_bps_limit() public {
+        vm.expectRevert(bytes("Invalid min allocation out bps"));
+        vm.prank(admin);
+        OraclePricedSwapStrategy(mytStrategy).setMinAllocationOutBps(10_001);
+    }
+
     function test_realAssets_includes_idle_weth_leftover() public {
         assertEq(IWstETH(wstETH).balanceOf(mytStrategy), 0, "strategy should start without wstETH");
 
@@ -414,12 +462,16 @@ contract WstethStrategyTest is Test {
     }
 
     function _mockFreshWstEthEthOracle() internal {
+        _mockWstEthEthOracleAnswer(ASSUMED_WSTETH_ETH_ORACLE_ANSWER);
+    }
+
+    function _mockWstEthEthOracleAnswer(uint256 answerToMock) internal {
         (uint80 roundId, int256 answer, uint256 startedAt,, uint80 answeredInRound) =
             AggregatorV3Interface(wstEthEthOracle).latestRoundData();
         vm.mockCall(
             wstEthEthOracle,
             abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
-            abi.encode(roundId, int256(ASSUMED_WSTETH_ETH_ORACLE_ANSWER), startedAt, block.timestamp, answeredInRound)
+            abi.encode(roundId, int256(answerToMock), startedAt, block.timestamp, answeredInRound)
         );
     }
 

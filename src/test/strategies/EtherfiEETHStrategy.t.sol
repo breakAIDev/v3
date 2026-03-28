@@ -40,7 +40,8 @@ contract MockEtherfiEETHStrategy is EtherfiEETHMYTStrategy {
             _weETH,
             _depositAdapter,
             _redemptionManager,
-            _weEthEthOracle
+            _weEthEthOracle,
+            0
         )
     {}
 }

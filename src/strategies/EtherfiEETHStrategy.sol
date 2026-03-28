@@ -44,8 +44,9 @@ contract EtherfiEETHMYTStrategy is OraclePricedSwapStrategy {
         address _weETH,
         address _depositAdapter,
         address _redemptionManager,
-        address _weEthEthOracle
-    ) OraclePricedSwapStrategy(_myt, _params, _weEthEthOracle) {
+        address _weEthEthOracle,
+        uint256 _minAllocationOutBps
+    ) OraclePricedSwapStrategy(_myt, _params, _weEthEthOracle, _minAllocationOutBps) {
         require(_eETH != address(0), "Zero eETH address");
         require(_weETH != address(0), "Zero weETH address");
         require(_depositAdapter != address(0), "Zero deposit adapter address");

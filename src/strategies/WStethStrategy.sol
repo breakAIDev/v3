@@ -17,8 +17,9 @@ contract WstethStrategy is OraclePricedSwapStrategy {
         StrategyParams memory _params,
         address _wstETH,
         address _pricedTokenEthOracle,
-        bool _directDepositEnabled
-    ) OraclePricedSwapStrategy(_myt, _params, _pricedTokenEthOracle) {
+        bool _directDepositEnabled,
+        uint256 _minAllocationOutBps
+    ) OraclePricedSwapStrategy(_myt, _params, _pricedTokenEthOracle, _minAllocationOutBps) {
         wsteth = wstETH(_wstETH);
         directDepositEnabled = _directDepositEnabled;
     }

@@ -14,6 +14,7 @@ contract DeployWstethStrategiesScript is Script {
         address wstETH;
         address pricedTokenEthOracle;
         bool directDepositEnabled;
+        uint256 minAllocationOutBps;
         IMYTStrategy.StrategyParams params;
     }
 
@@ -27,7 +28,8 @@ contract DeployWstethStrategiesScript is Script {
             config.params,
             config.wstETH,
             config.pricedTokenEthOracle,
-            config.directDepositEnabled
+            config.directDepositEnabled,
+            config.minAllocationOutBps
         );
         strategyAddr = address(strategy);
 

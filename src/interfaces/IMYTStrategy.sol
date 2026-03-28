@@ -50,6 +50,7 @@ interface IMYTStrategy {
     event RiskClassUpdated(RiskClass indexed class);
     event IncentivesUpdated(bool indexed enabled);
     event SlippageBPSUpdated(uint256 indexed newSlippageBPS);
+    event MinAllocationOutBpsUpdated(uint256 indexed newMinAllocationOutBps);
     event Emergency(bool indexed isEmergency);
     event StrategyAllocationLoss(string message, uint256 amountRequested, uint256 actualAmountAllocated);
     event WithdrawToVault(uint256 indexed amount);

@@ -66,6 +66,7 @@ contract DeployWstethStrategiesScriptTest is Test {
             wstETH: wstethMainnet,
             pricedTokenEthOracle: address(oracleMainnet),
             directDepositEnabled: true,
+            minAllocationOutBps: 7000,
             params: _buildParams("wstETH Mainnet", "Wsteth")
         });
 
@@ -76,6 +77,7 @@ contract DeployWstethStrategiesScriptTest is Test {
         assertEq(address(strategy.wsteth()), wstethMainnet, "unexpected wstETH address");
         assertEq(address(strategy.pricedTokenEthOracle()), address(oracleMainnet), "unexpected oracle");
         assertEq(strategy.directDepositEnabled(), true, "unexpected directDepositEnabled");
+        assertEq(strategy.minAllocationOutBps(), 7000, "unexpected minAllocationOutBps");
         (, string memory strategyName,,,,,,,) = strategy.params();
         assertEq(strategyName, "wstETH Mainnet", "unexpected strategy name");
     }
@@ -89,6 +91,7 @@ contract DeployWstethStrategiesScriptTest is Test {
             wstETH: wstethMainnet,
             pricedTokenEthOracle: address(oracleMainnet),
             directDepositEnabled: true,
+            minAllocationOutBps: 7000,
             params: _buildParams("wstETH Mainnet", "Wsteth")
         });
 
@@ -97,6 +100,7 @@ contract DeployWstethStrategiesScriptTest is Test {
             wstETH: wstethOptimism,
             pricedTokenEthOracle: address(oracleOptimism),
             directDepositEnabled: false,
+            minAllocationOutBps: 7000,
             params: _buildParams("wstETH Optimism", "Wsteth")
         });
 
@@ -108,6 +112,7 @@ contract DeployWstethStrategiesScriptTest is Test {
         assertEq(address(strategy0.wsteth()), wstethMainnet, "strategy0 unexpected wstETH");
         assertEq(address(strategy0.pricedTokenEthOracle()), address(oracleMainnet), "strategy0 unexpected oracle");
         assertEq(strategy0.directDepositEnabled(), true, "strategy0 unexpected directDepositEnabled");
+        assertEq(strategy0.minAllocationOutBps(), 7000, "strategy0 unexpected minAllocationOutBps");
         (, string memory name0,,,,,,,) = strategy0.params();
         assertEq(name0, "wstETH Mainnet", "strategy0 unexpected name");
 
@@ -116,6 +121,7 @@ contract DeployWstethStrategiesScriptTest is Test {
         assertEq(address(strategy1.wsteth()), wstethOptimism, "strategy1 unexpected wstETH");
         assertEq(address(strategy1.pricedTokenEthOracle()), address(oracleOptimism), "strategy1 unexpected oracle");
         assertEq(strategy1.directDepositEnabled(), false, "strategy1 unexpected directDepositEnabled");
+        assertEq(strategy1.minAllocationOutBps(), 7000, "strategy1 unexpected minAllocationOutBps");
         (, string memory name1,,,,,,,) = strategy1.params();
         assertEq(name1, "wstETH Optimism", "strategy1 unexpected name");
     }

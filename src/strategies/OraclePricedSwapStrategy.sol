@@ -10,16 +10,20 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
 
     AggregatorV3Interface public immutable pricedTokenEthOracle;
     uint8 public immutable pricedTokenEthOracleDecimals;
+    uint256 public minAllocationOutBps;
 
     constructor(
         address _myt,
         StrategyParams memory _params,
-        address _pricedTokenEthOracle
+        address _pricedTokenEthOracle,
+        uint256 _minAllocationOutBps
     ) MYTStrategy(_myt, _params) {
         require(_pricedTokenEthOracle != address(0), "Zero oracle address");
+        require(_minAllocationOutBps <= 10_000, "Invalid min allocation out bps");
 
         pricedTokenEthOracle = AggregatorV3Interface(_pricedTokenEthOracle);
         pricedTokenEthOracleDecimals = pricedTokenEthOracle.decimals();
+        minAllocationOutBps = _minAllocationOutBps;
     }
 
     function _allocate(uint256 amount, bytes memory callData) internal virtual override returns (uint256) {
@@ -28,7 +32,8 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
         uint256 minPricedOut = _assetToPricedDown((amount * (10_000 - params.slippageBPS)) / 10_000);
         if (minPricedOut == 0) minPricedOut = 1;
 
-        dexSwap(_pricedToken(), _asset(), amount, minPricedOut, callData);
+        uint256 pricedReceived = dexSwap(_pricedToken(), _asset(), amount, minPricedOut, callData);
+        _allocationGuard(amount, minPricedOut, pricedReceived);
         return amount;
     }
 
@@ -99,6 +104,19 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
 
     function _asset() internal view returns (address) {
         return MYT.asset();
+    }
+
+    function setMinAllocationOutBps(uint256 newMinAllocationOutBps) public onlyOwner {
+        require(newMinAllocationOutBps <= 10_000, "Invalid min allocation out bps");
+        minAllocationOutBps = newMinAllocationOutBps;
+        emit MinAllocationOutBpsUpdated(newMinAllocationOutBps);
+    }
+
+    function _allocationGuard(uint256 assetAmountIn, uint256, uint256 pricedReceived) internal view virtual {
+        if (minAllocationOutBps == 0) return;
+
+        uint256 minAllocationOut = (assetAmountIn * minAllocationOutBps) / 10_000;
+        if (pricedReceived < minAllocationOut) revert InvalidAmount(minAllocationOut, pricedReceived);
     }
 
     function _pricedToken() internal view virtual returns (address);
