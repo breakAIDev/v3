@@ -2,7 +2,6 @@
 
 pragma solidity 0.8.28;
 import {OraclePricedSwapStrategy} from "./OraclePricedSwapStrategy.sol";
-import {TokenUtils} from "../../libraries/TokenUtils.sol";
 import {IWETH} from "../../interfaces/IWETH.sol";
 
 interface wstETH {
@@ -52,28 +51,6 @@ contract WstethStrategy is OraclePricedSwapStrategy {
         if (minWstEthOut == 0) minWstEthOut = 1;
 
         dexSwap(address(wsteth), _asset(), amount, minWstEthOut, callData);
-        return amount;
-    }
-
-    function _deallocate(uint256 amount, bytes memory callData) internal override returns (uint256) {
-        uint256 idleBalance = _idleAssets();
-        if (idleBalance >= amount) {
-            TokenUtils.safeApprove(_asset(), msg.sender, amount);
-            return amount;
-        }
-
-        uint256 shortfall = amount - idleBalance;
-        uint256 maxAssetIn = _roundUpMulDiv(shortfall, 10_000, 10_000 - params.slippageBPS);
-        uint256 maxWstEthIn = _assetToPricedUp(maxAssetIn);
-        if (maxWstEthIn == 0) maxWstEthIn = 1;
-
-        uint256 wstETHBalance = wsteth.balanceOf(address(this));
-        uint256 wstEthToSwap = maxWstEthIn > wstETHBalance ? wstETHBalance : maxWstEthIn;
-        require(wstEthToSwap > 0, "No wstETH to swap");
-
-        dexSwap(_asset(), address(wsteth), wstEthToSwap, shortfall, callData);
-        require(_idleAssets() >= amount, "Insufficient WETH received");
-        TokenUtils.safeApprove(_asset(), msg.sender, amount);
         return amount;
     }
 

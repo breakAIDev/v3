@@ -53,7 +53,8 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
         require(pricedToSwap > 0, "No priced token to swap");
 
         dexSwap(_asset(), _pricedToken(), pricedToSwap, shortfall, callData);
-        require(_idleAssets() >= amount, "Insufficient WETH received");
+        uint256 receivedAssets = _idleAssets();
+        if (receivedAssets < amount) revert InsufficientBalance(amount, receivedAssets);
         TokenUtils.safeApprove(_asset(), msg.sender, amount);
         return amount;
     }

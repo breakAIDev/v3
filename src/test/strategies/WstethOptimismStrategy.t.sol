@@ -38,6 +38,28 @@ contract MockSwapExecutor {
     }
 }
 
+contract MockSwapExecutorDynamic {
+    IERC20 public immutable buyToken;
+    IERC20 public immutable sellToken;
+
+    constructor(address _sellToken, address _buyToken) {
+        sellToken = IERC20(_sellToken);
+        buyToken = IERC20(_buyToken);
+    }
+
+    fallback() external {
+        uint256 sellAllowance = sellToken.allowance(msg.sender, address(this));
+        if (sellAllowance > 0) {
+            sellToken.transferFrom(msg.sender, address(this), sellAllowance);
+        }
+
+        uint256 buyBalance = buyToken.balanceOf(address(this));
+        if (buyBalance > 0) {
+            buyToken.transfer(msg.sender, buyBalance);
+        }
+    }
+}
+
 contract MockWstethOptimismStrategy is WstethStrategy {
     constructor(
         address _myt,
@@ -51,6 +73,7 @@ contract MockWstethOptimismStrategy is WstethStrategy {
 
 contract WstethOptimismStrategyTest is Test {
     uint256 public constant STRATEGY_SLIPPAGE_BPS = 200;
+    uint256 public constant TEST_RESIDUAL_TOLERANCE_BPS = 100;
 
     address public mytStrategy;
     address public vault;
@@ -299,23 +322,75 @@ contract WstethOptimismStrategyTest is Test {
         vm.prank(admin);
         MYTStrategy(mytStrategy).setAllowanceHolder(address(allocSwap));
 
-        vm.startPrank(admin);
+        vm.prank(admin);
         IAllocator(allocator).allocateWithSwap(mytStrategy, amountToAllocate, hex"01");
 
-        uint256 wstETHBalance = IWstETH(WSTETH).balanceOf(mytStrategy);
-        assertGt(wstETHBalance, 0, "wstETH balance should be positive");
+        uint256 wstETHBalanceBefore = IWstETH(WSTETH).balanceOf(mytStrategy);
+        assertGt(wstETHBalanceBefore, 0, "wstETH balance should be positive");
 
-        uint256 expectedOut = 5e18;
         uint256 realAssetsBefore = IMYTStrategy(mytStrategy).realAssets();
-        MockSwapExecutor deallocSwap = new MockSwapExecutor(WSTETH, WETH, expectedOut);
-        deal(WETH, address(deallocSwap), expectedOut);
+        uint256 previewedDeallocate = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(realAssetsBefore);
+        assertGt(previewedDeallocate, 0, "previewed deallocation should be positive");
+
+        uint256 wstEthToSwap = _maxWstEthIn(previewedDeallocate);
+        assertLe(wstEthToSwap, wstETHBalanceBefore, "previewed deallocation should be fundable by position");
+
+        MockSwapExecutorDynamic deallocSwap = new MockSwapExecutorDynamic(WSTETH, WETH);
+        deal(WETH, address(deallocSwap), previewedDeallocate);
+
+        vm.prank(admin);
         MYTStrategy(mytStrategy).setAllowanceHolder(address(deallocSwap));
 
-        IAllocator(allocator).deallocateWithSwap(mytStrategy, expectedOut, hex"01");
+        vm.prank(admin);
+        IAllocator(allocator).deallocateWithSwap(mytStrategy, previewedDeallocate, hex"01");
 
+        uint256 maxResidual = (realAssetsBefore * TEST_RESIDUAL_TOLERANCE_BPS) / 10_000 + 1e18;
+        uint256 leftoverWeth = IERC20(WETH).balanceOf(mytStrategy);
         uint256 realAssetsAfter = IMYTStrategy(mytStrategy).realAssets();
-        assertLt(realAssetsAfter, realAssetsBefore, "realAssets should decrease after deallocation");
-        vm.stopPrank();
+        assertLe(realAssetsAfter, maxResidual, "remaining strategy balance should stay within slippage tolerance");
+        assertLe(leftoverWeth, maxResidual, "leftover idle WETH should stay within slippage tolerance");
+        assertLt(IWstETH(WSTETH).balanceOf(mytStrategy), wstETHBalanceBefore, "wstETH balance should decrease after deallocation");
+    }
+
+    function test_allocator_deallocate_max_preview_from_total_value(uint256 allocateAmount) public {
+        allocateAmount = bound(allocateAmount, 1e18, 100e18);
+
+        MockSwapExecutor allocSwap = new MockSwapExecutor(WETH, WSTETH, allocateAmount);
+        deal(WSTETH, address(allocSwap), allocateAmount);
+
+        vm.prank(admin);
+        MYTStrategy(mytStrategy).setAllowanceHolder(address(allocSwap));
+
+        vm.prank(admin);
+        IAllocator(allocator).allocateWithSwap(mytStrategy, allocateAmount, hex"01");
+
+        uint256 realAssetsBefore = IMYTStrategy(mytStrategy).realAssets();
+        assertGt(realAssetsBefore, 0, "real assets should be positive after allocation");
+
+        uint256 maxDeallocate = IMYTStrategy(mytStrategy).previewAdjustedWithdraw(realAssetsBefore);
+        assertGt(maxDeallocate, 0, "previewed deallocation amount should be positive");
+        assertLe(maxDeallocate, realAssetsBefore, "previewed amount should not exceed total value");
+
+        uint256 wstETHBalanceBefore = IWstETH(WSTETH).balanceOf(mytStrategy);
+        uint256 wstEthToSwap = _maxWstEthIn(maxDeallocate);
+        assertLe(wstEthToSwap, wstETHBalanceBefore, "previewed amount should be fundable by position");
+
+        MockSwapExecutorDynamic deallocSwap = new MockSwapExecutorDynamic(WSTETH, WETH);
+        deal(WETH, address(deallocSwap), maxDeallocate);
+
+        vm.prank(admin);
+        MYTStrategy(mytStrategy).setAllowanceHolder(address(deallocSwap));
+
+        bytes32 strategyId = IMYTStrategy(mytStrategy).adapterId();
+        uint256 allocationBefore = IVaultV2(vault).allocation(strategyId);
+
+        vm.prank(admin);
+        IAllocator(allocator).deallocateWithSwap(mytStrategy, maxDeallocate, hex"01");
+
+        uint256 allocationAfter = IVaultV2(vault).allocation(strategyId);
+        assertLt(allocationAfter, allocationBefore, "allocator deallocation should reduce vault allocation");
+        assertLt(IWstETH(WSTETH).balanceOf(mytStrategy), wstETHBalanceBefore, "wstETH balance should decrease after deallocation");
+        assertLt(IMYTStrategy(mytStrategy).realAssets(), realAssetsBefore, "real assets should decrease after deallocation");
     }
 
     function getForkBlockNumber() internal pure returns (uint256) {

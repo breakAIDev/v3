@@ -7,6 +7,8 @@ import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {IAllocator} from "../../interfaces/IAllocator.sol";
+import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
 
 interface IRedemptionManagerView {
     function canRedeem(uint256 amount, address token) external view returns (bool);
@@ -51,6 +53,7 @@ contract EtherfiEETHStrategyTest is BaseStrategyTest {
     address public constant DEPOSIT_ADAPTER = 0xcfC6d9Bd7411962Bfe7145451A7EF71A24b6A7A2;
     address public constant REDEMPTION_MANAGER = 0xDadEf1fFBFeaAB4f68A9fD181395F68b4e4E7Ae0;
     address public constant WEETH_ETH_ORACLE = 0x5c9C449BbC9a6075A2c061dF312a35fd1E05fF22;
+    uint256 public constant TEST_RESIDUAL_TOLERANCE_BPS = 100;
 
     MockSwapper public swapper;
 
@@ -267,6 +270,47 @@ contract EtherfiEETHStrategyTest is BaseStrategyTest {
         vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, deallocAmount, insufficientOut));
         IMYTStrategy(strategy).deallocate(deallocParams, deallocAmount, "", address(vault));
         vm.stopPrank();
+    }
+
+    function test_allocator_deallocate_max_preview_from_total_value(uint256 amountToAllocate) public {
+        amountToAllocate = bound(amountToAllocate, 1e18, 100e18);
+        _mockFreshWeEthEthOracle(block.timestamp);
+
+        vm.startPrank(admin);
+        IAllocator(allocator).allocate(strategy, amountToAllocate);
+
+        uint256 realAssetsBefore = IMYTStrategy(strategy).realAssets();
+        assertGt(realAssetsBefore, 0, "real assets should be positive after allocation");
+
+        uint256 targetDeallocate = _effectiveDeallocateAmount(realAssetsBefore);
+        require(targetDeallocate > 0, "target deallocate is zero");
+
+        uint256 previewedDeallocate = IMYTStrategy(strategy).previewAdjustedWithdraw(targetDeallocate);
+        assertGt(previewedDeallocate, 0, "previewed deallocation should be positive");
+        assertLe(previewedDeallocate, targetDeallocate, "previewed amount should not exceed target");
+
+        uint256 weETHBalanceBefore = IWeETH(WEETH).balanceOf(strategy);
+        uint256 weETHToSwap = _maxWeEthIn(previewedDeallocate);
+        assertLe(weETHToSwap, weETHBalanceBefore, "previewed deallocation should be fundable by position");
+
+        deal(WETH, address(swapper), previewedDeallocate);
+
+        bytes32 allocationId = IMYTStrategy(strategy).adapterId();
+        uint256 allocationBefore = IVaultV2(vault).allocation(allocationId);
+
+        IAllocator(allocator).deallocateWithSwap(strategy, previewedDeallocate, _swapCallDataForWethOut(previewedDeallocate));
+        vm.stopPrank();
+
+        uint256 allocationAfter = IVaultV2(vault).allocation(allocationId);
+        uint256 realAssetsAfter = IMYTStrategy(strategy).realAssets();
+        uint256 leftoverWeth = IERC20(WETH).balanceOf(strategy);
+        uint256 maxResidual = (realAssetsBefore * TEST_RESIDUAL_TOLERANCE_BPS) / 10_000 + 1e18;
+        uint256 expectedRemaining = realAssetsBefore > previewedDeallocate ? realAssetsBefore - previewedDeallocate : 0;
+
+        assertLt(allocationAfter, allocationBefore, "allocator deallocation should reduce vault allocation");
+        assertLt(IWeETH(WEETH).balanceOf(strategy), weETHBalanceBefore, "weETH balance should decrease after deallocation");
+        assertLe(realAssetsAfter, expectedRemaining + maxResidual, "remaining strategy balance should stay near expected residual");
+        assertLe(leftoverWeth, maxResidual, "leftover idle WETH should stay within slippage tolerance");
     }
 
     function test_deallocate_direct_uses_instant_redeem_path_cant_redeem() public {
