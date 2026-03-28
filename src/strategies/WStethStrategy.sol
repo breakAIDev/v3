@@ -44,16 +44,6 @@ contract WstethStrategy is OraclePricedSwapStrategy {
         return amount;
     }
 
-    function _allocate(uint256 amount, bytes memory callData) internal override returns (uint256) {
-        _ensureIdleBalance(_asset(), amount);
-
-        uint256 minWstEthOut = _assetToPricedDown((amount * (10_000 - params.slippageBPS)) / 10_000);
-        if (minWstEthOut == 0) minWstEthOut = 1;
-
-        dexSwap(address(wsteth), _asset(), amount, minWstEthOut, callData);
-        return amount;
-    }
-
     receive() external payable {}
 
     function _isProtectedToken(address token) internal view override returns (bool) {
