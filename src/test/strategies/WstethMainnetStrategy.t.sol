@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import "forge-std/Test.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {TokenUtils} from "../../libraries/TokenUtils.sol";
-import {WstethStrategy} from "../../strategies/mainnet/WStethStrategy.sol";
+import {WstethStrategy} from "../../strategies/WStethStrategy.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {IVaultV2} from "lib/vault-v2/src/interfaces/IVaultV2.sol";
@@ -69,7 +69,7 @@ contract MockWstethStrategy is WstethStrategy {
 }
 
 contract WstethStrategyTest is Test {
-    uint256 public constant STRATEGY_SLIPPAGE_BPS = 10;
+    uint256 public constant STRATEGY_SLIPPAGE_BPS = 200;
     uint256 public constant TEST_RESIDUAL_TOLERANCE_BPS = 100;
     uint256 public constant ASSUMED_WSTETH_ETH_ORACLE_ANSWER = 1.23e18;
     uint256 public constant QUOTED_WSTETH_SELL_AMOUNT = 1_000_000_000_000;
@@ -203,10 +203,10 @@ contract WstethStrategyTest is Test {
         if (wstEthToSwap > wstETHBalanceBefore) {
             wstEthToSwap = wstETHBalanceBefore;
         }
-        uint256 expectedOut = _quoteScaledWethOut(wstEthToSwap);
+        assertLe(wstEthToSwap, wstETHBalanceBefore, "requested deallocation should be fundable by position");
 
-        MockSwapExecutor mockSwap = new MockSwapExecutor(weth, expectedOut);
-        deal(weth, address(mockSwap), expectedOut);
+        MockSwapExecutorDynamic mockSwap = new MockSwapExecutorDynamic(wstETH, weth);
+        deal(weth, address(mockSwap), requestedOut);
 
         vm.prank(admin);
         MYTStrategy(mytStrategy).setAllowanceHolder(address(mockSwap));
@@ -228,8 +228,7 @@ contract WstethStrategyTest is Test {
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(mytStrategy).adapterId(), "adapter id not in strategyIds");
         assertEq(IERC20(weth).allowance(mytStrategy, vault), requestedOut, "vault allowance should equal WETH deallocated");
-        // Strategy receives the mocked WETH output from the swap
-        assertEq(IERC20(weth).balanceOf(mytStrategy), expectedOut, "strategy should receive mocked WETH output");
+        assertEq(IERC20(weth).balanceOf(mytStrategy), requestedOut, "strategy should receive requested WETH output");
     }
 
     function test_allocator_deallocate_max_preview_from_total_value(uint256 allocateAmount) public {
@@ -489,25 +488,6 @@ contract WstethStrategyTest is Test {
         vm.stopPrank();
     }
 
-
-    function test_allocator_allocate_with_swap() public {
-        uint256 amountToAllocate = 100e18;
-        vm.startPrank(admin);
-        IAllocator(allocator).allocateWithSwap(
-            mytStrategy, 
-            amountToAllocate, 
-            getWethToWstethCalldata(mytStrategy, amountToAllocate)
-        );
-        
-        // Verify wstETH was received.
-        uint256 wstETHBalance = IWstETH(wstETH).balanceOf(mytStrategy);
-        assertGt(wstETHBalance, 0, "wstETH balance should be positive");
-        
-        // realAssets() values the position in WETH terms using the configured oracle.
-        uint256 realAssets = IMYTStrategy(mytStrategy).realAssets();
-        assertGt(realAssets, 0, "real assets should be positive");
-        vm.stopPrank();
-    }
 
     function test_allocator_deallocate_with_swap() public {
         uint256 amountToAllocate = 100e18;

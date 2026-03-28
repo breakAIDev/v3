@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {DeployWstethStrategiesScript} from "../../script/DeployWstethStrategies.s.sol";
 import {IMYTStrategy} from "../interfaces/IMYTStrategy.sol";
 import {AlchemistCurator} from "../AlchemistCurator.sol";
-import {WstethStrategy} from "../strategies/mainnet/WStethStrategy.sol";
+import {WstethStrategy} from "../strategies/WStethStrategy.sol";
 import {TestERC20} from "./mocks/TestERC20.sol";
 
 contract MockMYTForWstethDeployTest {

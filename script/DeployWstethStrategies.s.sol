@@ -5,7 +5,7 @@ import {Script} from "forge-std/Script.sol";
 import {IMYTStrategy} from "../src/interfaces/IMYTStrategy.sol";
 import {AlchemistCurator} from "../src/AlchemistCurator.sol";
 import {MYTStrategy} from "../src/MYTStrategy.sol";
-import {WstethStrategy} from "../src/strategies/mainnet/WStethStrategy.sol";
+import {WstethStrategy} from "../src/strategies/WStethStrategy.sol";
 
 /// @notice Reusable deploy helper for generic wstETH strategies.
 contract DeployWstethStrategiesScript is Script {

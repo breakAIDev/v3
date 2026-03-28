@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import {BaseStrategyTest} from "../BaseStrategyTest.sol";
-import {EtherfiEETHMYTStrategy, IWeETH} from "../../strategies/mainnet/EtherfiEETHStrategy.sol";
+import {EtherfiEETHMYTStrategy, IWeETH} from "../../strategies/EtherfiEETHStrategy.sol";
 import {IMYTStrategy} from "../../interfaces/IMYTStrategy.sol";
 import {MYTStrategy} from "../../MYTStrategy.sol";
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";

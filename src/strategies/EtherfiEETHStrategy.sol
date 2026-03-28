@@ -2,9 +2,9 @@
 pragma solidity 0.8.28;
 
 import {OraclePricedSwapStrategy} from "./OraclePricedSwapStrategy.sol";
-import {TokenUtils} from "../../libraries/TokenUtils.sol";
+import {TokenUtils} from "../libraries/TokenUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IWETH} from "../../interfaces/IWETH.sol";
+import {IWETH} from "../interfaces/IWETH.sol";
 
 interface IDepositAdapter {
     function depositWETHForWeETH(uint256 amount, address referral) external returns (uint256);
@@ -23,14 +23,18 @@ interface IWeETH {
 
 /**
  * @title EtherfiEETHMYTStrategy
- * @notice Allocates WETH into weETH via Ether.fi DepositAdapter and deallocates
- *         by directly swapping weETH -> WETH through 0x.
+ * @notice Allocates WETH into weETH via Ether.fi DepositAdapter and supports
+ *         deallocation via Ether.fi instant redemption.
+ *         instant redemption through the RedemptionManager.
+ *         Also supports dex swaps for both allocation and deallocation.
+ *
  */
 contract EtherfiEETHMYTStrategy is OraclePricedSwapStrategy {
     IDepositAdapter public immutable depositAdapter;
     IRedemptionManager public immutable redemptionManager;
     IWeETH public immutable weETH;
     IERC20 public immutable eETH;
+    // address used to request native ETH instead of an ERC20 token.
     address public constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
     constructor(
@@ -95,7 +99,6 @@ contract EtherfiEETHMYTStrategy is OraclePricedSwapStrategy {
         TokenUtils.safeApprove(_asset(), msg.sender, amount);
         return amount;
     }
-
 
     function _pricedToken() internal view override returns (address) {
         return address(weETH);
