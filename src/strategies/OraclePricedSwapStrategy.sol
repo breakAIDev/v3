@@ -28,8 +28,7 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
         uint256 minPricedOut = _assetToPricedDown((amount * (10_000 - params.slippageBPS)) / 10_000);
         if (minPricedOut == 0) minPricedOut = 1;
 
-        uint256 pricedReceived = dexSwap(_pricedToken(), _asset(), amount, minPricedOut, callData);
-        _afterAllocateSwap(pricedReceived);
+        dexSwap(_pricedToken(), _asset(), amount, minPricedOut, callData);
         return amount;
     }
 
@@ -60,8 +59,7 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
     }
 
     function _totalValue() internal view virtual override returns (uint256) {
-        uint256 pricedExposure = _positionToPriced(_positionBalance()) + _idlePricedAssets();
-        return _idleAssets() + _pricedToAsset(pricedExposure);
+        return _idleAssets() + _pricedToAsset(_positionBalance());
     }
 
     function _idleAssets() internal view virtual override returns (uint256) {
@@ -69,7 +67,7 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view virtual override returns (uint256) {
-        uint256 maxAsset = _pricedToAsset(_positionToPriced(_positionBalance()) + _idlePricedAssets());
+        uint256 maxAsset = _pricedToAsset(_positionBalance());
         uint256 fundable = amount <= maxAsset ? amount : maxAsset;
         return (fundable * (10_000 - params.slippageBPS)) / 10_000;
     }
@@ -99,10 +97,6 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
         return (x * y + denominator - 1) / denominator;
     }
 
-    function _idlePricedAssets() internal view virtual returns (uint256) {
-        return 0;
-    }
-
     function _asset() internal view returns (address) {
         return MYT.asset();
     }
@@ -110,10 +104,6 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
     function _pricedToken() internal view virtual returns (address);
 
     function _positionBalance() internal view virtual returns (uint256);
-
-    function _positionToPriced(uint256 positionAmount) internal view virtual returns (uint256);
-
-    function _afterAllocateSwap(uint256 pricedReceived) internal virtual;
 
     function _preparePricedForSwap(uint256 maxPricedIn) internal virtual returns (uint256);
 }

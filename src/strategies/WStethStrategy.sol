@@ -58,16 +58,6 @@ contract WstethStrategy is OraclePricedSwapStrategy {
         return wsteth.balanceOf(address(this));
     }
 
-    function _positionToPriced(uint256 positionAmount) internal view override returns (uint256) {
-        return positionAmount;
-    }
-
-    function _idlePricedAssets() internal view override returns (uint256) {
-        return 0;
-    }
-
-    function _afterAllocateSwap(uint256) internal override {}
-
     function _preparePricedForSwap(uint256 maxPricedIn) internal view override returns (uint256) {
         uint256 wstETHBalance = wsteth.balanceOf(address(this));
         return maxPricedIn > wstETHBalance ? wstETHBalance : maxPricedIn;
