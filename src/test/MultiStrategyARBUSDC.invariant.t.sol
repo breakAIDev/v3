@@ -375,6 +375,33 @@ contract MultiStrategyARBUSDCCHandler is Test {
     function getStrategyCount() external view returns (uint256) {
         return strategies.length;
     }
+    
+    /// @notice Returns the net allocated amount from ghost variables
+    function ghost_netAllocated() external view returns (uint256) {
+        if (ghost_totalAllocated >= ghost_totalDeallocated) {
+            return ghost_totalAllocated - ghost_totalDeallocated;
+        }
+        return 0;
+    }
+    
+    /// @notice Returns the sum of all ghost strategy allocations
+    function ghost_sumStrategyAllocations() external view returns (uint256) {
+        uint256 sum = 0;
+        for (uint256 i = 0; i < strategies.length; i++) {
+            sum += ghost_strategyAllocations[strategies[i]];
+        }
+        return sum;
+    }
+    
+    /// @notice Returns the sum of actual vault allocations
+    function vault_totalAllocations() external view returns (uint256) {
+        uint256 sum = 0;
+        for (uint256 i = 0; i < strategies.length; i++) {
+            bytes32 allocationId = IMYTStrategy(strategies[i]).adapterId();
+            sum += vault.allocation(allocationId);
+        }
+        return sum;
+    }
 
     function getCalls(bytes4 selector) external view returns (uint256) {
         return calls[selector];
@@ -417,7 +444,7 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
     // Arbitrum addresses
     address public constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address public constant AAVE_POOL_ARB = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
-    address public constant AUSDC_ARB = 0x625E7708f30cA75bfd92586e17077590C60eb4cD;
+    address public constant AUSDC_ARB = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5;
     address public constant AAVE_REWARDS_CONTROLLER = 0x929EC64c34a17401F460460D4B9390518E5B473e;
     address public constant ARB = 0x912CE59144191C1204E64559FE8253a0e49E6548;
     address public constant EULER_USDC_VAULT_ARB = 0x0a1eCC5Fe8C9be3C809844fcBe615B46A869b899;
@@ -736,6 +763,48 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
         }
     }
     
+    /// @notice Invariant: Ghost allocations match actual vault allocations per strategy
+    function invariant_ghostAllocationsMatchVault() public view {
+        for (uint256 i = 0; i < strategies.length; i++) {
+            bytes32 allocationId = IMYTStrategy(strategies[i]).adapterId();
+            uint256 actualAllocation = vault.allocation(allocationId);
+            uint256 ghostAllocation = handler.ghost_strategyAllocations(strategies[i]);
+            
+            // Allow 5% tolerance for yield/rounding differences
+            if (actualAllocation > 1e6) {
+                uint256 minExpected = actualAllocation * 95 / 100;
+                uint256 maxExpected = actualAllocation * 105 / 100;
+                assertGe(ghostAllocation, minExpected, string(abi.encodePacked("Ghost allocation below actual for ", handler.strategyNames(strategies[i]))));
+                assertLe(ghostAllocation, maxExpected, string(abi.encodePacked("Ghost allocation above actual for ", handler.strategyNames(strategies[i]))));
+            }
+        }
+    }
+    
+    /// @notice Invariant: Net ghost allocations match sum of vault allocations
+    function invariant_netAllocationsConsistent() public view {
+        uint256 ghostNet = handler.ghost_netAllocated();
+        uint256 vaultTotal = handler.vault_totalAllocations();
+        
+        // Allow 10% tolerance for yield accumulation and rounding
+        if (vaultTotal > 1e6) {
+            assertGe(ghostNet, vaultTotal * 90 / 100, "Ghost net allocations below vault total");
+            assertLe(ghostNet, vaultTotal * 110 / 100, "Ghost net allocations above vault total");
+        }
+    }
+    
+    /// @notice Invariant: Ghost sum of strategy allocations is internally consistent
+    function invariant_ghostSumConsistent() public view {
+        uint256 ghostSum = handler.ghost_sumStrategyAllocations();
+        uint256 ghostNet = handler.ghost_netAllocated();
+        
+        // ghost_sumStrategyAllocations should equal ghost_netAllocated
+        // Allow small tolerance for rounding
+        if (ghostNet > 1e6) {
+            assertGe(ghostSum, ghostNet * 95 / 100, "Ghost sum inconsistent with net");
+            assertLe(ghostSum, ghostNet * 105 / 100, "Ghost sum inconsistent with net");
+        }
+    }
+
     function invariant_noStrategyDominance() public view {
         uint256 totalAllocations = 0;
         uint256[] memory allocations = new uint256[](strategies.length);

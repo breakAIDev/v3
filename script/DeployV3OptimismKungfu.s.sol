@@ -39,7 +39,7 @@ contract DeployV3OptimismKungfuScript is Script {
     address immutable self;
 
     // Asset addresses
-    address public aUSDC = 0x625E7708f30cA75bfd92586e17077590C60eb4cD;
+    address public aUSDC = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5;
     address public wethOP = 0x4200000000000000000000000000000000000006;
     address public alUSD = 0xb2c22A9fb4FC02eb9D1d337655Ce079a04a526C7;
     address public alETH = 0x3E29D3A9316dAB217754d13b28646B76607c5f04;

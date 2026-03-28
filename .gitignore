@@ -21,3 +21,4 @@ docs/
 # Dotenv file
 .env
 .aider*
+.secret
