@@ -13,6 +13,11 @@ import "forge-std/console.sol";
 /// @notice Simple base tests shared by strategy suites.
 /// @dev Add deterministic or straightforward tests here; keep assertions readable and strategy-agnostic.
 abstract contract BaseStrategySimple is StrategyOps {
+    function _assertDeallocateChange(int256 change, uint256 amountToDeallocate) internal view virtual {
+        // Default expectation: deallocate change tracks requested amount.
+        assertApproxEqRel(change, -int256(amountToDeallocate), 1e16); // 1% slippage tolerance
+    }
+
     function test_strategy_allocate_reverts_due_to_zero_amount() public {
         uint256 amountToAllocate = 0;
         bytes memory params = getVaultParams();
@@ -44,8 +49,9 @@ abstract contract BaseStrategySimple is StrategyOps {
         IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
         uint256 initialRealAssets = IMYTStrategy(strategy).realAssets();
         require(initialRealAssets > 0, "Initial real assets is 0");
+        bytes memory deallocParams = getDeallocateVaultParams(amountToDeallocate);
         vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, 1, 0));
-        IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
+        IMYTStrategy(strategy).deallocate(deallocParams, amountToDeallocate, "", address(vault));
         vm.stopPrank();
     }
 
@@ -53,12 +59,12 @@ abstract contract BaseStrategySimple is StrategyOps {
         (uint256 minAlloc, uint256 maxAlloc) = _getAllocationBounds();
         amountToAllocate = bound(amountToAllocate, minAlloc, maxAlloc);
         console.log(minAlloc, maxAlloc);
-        bytes memory params = getVaultParams();
+        bytes memory allocParams = getVaultParams();
         vm.startPrank(vault);
         // only allocate if we are whithin caps
         if(amountToAllocate > 0) {
                 deal(testConfig.vaultAsset, strategy, amountToAllocate);
-                IMYTStrategy(strategy).allocate(params, amountToAllocate, "", address(vault));
+                IMYTStrategy(strategy).allocate(allocParams, amountToAllocate, "", address(vault));
         } else {
             console.log("Allocation was skipped due to caps!");
         }
@@ -75,13 +81,13 @@ abstract contract BaseStrategySimple is StrategyOps {
         bytes32 adapterId = IMYTStrategy(strategy).adapterId();
         vm.mockCall(vault, abi.encodeWithSelector(IVaultV2.allocation.selector, adapterId), abi.encode(initialRealAssets));
 
-        (bytes32[] memory strategyIds, int256 change) =
-            IMYTStrategy(strategy).deallocate(params, amountToDeallocate, "", address(vault));
+        (bytes32[] memory strategyIds, int256 change) = IMYTStrategy(strategy).deallocate(
+            getDeallocateVaultParams(amountToDeallocate), amountToDeallocate, "", address(vault)
+        );
 
         vm.clearMockedCalls();
 
-        // FIXME aave observed slippage is ~13%
-        assertApproxEqRel(change, -int256(amountToDeallocate), 1e16); // 1% slippage tolerance
+        _assertDeallocateChange(change, amountToDeallocate);
 
         assertGt(strategyIds.length, 0, "strategyIds is empty");
         assertEq(strategyIds[0], IMYTStrategy(strategy).adapterId(), "adapter id not in strategyIds");
