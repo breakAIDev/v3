@@ -51,7 +51,7 @@ contract WstethStrategy is OraclePricedSwapStrategy {
         return token == MYT.asset() || token == address(wsteth);
     }
 
-    function _pricedToken() internal view override returns (address) {
+    function _oracleToken() internal view override returns (address) {
         return address(wsteth);
     }
 
@@ -59,8 +59,8 @@ contract WstethStrategy is OraclePricedSwapStrategy {
         return wsteth.balanceOf(address(this));
     }
 
-    function _preparePricedForSwap(uint256 maxPricedIn) internal view override returns (uint256) {
+    function _prepareOracleTokenForSwap(uint256 maxOracleTokenIn) internal view override returns (uint256) {
         uint256 wstETHBalance = wsteth.balanceOf(address(this));
-        return maxPricedIn > wstETHBalance ? wstETHBalance : maxPricedIn;
+        return maxOracleTokenIn > wstETHBalance ? wstETHBalance : maxOracleTokenIn;
     }
 }

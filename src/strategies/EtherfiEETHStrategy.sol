@@ -101,7 +101,7 @@ contract EtherfiEETHMYTStrategy is OraclePricedSwapStrategy {
         return amount;
     }
 
-    function _pricedToken() internal view override returns (address) {
+    function _oracleToken() internal view override returns (address) {
         return address(weETH);
     }
 
@@ -109,9 +109,9 @@ contract EtherfiEETHMYTStrategy is OraclePricedSwapStrategy {
         return weETH.balanceOf(address(this));
     }
 
-    function _preparePricedForSwap(uint256 maxPricedIn) internal override returns (uint256) {
+    function _prepareOracleTokenForSwap(uint256 maxOracleTokenIn) internal override returns (uint256) {
         uint256 weETHBalance = weETH.balanceOf(address(this));
-        return maxPricedIn > weETHBalance ? weETHBalance : maxPricedIn;
+        return maxOracleTokenIn > weETHBalance ? weETHBalance : maxOracleTokenIn;
     }
 
     receive() external payable {}
