@@ -138,16 +138,23 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
         return (x * y + denominator - 1) / denominator;
     }
 
+    /// @notice Returns the vault asset managed by the parent MYT.
     function _asset() internal view returns (address) {
         return MYT.asset();
     }
 
+    /// @notice Updates the minimum oracle-token output threshold enforced during swap-based allocations.
+    /// @param newMinAllocationOutBps The minimum output floor, expressed in basis points of the asset amount in.
     function setMinAllocationOutBps(uint256 newMinAllocationOutBps) public onlyOwner {
         require(newMinAllocationOutBps <= 10_000, "Invalid min allocation out bps");
         minAllocationOutBps = newMinAllocationOutBps;
         emit MinAllocationOutBpsUpdated(newMinAllocationOutBps);
     }
 
+    /// @notice Validates the result of an allocation swap before any post-swap processing occurs.
+    /// @dev Child strategies can override to add stricter checks, but should usually call `super`.
+    /// @param assetAmountIn The vault asset amount spent in the swap.
+    /// @param oracleTokenReceived The amount of oracle token received from the swap.
     function _allocationSwapGuard(uint256 assetAmountIn, uint256, uint256 oracleTokenReceived) internal view virtual {
         if (minAllocationOutBps == 0) return;
 
@@ -155,14 +162,27 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
         if (oracleTokenReceived < minAllocationOut) revert InvalidAmount(minAllocationOut, oracleTokenReceived);
     }
 
+    /// @notice Optional hook for child strategies to transform or stake the received oracle token after allocation.
+    /// @param oracleTokenReceived The oracle token amount returned by the allocation swap.
     function _afterAllocationSwap(uint256) internal virtual {}
 
+    /// @notice Returns the token whose amount is priced by the oracle and used in swap sizing math.
     function _oracleToken() internal view virtual returns (address);
 
+    /// @notice Returns the strategy's deployed position balance in units consumable by the oracle pricing math.
+    /// @dev This may be the raw oracle token balance, or an oracle-token-equivalent amount derived from wrapped shares.
     function _positionBalance() internal view virtual returns (uint256);
 
+    /// @notice Prepares the oracle token amount that will be sold in a one-hop swap deallocation.
+    /// @param maxOracleTokenIn The maximum oracle token amount permitted by oracle and slippage math.
     function _prepareOracleTokenForSwap(uint256 maxOracleTokenIn) internal virtual returns (uint256);
 
+    /// @notice Prepares an intermediate token for unwrap-and-swap deallocation flows.
+    /// @dev Child strategies should unwrap or redeem into the sell token and return the token plus amount to swap.
+    /// @param maxOracleTokenIn The maximum oracle-token-equivalent amount permitted by oracle and slippage math.
+    /// @param minIntermediateOutAmount The minimum intermediate token amount the caller expects to produce before swapping.
+    /// @return sellToken The intermediate token that should be sold into the vault asset.
+    /// @return sellAmount The amount of the intermediate token available to sell.
     function _prepareIntermediateForSwap(uint256, uint256)
         internal
         virtual
