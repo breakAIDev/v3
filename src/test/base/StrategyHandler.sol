@@ -18,6 +18,7 @@ contract StrategyHandler is Test, StrategyRevertUtils {
     address public allocator;
     address public asset;
     address public admin;
+    uint256 public minAllocateAmount;
 
     // Ghost variables to track cumulative state changes
     uint256 public ghost_totalAllocated;
@@ -27,16 +28,22 @@ contract StrategyHandler is Test, StrategyRevertUtils {
     // Call counters for coverage analysis
     mapping(bytes4 => uint256) public calls;
 
-    // Minimum allocation amount to satisfy underlying protocol requirements (e.g., Aave V3 min supply)
-    uint256 public constant MIN_ALLOCATE_AMOUNT = 1e15; // 0.001 ETH/token
     address public limitProvider;
 
-    constructor(address _vault, address _strategy, address _allocator, address _admin, address _limitProvider) {
+    constructor(
+        address _vault,
+        address _strategy,
+        address _allocator,
+        address _admin,
+        address _limitProvider,
+        uint256 _minAllocateAmount
+    ) {
         vault = IVaultV2(_vault);
         strategy = IMYTStrategy(_strategy);
         allocator = _allocator;
         admin = _admin;
         limitProvider = _limitProvider;
+        minAllocateAmount = _minAllocateAmount;
         asset = vault.asset();
         ghost_initialVaultAssets = vault.totalAssets();
     }
@@ -72,9 +79,9 @@ contract StrategyHandler is Test, StrategyRevertUtils {
         // The effective limit is the minimum of the two caps
         uint256 effectiveLimit = absoluteRemaining < relativeRemaining ? absoluteRemaining : relativeRemaining;
 
-        if (effectiveLimit < MIN_ALLOCATE_AMOUNT) return;
+        if (effectiveLimit < minAllocateAmount) return;
 
-        amount = bound(amount, MIN_ALLOCATE_AMOUNT, effectiveLimit);
+        amount = bound(amount, minAllocateAmount, effectiveLimit);
         deal(IVaultV2(vault).asset(), address(vault), amount);
 
         vm.startPrank(admin);

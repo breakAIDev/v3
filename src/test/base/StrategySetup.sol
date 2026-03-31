@@ -105,7 +105,7 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
         vm.makePersistent(strategy);
 
         // Setup Invariant Handler
-        handler = new StrategyHandler(vault, strategy, allocator, admin, address(this));
+        handler = new StrategyHandler(vault, strategy, allocator, admin, address(this), _getMinAllocateAmount());
         targetContract(address(handler));
 
         // Target specific functions in the handler for invariant fuzzing
@@ -202,7 +202,7 @@ abstract contract StrategySetup is Test, IRevertAllowlistProvider {
     }
 
     /// @dev Helper to get decimals-aware minimum allocation amount (0.001 tokens).
-    function _getMinAllocateAmount() internal view returns (uint256) {
+    function _getMinAllocateAmount() internal view virtual returns (uint256) {
         return 10 ** (testConfig.decimals - MIN_ALLOCATE_AMOUNT_SCALAR);
     }
 

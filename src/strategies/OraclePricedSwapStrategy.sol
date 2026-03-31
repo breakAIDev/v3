@@ -164,7 +164,7 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
 
     /// @notice Optional hook for child strategies to transform or stake the received oracle token after allocation.
     /// @param oracleTokenReceived The oracle token amount returned by the allocation swap.
-    function _afterAllocationSwap(uint256) internal virtual {}
+    function _afterAllocationSwap(uint256 oracleTokenReceived) internal virtual {}
 
     /// @notice Returns the token whose amount is priced by the oracle and used in swap sizing math.
     function _oracleToken() internal view virtual returns (address);
@@ -183,7 +183,7 @@ abstract contract OraclePricedSwapStrategy is MYTStrategy {
     /// @param minIntermediateOutAmount The minimum intermediate token amount the caller expects to produce before swapping.
     /// @return sellToken The intermediate token that should be sold into the vault asset.
     /// @return sellAmount The amount of the intermediate token available to sell.
-    function _prepareIntermediateForSwap(uint256, uint256)
+    function _prepareIntermediateForSwap(uint256 maxOracleTokenIn, uint256 minIntermediateOutAmount)
         internal
         virtual
         returns (address sellToken, uint256 sellAmount)
