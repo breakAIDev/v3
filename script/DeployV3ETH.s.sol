@@ -294,8 +294,8 @@ contract DeployV3ETHScript is Script {
         ITransmuter.TransmuterInitializationParams memory transmuterParams = ITransmuter.TransmuterInitializationParams({
             syntheticToken: alAsset,
             feeReceiver: protocolFeeReceiver,
-            timeToTransmute: 12 weeks,
-            transmutationFee: 0,
+            timeToTransmute: 3 days,
+            transmutationFee: 100,
             exitFee: 50, // 0.5%
             graphSize: 365 days
         });
