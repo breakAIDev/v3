@@ -122,14 +122,27 @@ contract SiUSDStrategy is MYTStrategy {
     }
 
     function _previewAdjustedWithdraw(uint256 amount) internal view override returns (uint256) {
-        uint256 iUsdNeeded = mintController.assetToReceipt(amount);
+        uint256 idleBalance = _idleAssets();
+        if (idleBalance >= amount) return amount;
+
+        uint256 shortfall = amount - idleBalance;
+        uint256 iUsdNeeded = mintController.assetToReceipt(shortfall);
         uint256 sharesToUnstake = siUSD.previewWithdraw(iUsdNeeded);
-        uint256 iUsdRedeemable = siUSD.convertToAssets(sharesToUnstake);
-        uint256 expectedAssets = redeemController.receiptToAsset(iUsdRedeemable);
-        if (expectedAssets == 0) return 0;
+        uint256 siUsdBalance = siUSD.balanceOf(address(this));
+        if (sharesToUnstake > siUsdBalance) sharesToUnstake = siUsdBalance;
+        if (sharesToUnstake == 0) return idleBalance;
+
+        uint256 iUsdRedeemable =
+            TokenUtils.safeBalanceOf(address(iUSD), address(this)) + siUSD.convertToAssets(sharesToUnstake);
+        uint256 iUsdToRedeem = iUsdNeeded > iUsdRedeemable ? iUsdRedeemable : iUsdNeeded;
+        if (iUsdToRedeem == 0) return idleBalance;
+
+        uint256 expectedAssets = redeemController.receiptToAsset(iUsdToRedeem);
+        if (expectedAssets == 0) return idleBalance;
 
         uint256 adjustedAssets = expectedAssets - (expectedAssets * params.slippageBPS / 10_000);
-        return adjustedAssets;
+        uint256 total = idleBalance + adjustedAssets;
+        return total > amount ? amount : total;
     }
 
     function _isProtectedToken(address token) internal view override returns (bool) {
