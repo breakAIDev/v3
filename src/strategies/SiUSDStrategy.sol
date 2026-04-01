@@ -30,8 +30,6 @@ interface IInfiniFiGateway {
  * @notice Allocates USDC into staked InfiniFi siUSD shares and deallocates back to USDC.
  */
 contract SiUSDStrategy is MYTStrategy {
-    // Small receipt-token cushion to absorb controller rounding on deallocation previews.
-    uint256 internal constant REDEEM_DUST_BUFFER = 1;
 
     IERC20 public immutable usdc;
     IERC20 public immutable iUSD;
