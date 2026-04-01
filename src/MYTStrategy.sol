@@ -37,8 +37,6 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     /// bypassed without reverts (to keep external allocators from reverting).
     bool public killSwitch;
 
-    mapping(address => bool) public whitelistedAllocators;
-
     modifier onlyVault() {
         require(msg.sender == address(MYT), "PD");
         _;
@@ -152,8 +150,7 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     }
 
     /// @notice call this function to handle strategies with withdrawal queue NFT
-    function claimWithdrawalQueue(uint256 positionId) public virtual returns (uint256 ret) {
-        require(whitelistedAllocators[msg.sender], "PD");
+    function claimWithdrawalQueue(uint256 positionId) public virtual onlyOwner returns (uint256 ret) {
         return _claimWithdrawalQueue(positionId);
     }
 
@@ -198,11 +195,6 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     function setAdditionalIncentives(bool newValue) public onlyOwner {
         params.additionalIncentives = newValue;
         emit IncentivesUpdated(newValue);
-    }
-
-    function setWhitelistedAllocator(address to, bool val) public onlyOwner {
-        require(to != address(0));
-        whitelistedAllocators[to] = val;
     }
 
     /// @notice enter/exit emergency mode for this strategy

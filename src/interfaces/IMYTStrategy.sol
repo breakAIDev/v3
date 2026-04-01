@@ -89,8 +89,6 @@ interface IMYTStrategy {
 
     function setAdditionalIncentives(bool newValue) external;
 
-    function setWhitelistedAllocator(address to, bool val) external;
-
     /// @notice enter/exit emergency mode for this strategy
     function setKillSwitch(bool val) external;
 

@@ -89,8 +89,6 @@ contract MYTStrategyTest is Test {
     address admin = makeAddr("admin");
     address operator = makeAddr("operator");
     address user = makeAddr("user");
-    address whitelistedAllocator = makeAddr("whitelistedAllocator");
-    address nonWhitelisted = makeAddr("nonWhitelisted");
     address alOwner = makeAddr("alOwner");
     address proxyOwner = makeAddr("proxyOwner");
 
@@ -229,31 +227,8 @@ contract MYTStrategyTest is Test {
 
         // Whitelist allocator for strategy
         vm.prank(admin);
-        strategy.setWhitelistedAllocator(address(allocator), true);
-    }
-/* 
-    // Test that only whitelisted allocators can call allocate
-    function test_onlyWhitelistedAllocatorCanAllocate() public {
-        // Non-whitelisted address should fail
-        vm.expectRevert(bytes("PD"));
-        strategy.allocate(getVaultParams(), 100e18, bytes4(0x00000000), address(allocator));
-
-        // Whitelisted allocator should succeed
-        vm.prank(address(vault));
-        strategy.allocate(getVaultParams(), 100e18, bytes4(0x00000000), address(allocator));
     }
 
-    // Test that only whitelisted allocators can call deallocate
-    function test_onlyWhitelistedAllocatorCanDeallocate() public {
-        // Non-whitelisted address should fail
-        vm.expectRevert(bytes("PD"));
-        strategy.deallocate(getVaultParams(), 100e18, bytes4(0x00000000), address(allocator));
-
-        // Vault should succeed
-        vm.prank(address(vault));
-        strategy.deallocate(getVaultParams(), 50e18, bytes4(0x00000000), address(allocator));
-    }
- */
     // Test that allocator can allocate and deallocate
 /*     function test_allocatorCanAllocateAndDeallocate() public {
         // Vault allocates
