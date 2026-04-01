@@ -146,7 +146,7 @@ contract AlchemistRouterTest is Test {
         setUpMYT();
         deployCoreContracts(18);
 
-        router = new AlchemistRouter();
+        router = new AlchemistRouter(address(alchemist));
         user = makeAddr("user");
         underlying = address(vault.asset());
         debtToken = address(alToken);
@@ -324,7 +324,7 @@ contract AlchemistRouterTest is Test {
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
 
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -336,7 +336,7 @@ contract AlchemistRouterTest is Test {
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
 
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -351,7 +351,7 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT);
 
         vm.prank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, 0, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, 0, 0, _deadline());
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
     }
@@ -360,7 +360,7 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT);
 
         vm.prank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, BORROW_AMOUNT, 0, _deadline());
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
         assertGe(IERC20(debtToken).balanceOf(user), BORROW_AMOUNT, "Debt tokens not received");
@@ -376,9 +376,9 @@ contract AlchemistRouterTest is Test {
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
 
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
-        router.depositUnderlying(address(alchemist), tokenId, AMOUNT, 0, 0, _deadline());
+        router.depositUnderlying(tokenId, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -390,11 +390,11 @@ contract AlchemistRouterTest is Test {
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
 
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         alchemist.approveMint(tokenId, address(router), BORROW_AMOUNT);
 
-        router.depositUnderlying(address(alchemist), tokenId, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        router.depositUnderlying(tokenId, AMOUNT, BORROW_AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -409,9 +409,9 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT * 2);
 
         vm.startPrank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, 0, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, 0, 0, _deadline());
 
-        router.depositETH{value: AMOUNT}(address(alchemist), tokenId, 0, 0, _deadline());
+        router.depositETH{value: AMOUNT}(tokenId, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -421,11 +421,11 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT * 2);
 
         vm.startPrank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, 0, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, 0, 0, _deadline());
 
         alchemist.approveMint(tokenId, address(router), BORROW_AMOUNT);
 
-        router.depositETH{value: AMOUNT}(address(alchemist), tokenId, BORROW_AMOUNT, 0, _deadline());
+        router.depositETH{value: AMOUNT}(tokenId, BORROW_AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -443,7 +443,7 @@ contract AlchemistRouterTest is Test {
         uint256 shares = IVaultV2(mytVault).deposit(AMOUNT, user);
 
         IERC20(mytVault).approve(address(router), shares);
-        uint256 tokenId = router.depositMYT(address(alchemist), 0, shares, 0, _deadline());
+        uint256 tokenId = router.depositMYT(0, shares, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -456,7 +456,7 @@ contract AlchemistRouterTest is Test {
         uint256 shares = IVaultV2(mytVault).deposit(AMOUNT, user);
 
         IERC20(mytVault).approve(address(router), shares);
-        uint256 tokenId = router.depositMYT(address(alchemist), 0, shares, BORROW_AMOUNT, _deadline());
+        uint256 tokenId = router.depositMYT(0, shares, BORROW_AMOUNT, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -471,13 +471,13 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT * 2);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         IERC20(underlying).approve(mytVault, AMOUNT);
         uint256 shares = IVaultV2(mytVault).deposit(AMOUNT, user);
 
         IERC20(mytVault).approve(address(router), shares);
-        router.depositMYT(address(alchemist), tokenId, shares, 0, _deadline());
+        router.depositMYT(tokenId, shares, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -487,7 +487,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT * 2);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         IERC20(underlying).approve(mytVault, AMOUNT);
         uint256 shares = IVaultV2(mytVault).deposit(AMOUNT, user);
@@ -495,7 +495,7 @@ contract AlchemistRouterTest is Test {
         IERC20(mytVault).approve(address(router), shares);
         alchemist.approveMint(tokenId, address(router), BORROW_AMOUNT);
 
-        router.depositMYT(address(alchemist), tokenId, shares, BORROW_AMOUNT, _deadline());
+        router.depositMYT(tokenId, shares, BORROW_AMOUNT, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), user, "NFT not owned by user");
@@ -506,7 +506,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         address attacker = makeAddr("attacker");
@@ -517,7 +517,7 @@ contract AlchemistRouterTest is Test {
         IERC20(mytVault).approve(address(router), shares);
 
         vm.expectRevert("Not position owner");
-        router.depositMYT(address(alchemist), tokenId, shares, 0, _deadline());
+        router.depositMYT(tokenId, shares, 0, _deadline());
         vm.stopPrank();
     }
 
@@ -529,7 +529,7 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT);
 
         vm.prank(user);
-        uint256 shares = router.depositETHToVaultOnly{value: AMOUNT}(address(alchemist), 0, _deadline());
+        uint256 shares = router.depositETHToVaultOnly{value: AMOUNT}(0, _deadline());
 
         assertGt(shares, 0, "No shares returned");
         assertGt(IERC20(mytVault).balanceOf(user), 0, "User has no MYT shares");
@@ -542,25 +542,25 @@ contract AlchemistRouterTest is Test {
     function test_revert_expired() public {
         vm.prank(user);
         vm.expectRevert("Expired");
-        router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, block.timestamp - 1);
+        router.depositUnderlying(0, AMOUNT, 0, 0, block.timestamp - 1);
     }
 
     function test_revert_depositETH_noValue() public {
         vm.prank(user);
         vm.expectRevert("No ETH sent");
-        router.depositETH{value: 0}(address(alchemist), 0, 0, 0, _deadline());
+        router.depositETH{value: 0}(0, 0, 0, _deadline());
     }
 
     function test_revert_depositETHToExisting_noValue() public {
         vm.prank(user);
         vm.expectRevert("No ETH sent");
-        router.depositETH{value: 0}(address(alchemist), 1, 0, 0, _deadline());
+        router.depositETH{value: 0}(1, 0, 0, _deadline());
     }
 
     function test_revert_depositETHToVaultOnly_noValue() public {
         vm.prank(user);
         vm.expectRevert("No ETH sent");
-        router.depositETHToVaultOnly{value: 0}(address(alchemist), 0, _deadline());
+        router.depositETHToVaultOnly{value: 0}(0, _deadline());
     }
 
     function test_revert_slippage() public {
@@ -570,7 +570,7 @@ contract AlchemistRouterTest is Test {
         IERC20(underlying).approve(address(router), AMOUNT);
 
         vm.expectRevert("Slippage");
-        router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, type(uint256).max, _deadline());
+        router.depositUnderlying(0, AMOUNT, 0, type(uint256).max, _deadline());
         vm.stopPrank();
     }
 
@@ -586,7 +586,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         address attacker = makeAddr("attacker");
@@ -595,7 +595,7 @@ contract AlchemistRouterTest is Test {
         IERC20(underlying).approve(address(router), AMOUNT);
 
         vm.expectRevert("Not position owner");
-        router.depositUnderlying(address(alchemist), tokenId, AMOUNT, 0, 0, _deadline());
+        router.depositUnderlying(tokenId, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
     }
 
@@ -608,7 +608,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "Underlying stuck");
@@ -621,7 +621,7 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT);
 
         vm.prank(user);
-        router.depositETH{value: AMOUNT}(address(alchemist), 0, 0, 0, _deadline());
+        router.depositETH{value: AMOUNT}(0, 0, 0, _deadline());
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "WETH stuck");
         assertEq(IERC20(mytVault).balanceOf(address(router)), 0, "MYT stuck");
@@ -635,8 +635,8 @@ contract AlchemistRouterTest is Test {
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
 
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
-        router.depositUnderlying(address(alchemist), tokenId, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
+        router.depositUnderlying(tokenId, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "Underlying stuck");
@@ -653,7 +653,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).allowance(address(router), mytVault), 0, "Underlying to MYT approval not cleared");
@@ -670,8 +670,8 @@ contract AlchemistRouterTest is Test {
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
 
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
-        router.depositUnderlying(address(alchemist), tokenId, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
+        router.depositUnderlying(tokenId, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).allowance(address(router), mytVault), 0, "Underlying to MYT approval not cleared");
@@ -691,14 +691,14 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
 
         uint256 debtBefore = IERC20(debtToken).balanceOf(user);
         assertGe(debtBefore, BORROW_AMOUNT, "No debt tokens minted");
 
         vm.roll(block.number + 1);
 
-        router.repayUnderlying(address(alchemist), tokenId, AMOUNT, 0, _deadline());
+        router.repayUnderlying(tokenId, AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "Underlying stuck");
@@ -713,13 +713,13 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, smallBorrow, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, smallBorrow, 0, _deadline());
 
         uint256 mytBefore = IERC20(mytVault).balanceOf(user);
 
         vm.roll(block.number + 1);
 
-        router.repayUnderlying(address(alchemist), tokenId, AMOUNT, 0, _deadline());
+        router.repayUnderlying(tokenId, AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         uint256 mytAfter = IERC20(mytVault).balanceOf(user);
@@ -735,11 +735,11 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT * 2);
 
         vm.startPrank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, BORROW_AMOUNT, 0, _deadline());
 
         vm.roll(block.number + 1);
 
-        router.repayETH{value: AMOUNT}(address(alchemist), tokenId, 0, _deadline());
+        router.repayETH{value: AMOUNT}(tokenId, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "WETH stuck");
@@ -752,13 +752,13 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT * 2);
 
         vm.startPrank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, smallBorrow, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, smallBorrow, 0, _deadline());
 
         uint256 mytBefore = IERC20(mytVault).balanceOf(user);
 
         vm.roll(block.number + 1);
 
-        router.repayETH{value: AMOUNT}(address(alchemist), tokenId, 0, _deadline());
+        router.repayETH{value: AMOUNT}(tokenId, 0, _deadline());
         vm.stopPrank();
 
         uint256 mytAfter = IERC20(mytVault).balanceOf(user);
@@ -774,7 +774,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        router.depositUnderlying(address(alchemist), 0, AMOUNT, debtAmount, 0, _deadline());
+        router.depositUnderlying(0, AMOUNT, debtAmount, 0, _deadline());
 
         IERC20(debtToken).approve(address(transmuter), debtAmount);
         transmuter.createRedemption(debtAmount, user);
@@ -793,7 +793,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC721(address(transmuter)).approve(address(router), positionId);
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), false);
+        router.claimRedemption(positionId, 0, _deadline(), false);
         vm.stopPrank();
 
         assertGt(IERC20(underlying).balanceOf(user), underlyingBefore, "No underlying received");
@@ -812,7 +812,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC721(address(transmuter)).approve(address(router), positionId);
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), false);
+        router.claimRedemption(positionId, 0, _deadline(), false);
         vm.stopPrank();
 
         assertGt(IERC20(underlying).balanceOf(user), underlyingBefore, "No underlying received");
@@ -831,7 +831,7 @@ contract AlchemistRouterTest is Test {
         vm.deal(ethUser, AMOUNT);
 
         vm.startPrank(ethUser);
-        router.depositETH{value: AMOUNT}(address(alchemist), 0, BORROW_AMOUNT, 0, _deadline());
+        router.depositETH{value: AMOUNT}(0, BORROW_AMOUNT, 0, _deadline());
 
         IERC20(debtToken).approve(address(transmuter), BORROW_AMOUNT);
         transmuter.createRedemption(BORROW_AMOUNT, ethUser);
@@ -846,7 +846,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(ethUser);
         IERC721(address(transmuter)).approve(address(router), positionId);
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), true);
+        router.claimRedemption(positionId, 0, _deadline(), true);
         vm.stopPrank();
 
         assertGt(ethUser.balance, ethBefore, "No ETH received");
@@ -864,7 +864,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 victimTokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 victimTokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         alchemist.approveMint(victimTokenId, address(router), BORROW_AMOUNT);
         vm.stopPrank();
 
@@ -874,14 +874,14 @@ contract AlchemistRouterTest is Test {
         IERC20(underlying).approve(address(router), 1 ether);
 
         vm.expectRevert("Not position owner");
-        router.depositUnderlying(address(alchemist), victimTokenId, 1 ether, BORROW_AMOUNT, 0, _deadline());
+        router.depositUnderlying(victimTokenId, 1 ether, BORROW_AMOUNT, 0, _deadline());
         vm.stopPrank();
     }
 
     function test_revert_mintFromTheft_ETH() public {
         vm.deal(user, AMOUNT);
         vm.startPrank(user);
-        uint256 victimTokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, 0, 0, _deadline());
+        uint256 victimTokenId = router.depositETH{value: AMOUNT}(0, 0, 0, _deadline());
         alchemist.approveMint(victimTokenId, address(router), BORROW_AMOUNT);
         vm.stopPrank();
 
@@ -890,7 +890,7 @@ contract AlchemistRouterTest is Test {
         vm.prank(attacker);
 
         vm.expectRevert("Not position owner");
-        router.depositETH{value: 1 ether}(address(alchemist), victimTokenId, BORROW_AMOUNT, 0, _deadline());
+        router.depositETH{value: 1 ether}(victimTokenId, BORROW_AMOUNT, 0, _deadline());
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -900,37 +900,37 @@ contract AlchemistRouterTest is Test {
     function test_revert_depositUnderlying_zeroAmount() public {
         vm.prank(user);
         vm.expectRevert("Zero amount");
-        router.depositUnderlying(address(alchemist), 0, 0, 0, 0, _deadline());
+        router.depositUnderlying(0, 0, 0, 0, _deadline());
     }
 
     function test_revert_depositUnderlyingToExisting_zeroAmount() public {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         vm.prank(user);
         vm.expectRevert("Zero amount");
-        router.depositUnderlying(address(alchemist), tokenId, 0, 0, 0, _deadline());
+        router.depositUnderlying(tokenId, 0, 0, 0, _deadline());
     }
 
     function test_revert_repayUnderlying_zeroAmount() public {
         vm.prank(user);
         vm.expectRevert("Zero amount");
-        router.repayUnderlying(address(alchemist), 1, 0, 0, _deadline());
+        router.repayUnderlying(1, 0, 0, _deadline());
     }
 
     function test_revert_withdrawUnderlying_zeroShares() public {
         vm.prank(user);
         vm.expectRevert("Zero shares");
-        router.withdrawUnderlying(address(alchemist), 1, 0, 0, _deadline());
+        router.withdrawUnderlying(1, 0, 0, _deadline());
     }
 
     function test_revert_withdrawETH_zeroShares() public {
         vm.prank(user);
         vm.expectRevert("Zero shares");
-        router.withdrawETH(address(alchemist), 1, 0, 0, _deadline());
+        router.withdrawETH(1, 0, 0, _deadline());
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -942,14 +942,14 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         (uint256 collateral, , ) = alchemist.getCDP(tokenId);
         uint256 underlyingBefore = IERC20(underlying).balanceOf(user);
 
         nft.approve(address(router), tokenId);
 
-        router.withdrawUnderlying(address(alchemist), tokenId, collateral, 0, _deadline());
+        router.withdrawUnderlying(tokenId, collateral, 0, _deadline());
         vm.stopPrank();
 
         uint256 underlyingAfter = IERC20(underlying).balanceOf(user);
@@ -967,7 +967,7 @@ contract AlchemistRouterTest is Test {
         vm.deal(ethUser, AMOUNT);
 
         vm.startPrank(ethUser);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, 0, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, 0, 0, _deadline());
         (uint256 collateral, , ) = alchemist.getCDP(tokenId);
         nft.approve(address(router), tokenId);
         vm.stopPrank();
@@ -975,7 +975,7 @@ contract AlchemistRouterTest is Test {
         uint256 ethBefore = ethUser.balance;
 
         vm.prank(ethUser);
-        router.withdrawETH(address(alchemist), tokenId, collateral, 0, _deadline());
+        router.withdrawETH(tokenId, collateral, 0, _deadline());
 
         assertGt(ethUser.balance, ethBefore, "No ETH received");
         assertEq(nft.ownerOf(tokenId), ethUser, "NFT not returned");
@@ -989,12 +989,12 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         (uint256 collateral, , ) = alchemist.getCDP(tokenId);
 
         nft.approve(address(router), tokenId);
-        router.withdrawUnderlying(address(alchemist), tokenId, collateral, 0, _deadline());
+        router.withdrawUnderlying(tokenId, collateral, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "Underlying stuck");
@@ -1011,13 +1011,13 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         address attacker = makeAddr("attacker");
         vm.prank(attacker);
         vm.expectRevert();
-        router.withdrawUnderlying(address(alchemist), tokenId, 1, 0, _deadline());
+        router.withdrawUnderlying(tokenId, 1, 0, _deadline());
     }
 
     function test_noResidualApprovals_withdraw() public {
@@ -1025,11 +1025,11 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         (uint256 collateral, , ) = alchemist.getCDP(tokenId);
         nft.approve(address(router), tokenId);
-        router.withdrawUnderlying(address(alchemist), tokenId, collateral, 0, _deadline());
+        router.withdrawUnderlying(tokenId, collateral, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).allowance(address(router), mytVault), 0, "Underlying->MYT approval");
@@ -1047,7 +1047,7 @@ contract AlchemistRouterTest is Test {
         address attacker = makeAddr("attacker");
         vm.prank(attacker);
         vm.expectRevert();
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), false);
+        router.claimRedemption(positionId, 0, _deadline(), false);
     }
 
     function test_revert_claimRedemptionETH_notOwner() public {
@@ -1057,7 +1057,7 @@ contract AlchemistRouterTest is Test {
         address attacker = makeAddr("attacker");
         vm.prank(attacker);
         vm.expectRevert();
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), true);
+        router.claimRedemption(positionId, 0, _deadline(), true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1069,10 +1069,10 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
 
         vm.roll(block.number + 1);
-        router.repayUnderlying(address(alchemist), tokenId, AMOUNT, 0, _deadline());
+        router.repayUnderlying(tokenId, AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).allowance(address(router), mytVault), 0, "Underlying->MYT approval");
@@ -1088,10 +1088,10 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
 
         vm.roll(block.number + 1);
-        router.repayUnderlying(address(alchemist), tokenId, AMOUNT, 0, _deadline());
+        router.repayUnderlying(tokenId, AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "Underlying stuck");
@@ -1104,10 +1104,10 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT * 2);
 
         vm.startPrank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, BORROW_AMOUNT, 0, _deadline());
 
         vm.roll(block.number + 1);
-        router.repayETH{value: AMOUNT}(address(alchemist), tokenId, 0, _deadline());
+        router.repayETH{value: AMOUNT}(tokenId, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "WETH stuck");
@@ -1122,7 +1122,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC721(address(transmuter)).approve(address(router), positionId);
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), false);
+        router.claimRedemption(positionId, 0, _deadline(), false);
         vm.stopPrank();
 
         assertEq(IERC20(underlying).balanceOf(address(router)), 0, "Underlying stuck");
@@ -1138,33 +1138,33 @@ contract AlchemistRouterTest is Test {
     function test_revert_repayUnderlying_expired() public {
         vm.prank(user);
         vm.expectRevert("Expired");
-        router.repayUnderlying(address(alchemist), 1, AMOUNT, 0, block.timestamp - 1);
+        router.repayUnderlying(1, AMOUNT, 0, block.timestamp - 1);
     }
 
     function test_revert_repayETH_expired() public {
         vm.deal(user, AMOUNT);
         vm.prank(user);
         vm.expectRevert("Expired");
-        router.repayETH{value: AMOUNT}(address(alchemist), 1, 0, block.timestamp - 1);
+        router.repayETH{value: AMOUNT}(1, 0, block.timestamp - 1);
     }
 
     function test_revert_claimRedemptionUnderlying_expired() public {
         vm.prank(user);
         vm.expectRevert("Expired");
-        router.claimRedemption(address(alchemist), 1, 0, block.timestamp - 1, false);
+        router.claimRedemption(1, 0, block.timestamp - 1, false);
     }
 
     function test_revert_claimRedemptionETH_expired() public {
         vm.prank(user);
         vm.expectRevert("Expired");
-        router.claimRedemption(address(alchemist), 1, 0, block.timestamp - 1, true);
+        router.claimRedemption(1, 0, block.timestamp - 1, true);
     }
 
     function test_revert_depositETHToVaultOnly_expired() public {
         vm.deal(user, AMOUNT);
         vm.prank(user);
         vm.expectRevert("Expired");
-        router.depositETHToVaultOnly{value: AMOUNT}(address(alchemist), 0, block.timestamp - 1);
+        router.depositETHToVaultOnly{value: AMOUNT}(0, block.timestamp - 1);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1179,14 +1179,14 @@ contract AlchemistRouterTest is Test {
         IERC721(address(transmuter)).approve(address(router), positionId);
 
         vm.expectRevert("Slippage");
-        router.claimRedemption(address(alchemist), positionId, type(uint256).max, _deadline(), false);
+        router.claimRedemption(positionId, type(uint256).max, _deadline(), false);
         vm.stopPrank();
     }
 
     function test_revert_claimRedemptionETH_slippage() public {
         vm.deal(user, AMOUNT);
         vm.startPrank(user);
-        router.depositETH{value: AMOUNT}(address(alchemist), 0, BORROW_AMOUNT, 0, _deadline());
+        router.depositETH{value: AMOUNT}(0, BORROW_AMOUNT, 0, _deadline());
 
         IERC20(debtToken).approve(address(transmuter), BORROW_AMOUNT);
         transmuter.createRedemption(BORROW_AMOUNT, user);
@@ -1201,7 +1201,7 @@ contract AlchemistRouterTest is Test {
         IERC721(address(transmuter)).approve(address(router), positionId);
 
         vm.expectRevert("Slippage");
-        router.claimRedemption(address(alchemist), positionId, type(uint256).max, _deadline(), true);
+        router.claimRedemption(positionId, type(uint256).max, _deadline(), true);
         vm.stopPrank();
     }
 
@@ -1214,12 +1214,12 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT * 2);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
 
         vm.roll(block.number + 1);
 
         vm.expectRevert("Slippage");
-        router.repayUnderlying(address(alchemist), tokenId, AMOUNT, type(uint256).max, _deadline());
+        router.repayUnderlying(tokenId, AMOUNT, type(uint256).max, _deadline());
         vm.stopPrank();
     }
 
@@ -1227,12 +1227,12 @@ contract AlchemistRouterTest is Test {
         vm.deal(user, AMOUNT * 2);
 
         vm.startPrank(user);
-        uint256 tokenId = router.depositETH{value: AMOUNT}(address(alchemist), 0, BORROW_AMOUNT, 0, _deadline());
+        uint256 tokenId = router.depositETH{value: AMOUNT}(0, BORROW_AMOUNT, 0, _deadline());
 
         vm.roll(block.number + 1);
 
         vm.expectRevert("Slippage");
-        router.repayETH{value: AMOUNT}(address(alchemist), tokenId, type(uint256).max, _deadline());
+        router.repayETH{value: AMOUNT}(tokenId, type(uint256).max, _deadline());
         vm.stopPrank();
     }
 
@@ -1246,7 +1246,7 @@ contract AlchemistRouterTest is Test {
         IERC20(underlying).approve(mytVault, AMOUNT);
         uint256 shares = IVaultV2(mytVault).deposit(AMOUNT, user);
         IERC20(mytVault).approve(address(router), shares);
-        router.depositMYT(address(alchemist), 0, shares, 0, _deadline());
+        router.depositMYT(0, shares, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(mytVault).balanceOf(address(router)), 0, "MYT stuck");
@@ -1257,12 +1257,12 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT * 2);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         IERC20(underlying).approve(mytVault, AMOUNT);
         uint256 shares = IVaultV2(mytVault).deposit(AMOUNT, user);
         IERC20(mytVault).approve(address(router), shares);
-        router.depositMYT(address(alchemist), tokenId, shares, 0, _deadline());
+        router.depositMYT(tokenId, shares, 0, _deadline());
         vm.stopPrank();
 
         assertEq(IERC20(mytVault).balanceOf(address(router)), 0, "MYT stuck");
@@ -1277,7 +1277,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 victimTokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 victimTokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         alchemist.approveMint(victimTokenId, address(router), BORROW_AMOUNT);
         vm.stopPrank();
 
@@ -1289,7 +1289,7 @@ contract AlchemistRouterTest is Test {
         IERC20(mytVault).approve(address(router), shares);
 
         vm.expectRevert("Not position owner");
-        router.depositMYT(address(alchemist), victimTokenId, shares, BORROW_AMOUNT, _deadline());
+        router.depositMYT(victimTokenId, shares, BORROW_AMOUNT, _deadline());
         vm.stopPrank();
     }
 
@@ -1300,7 +1300,7 @@ contract AlchemistRouterTest is Test {
         address attacker = makeAddr("attacker");
         vm.prank(attacker);
         vm.expectRevert();
-        router.claimRedemption(address(alchemist), positionId, 0, _deadline(), false);
+        router.claimRedemption(positionId, 0, _deadline(), false);
     }
 
     function test_attack_frontRunDeposit_nftGoesToCaller() public {
@@ -1310,12 +1310,12 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(attacker);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 attackerTokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 attackerTokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 userTokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 userTokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
         vm.stopPrank();
 
         assertEq(nft.ownerOf(attackerTokenId), attacker, "Attacker doesn't own their NFT");
@@ -1334,7 +1334,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 tokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, 0, 0, _deadline());
+        uint256 tokenId = router.depositUnderlying(0, AMOUNT, 0, 0, _deadline());
 
         vm.expectRevert();
         nft.safeTransferFrom(user, address(router), tokenId);
@@ -1347,7 +1347,7 @@ contract AlchemistRouterTest is Test {
         deal(underlying, user, AMOUNT);
         vm.startPrank(user);
         IERC20(underlying).approve(address(router), AMOUNT);
-        uint256 userTokenId = router.depositUnderlying(address(alchemist), 0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
+        uint256 userTokenId = router.depositUnderlying(0, AMOUNT, BORROW_AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         vm.roll(block.number + 1);
@@ -1358,7 +1358,7 @@ contract AlchemistRouterTest is Test {
 
         vm.startPrank(attacker);
         IERC20(underlying).approve(address(router), AMOUNT);
-        router.repayUnderlying(address(alchemist), userTokenId, AMOUNT, 0, _deadline());
+        router.repayUnderlying(userTokenId, AMOUNT, 0, _deadline());
         vm.stopPrank();
 
         uint256 attackerBalAfter = IERC20(underlying).balanceOf(attacker);

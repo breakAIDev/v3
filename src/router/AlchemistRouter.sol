@@ -13,12 +13,21 @@ import {ITransmuter} from "../interfaces/ITransmuter.sol";
 
 /// @title  AlchemistRouter
 /// @notice Batches wrap + deposit + borrow into a single transaction for EOA users.
-/// @dev    Stateless — never holds tokens or NFTs between transactions.
+/// @dev    Holds no user funds between transactions. Alchemist is set at construction via immutable.
 contract AlchemistRouter is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
+    address public immutable alchemist;
+
     /// @dev Flag to allow receiving ETH from WETH unwrap during withdraw flows.
     bool private transient _ethExpected;
+
+    /// @param _alchemist The Alchemist contract this router interacts with.
+    constructor(address _alchemist) {
+        require(_alchemist != address(0), "Zero address");
+
+        alchemist = _alchemist;
+    }
 
     /// @notice Deposit underlying token into MYT vault + Alchemist, optionally borrow.
     /// @dev    Caller must have approved this contract for `amount` of underlying.
@@ -26,7 +35,6 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ///         For existing positions: caller must own the NFT (it stays with the caller).
     ///         If `borrowAmount` > 0 on an existing position, caller must have called
     ///         `approveMint(tokenId, router, borrowAmount)` on the Alchemist.
-    /// @param  alchemist     The Alchemist contract address.
     /// @param  tokenId       Position NFT token ID (0 to create a new position).
     /// @param  amount        Amount of underlying token to deposit.
     /// @param  borrowAmount  Amount of debt tokens to borrow (0 to skip borrowing).
@@ -34,7 +42,6 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     /// @param  deadline      Timestamp after which the transaction reverts.
     /// @return                The position NFT token ID (newly minted or same as input).
     function depositUnderlying(
-        address alchemist,
         uint256 tokenId,
         uint256 amount,
         uint256 borrowAmount,
@@ -55,23 +62,21 @@ contract AlchemistRouter is ReentrancyGuardTransient {
 
         IERC20(underlying).forceApprove(mytVault, 0);
 
-        return _depositAndBorrow(alchemist, mytVault, shares, tokenId, borrowAmount);
+        return _depositAndBorrow(mytVault, shares, tokenId, borrowAmount);
     }
 
     /// @notice Deposit native ETH → WETH → MYT vault → Alchemist, optionally borrow.
-    /// @dev    WETH address is derived from alchemist.underlyingToken().
+    /// @dev    Requires the Alchemist's underlyingToken to be WETH.
     ///         Pass `tokenId = 0` to create a new position, or an existing token ID to deposit into it.
     ///         For existing positions: caller must own the NFT (it stays with the caller).
     ///         If `borrowAmount` > 0 on an existing position, caller must have called
     ///         `approveMint(tokenId, router, borrowAmount)` on the Alchemist.
-    /// @param  alchemist     The Alchemist contract address.
     /// @param  tokenId       Position NFT token ID (0 to create a new position).
     /// @param  borrowAmount  Amount of debt tokens to borrow (0 to skip borrowing).
     /// @param  minSharesOut  Minimum MYT shares to receive (slippage protection).
     /// @param  deadline      Timestamp after which the transaction reverts.
     /// @return                The position NFT token ID (newly minted or same as input).
     function depositETH(
-        address alchemist,
         uint256 tokenId,
         uint256 borrowAmount,
         uint256 minSharesOut,
@@ -91,7 +96,7 @@ contract AlchemistRouter is ReentrancyGuardTransient {
 
         IERC20(underlying).forceApprove(mytVault, 0);
 
-        return _depositAndBorrow(alchemist, mytVault, shares, tokenId, borrowAmount);
+        return _depositAndBorrow(mytVault, shares, tokenId, borrowAmount);
     }
 
     /// @notice Deposit MYT shares directly into Alchemist, optionally borrow.
@@ -100,14 +105,12 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ///         For existing positions: caller must own the NFT (it stays with the caller).
     ///         If `borrowAmount` > 0 on an existing position, caller must have called
     ///         `approveMint(tokenId, router, borrowAmount)` on the Alchemist.
-    /// @param  alchemist     The Alchemist contract address.
     /// @param  tokenId       Position NFT token ID (0 to create a new position).
     /// @param  shares        Amount of MYT shares to deposit.
     /// @param  borrowAmount  Amount of debt tokens to borrow (0 to skip borrowing).
     /// @param  deadline      Timestamp after which the transaction reverts.
     /// @return                The position NFT token ID (newly minted or same as input).
     function depositMYT(
-        address alchemist,
         uint256 tokenId,
         uint256 shares,
         uint256 borrowAmount,
@@ -120,18 +123,16 @@ contract AlchemistRouter is ReentrancyGuardTransient {
 
         IERC20(mytVault).safeTransferFrom(msg.sender, address(this), shares);
 
-        return _depositAndBorrow(alchemist, mytVault, shares, tokenId, borrowAmount);
+        return _depositAndBorrow(mytVault, shares, tokenId, borrowAmount);
     }
 
     /// @notice Deposit ETH into MYT vault only (no Alchemist position).
     ///         MYT shares are sent directly to the caller.
-    /// @dev    WETH address is derived from alchemist.underlyingToken().
-    /// @param  alchemist     The Alchemist contract (used to resolve MYT vault + underlying).
+    /// @dev    Requires the Alchemist's underlyingToken to be WETH.
     /// @param  minSharesOut  Minimum MYT shares to receive (slippage protection).
     /// @param  deadline      Timestamp after which the transaction reverts.
     /// @return shares        MYT shares received.
     function depositETHToVaultOnly(
-        address alchemist,
         uint256 minSharesOut,
         uint256 deadline
     ) external payable nonReentrant returns (uint256 shares) {
@@ -156,13 +157,11 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     /// @notice Repay debt on a position using underlying tokens.
     /// @dev    Caller must have approved this contract for `amount` of underlying.
     ///         Any MYT shares not consumed by the repayment are returned to the caller.
-    /// @param  alchemist         The Alchemist contract address.
     /// @param  recipientTokenId  The position NFT token ID to repay debt on.
     /// @param  amount            Amount of underlying token to use for repayment.
     /// @param  minSharesOut      Minimum MYT shares from vault deposit (slippage protection).
     /// @param  deadline          Timestamp after which the transaction reverts.
     function repayUnderlying(
-        address alchemist,
         uint256 recipientTokenId,
         uint256 amount,
         uint256 minSharesOut,
@@ -182,20 +181,18 @@ contract AlchemistRouter is ReentrancyGuardTransient {
 
         IERC20(underlying).forceApprove(mytVault, 0);
 
-        _repayAndRefund(alchemist, mytVault, shares, recipientTokenId);
+        _repayAndRefund(mytVault, shares, recipientTokenId);
     }
 
     /// @notice Repay debt on a position using native ETH.
-    /// @dev    WETH address is derived from alchemist.underlyingToken().
+    /// @dev    Requires the Alchemist's underlyingToken to be WETH.
     ///         Any MYT shares not consumed by the repayment are returned to the caller
     ///         as MYT vault shares (not ETH). Callers must redeem shares separately if
     ///         they want the underlying back.
-    /// @param  alchemist         The Alchemist contract address.
     /// @param  recipientTokenId  The position NFT token ID to repay debt on.
     /// @param  minSharesOut      Minimum MYT shares from vault deposit (slippage protection).
     /// @param  deadline          Timestamp after which the transaction reverts.
     function repayETH(
-        address alchemist,
         uint256 recipientTokenId,
         uint256 minSharesOut,
         uint256 deadline
@@ -214,7 +211,7 @@ contract AlchemistRouter is ReentrancyGuardTransient {
 
         IERC20(underlying).forceApprove(mytVault, 0);
 
-        _repayAndRefund(alchemist, mytVault, shares, recipientTokenId);
+        _repayAndRefund(mytVault, shares, recipientTokenId);
     }
 
     // ─── Withdraw ────────────────────────────────────────────────────────
@@ -223,13 +220,11 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     /// @dev    Caller must approve this contract for the position NFT (ERC721 approve).
     ///         NFT is temporarily held by the router and returned after withdraw.
     ///         WARNING: The NFT round-trip resets ALL mint allowances (approveMint) on this position.
-    /// @param  alchemist     The Alchemist contract address.
     /// @param  tokenId       The position NFT token ID to withdraw from.
     /// @param  shares        Amount of MYT shares to withdraw from the Alchemist.
     /// @param  minAmountOut  Minimum underlying tokens to receive (slippage protection on vault redeem).
     /// @param  deadline      Timestamp after which the transaction reverts.
     function withdrawUnderlying(
-        address alchemist,
         uint256 tokenId,
         uint256 shares,
         uint256 minAmountOut,
@@ -263,13 +258,11 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     /// @dev    Caller must approve this contract for the position NFT (ERC721 approve).
     ///         NFT is temporarily held by the router and returned after withdraw.
     ///         WARNING: The NFT round-trip resets ALL mint allowances (approveMint) on this position.
-    /// @param  alchemist     The Alchemist contract address.
     /// @param  tokenId       The position NFT token ID to withdraw from.
     /// @param  shares        Amount of MYT shares to withdraw from the Alchemist.
     /// @param  minAmountOut  Minimum ETH to receive (slippage protection on vault redeem).
     /// @param  deadline      Timestamp after which the transaction reverts.
     function withdrawETH(
-        address alchemist,
         uint256 tokenId,
         uint256 shares,
         uint256 minAmountOut,
@@ -314,20 +307,18 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ///         The transmuter burns the NFT on claim. Any untransmuted synthetic tokens
     ///         are forwarded to the caller as-is.
     ///         When `unwrapETH` is true, redeemed WETH is unwrapped and sent as native ETH.
-    /// @param  alchemist       The Alchemist contract address (used to resolve transmuter + MYT vault).
     /// @param  positionId      The transmuter position NFT token ID to claim.
     /// @param  minAmountOut    Minimum underlying tokens (or ETH if unwrapETH) to receive (slippage protection).
     /// @param  deadline        Timestamp after which the transaction reverts.
     /// @param  unwrapETH       If true, redeem to WETH and unwrap to native ETH before sending.
     function claimRedemption(
-        address alchemist,
         uint256 positionId,
         uint256 minAmountOut,
         uint256 deadline,
         bool unwrapETH
     ) external nonReentrant {
         require(block.timestamp <= deadline, "Expired");
-        _claimRedemption(alchemist, positionId, minAmountOut, unwrapETH);
+        _claimRedemption(positionId, minAmountOut, unwrapETH);
     }
 
     // ─── Internal ────────────────────────────────────────────────────────
@@ -337,7 +328,6 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ///      When tokenId == 0: creates a new position (NFT minted to router, then transferred to caller).
     ///      When tokenId != 0: deposits into existing position (NFT stays with caller, uses mintFrom for borrowing).
     function _depositAndBorrow(
-        address alchemist,
         address mytVault,
         uint256 shares,
         uint256 tokenId,
@@ -371,10 +361,9 @@ contract AlchemistRouter is ReentrancyGuardTransient {
         return tokenId;
     }
 
-    /// @dev Approve alchemist, repay, clear approval, refund unused MYT shares to caller.
+    /// @dev Approve MYT spending by Alchemist, repay, clear approval, refund unused MYT shares to caller.
     ///      Uses balance delta (not absolute balanceOf) to be donation-resistant.
     function _repayAndRefund(
-        address alchemist,
         address mytVault,
         uint256 shares,
         uint256 recipientTokenId
@@ -398,7 +387,6 @@ contract AlchemistRouter is ReentrancyGuardTransient {
     ///      When unwrapETH is true, redeems MYT → WETH → unwrap → send native ETH to caller.
     ///      When unwrapETH is false, redeems MYT → underlying sent directly to caller.
     function _claimRedemption(
-        address alchemist,
         uint256 positionId,
         uint256 minAmountOut,
         bool unwrapETH
