@@ -332,7 +332,9 @@ abstract contract BaseStrategyMulti is StrategyOps {
 
             if (isAllocate) {
                 (, uint256 currentMax) = _getAllocationBounds();
-                if (amount <= currentMax) {
+                uint256 minAllocateAmount = _getMinAllocateAmount();
+                if (currentMax >= minAllocateAmount) {
+                    amount = bound(amount, minAllocateAmount, currentMax);
                     _prepareVaultAssets(amount);
                     _allocateOrSkipWhitelisted(amount, RevertContext.FuzzAllocate);
                 }
