@@ -120,6 +120,10 @@ contract IntegrationTest is Test {
     event TestIntegrationLog(string message, uint256 value);
 
     function setUp() external {
+        string memory rpc = vm.envString("MAINNET_RPC_URL");
+        uint256 forkId = vm.createFork(rpc);
+        vm.selectFork(forkId);
+
         // test maniplulation for convenience
         address caller = address(0xdead);
         address proxyOwner = address(this);

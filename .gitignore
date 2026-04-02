@@ -22,3 +22,5 @@ docs/
 .env
 .aider*
 .secret
+
+opencode.jsonc

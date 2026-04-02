@@ -224,9 +224,6 @@ contract MYTStrategyTest is Test {
 
         // Create allocator
         allocator = new AlchemistAllocator(address(vault), admin, operator, classifier);
-
-        // Whitelist allocator for strategy
-        vm.prank(admin);
     }
 
     // Test that allocator can allocate and deallocate

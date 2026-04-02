@@ -441,6 +441,8 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
     address public admin = address(0x1);
     address public operator = address(0x3);
     
+    uint256 public initialSharePrice;
+    
     // Arbitrum addresses
     address public constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address public constant AAVE_POOL_ARB = 0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb;
@@ -487,6 +489,8 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
         _makeInitialDeposit();
         
         vm.stopPrank();
+        
+        initialSharePrice = (vault.totalAssets() * 1e18) / vault.totalSupply();
         
         // Create handler
         handler = new MultiStrategyARBUSDCCHandler(
@@ -738,7 +742,7 @@ contract MultiStrategyARBUSDCInvariantTest is Test {
         
         if (totalSupply > 0) {
             uint256 sharePrice = (totalAssets * 1e18) / totalSupply;
-            assertGe(sharePrice, 0.9e18, "Share price decreased significantly");
+            assertGe(sharePrice, initialSharePrice, "Share price decreased significantly");
         }
     }
     

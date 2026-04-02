@@ -544,6 +544,8 @@ contract MultiStrategyUSDCInvariantTest is Test {
     address public admin = address(0x1);
     address public operator = address(0x3);
     
+    uint256 public initialSharePrice;
+    
     address public constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address public constant EULER_USDC_VAULT = 0xe0a80d35bB6618CBA260120b279d357978c42BCE;
     address public constant PEAPODS_USDC_VAULT = 0x3717e340140D30F3A077Dd21fAc39A86ACe873AA;
@@ -592,6 +594,8 @@ contract MultiStrategyUSDCInvariantTest is Test {
         _makeInitialDeposit();
         
         vm.stopPrank();
+        
+        initialSharePrice = (vault.totalAssets() * 1e18) / vault.totalSupply();
         
         // Create handler
         handler = new MultiStrategyUSDCHandler(
@@ -864,8 +868,8 @@ contract MultiStrategyUSDCInvariantTest is Test {
         
         if (totalSupply > 0) {
             uint256 sharePrice = (totalAssets * 1e18) / totalSupply;
-            // Share price should be at least 0.9 (assuming initial share price of ~1)
-            assertGe(sharePrice, 0.9e18, "Share price decreased significantly");
+            // Share price should never decrease below its initial value
+            assertGe(sharePrice, initialSharePrice, "Share price decreased significantly");
         }
     }
     
