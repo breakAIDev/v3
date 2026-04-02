@@ -7,16 +7,15 @@ import {PermissionedProxy} from "./utils/PermissionedProxy.sol";
 import {IAllocator} from "./interfaces/IAllocator.sol";
 import {IMYTStrategy} from "./interfaces/IMYTStrategy.sol";
 import {IStrategyClassifier} from "./interfaces/IStrategyClassifier.sol";
+
 /**
  * @title AlchemistAllocator
  * @notice This contract is used to allocate and deallocate funds to and from MYT strategies
  * @notice The MYT is a Morpho V2 Vault, and each strategy is just a vault adapter which interfaces with a third party protocol
  */
-
-
 contract AlchemistAllocator is PermissionedProxy, IAllocator {
-    IVaultV2 immutable vault;
-    IStrategyClassifier immutable strategyClassifier;
+    IVaultV2 immutable public vault;
+    IStrategyClassifier immutable public strategyClassifier;
 
     constructor(address _vault, address _admin, address _operator, address _classifier) PermissionedProxy(_admin, _operator) {
         require(IVaultV2(_vault).asset() != address(0), "IV");
@@ -39,12 +38,13 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
         vault.allocate(adapter, data, amount);
 
     }
+
     /**
     * @notice Deallocate (uses ActionType.direct)
     * @param adapter The strategy adapter address
     * @param amount The amount to deallocate
      */
-  
+
     function deallocate(address adapter, uint256 amount) external {
         require(msg.sender == admin || operators[msg.sender], "PD");
 
@@ -52,7 +52,6 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
         params.action = IMYTStrategy.ActionType.direct;
         bytes memory data = abi.encode(params);
         vault.deallocate(adapter, data, amount);
-
     }
 
     /**
@@ -76,10 +75,12 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
     }
 
 
-    /// @notice Deallocate with dex swap (uses ActionType.swap)
-    /// @param adapter The strategy adapter address
-    /// @param amount The amount to deallocate
-    /// @param txData The 0x swap calldata
+    /**
+    * @notice Deallocate with dex swap (uses ActionType.swap)
+    * @param adapter The strategy adapter address
+    * @param amount The amount to deallocate
+    * @param txData The 0x swap calldata
+     */
     function deallocateWithSwap(address adapter, uint256 amount, bytes memory txData) external {
         require(msg.sender == admin || operators[msg.sender], "PD");
         IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
@@ -93,11 +94,13 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
         vault.deallocate(adapter, data, amount);
     }
 
-    /// @notice Deallocate with unwrap + dex swap (uses ActionType.unwrapAndSwap)
-    /// @param adapter The strategy adapter address
-    /// @param amount The amount to deallocate  
-    /// @param txData The 0x swap calldata
-    /// @param minIntermediateOut The intermediate asset to produce from unwrap (use quote's sellAmount)
+    /**
+    * @notice Deallocate with unwrap + dex swap (uses ActionType.unwrapAndSwap)
+    * @param adapter The strategy adapter address
+    * @param amount The amount to deallocate  
+    * @param txData The 0x swap calldata
+    * @param minIntermediateOut The intermediate asset to produce from unwrap (use quote's sellAmount)
+    */
     function deallocateWithUnwrapAndSwap(address adapter, uint256 amount, bytes memory txData, uint256 minIntermediateOut) external {
         require(msg.sender == admin || operators[msg.sender], "PD");
         IMYTStrategy.SwapParams memory swapParams = IMYTStrategy.SwapParams({
@@ -111,6 +114,11 @@ contract AlchemistAllocator is PermissionedProxy, IAllocator {
         vault.deallocate(adapter, data, amount);
     }
 
+    /**
+    * @notice Validate the caps for the given adapter and amount
+    * @param adapter The strategy adapter address
+    * @param amount The amount to validate
+     */
     function _validateCaps(address adapter, uint256 amount) internal view {
         bytes32 id = IMYTStrategy(adapter).adapterId();
         uint256 absoluteCap = vault.absoluteCap(id);

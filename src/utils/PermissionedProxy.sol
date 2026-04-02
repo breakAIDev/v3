@@ -4,8 +4,8 @@ pragma solidity 0.8.28;
 
 contract PermissionedProxy {
     address admin;
-    mapping (address => bool) operators;
-    mapping (bytes4 => bool) permissionedCalls;
+    mapping (address => bool) public operators;
+    mapping (bytes4 => bool) public permissionedCalls;
     address public pendingAdmin;
 
     constructor(address _admin, address _operator) {
