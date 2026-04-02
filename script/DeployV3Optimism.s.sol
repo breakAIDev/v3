@@ -213,14 +213,16 @@ contract DeployV3OptimismScript is Script {
             syntheticToken: alAsset,
             feeReceiver: protocolFeeReceiver,
             timeToTransmute: 3 days, // TODO
-            transmutationFee: 100, // 1%
-            exitFee: 50, // 0.5%
+            transmutationFee: 0,
+            exitFee: 100,
             graphSize: 365 days
         });
 
         Transmuter deployedTransmuter = new Transmuter(transmuterParams);
         deployedTransmuter.setDepositCap(500); // FIXME migratedDebt * 0.25
-        deployedTransmuter.setExitFee(50); // 0.5%
+
+        require(deployedTransmuter.transmutationFee() == 0);
+        require(deployedTransmuter.exitFee() == 100);
         return deployedTransmuter;
     }
 
@@ -235,21 +237,26 @@ contract DeployV3OptimismScript is Script {
             minimumCollateralization: 1_111_111_111_111_111_111, // 1.1x collateralization
             collateralizationLowerBound: 1_052_631_578_950_000_000, // 1.05 collateralization
             liquidationTargetCollateralization: 1_111_111_111_111_111_111, // 1.1
-            globalMinimumCollateralization: 1_111_111_111_111_111_111, // 1.1
+            globalMinimumCollateralization: 1_052_631_578_950_000_000, // 20/19
             transmuter: transmuter,
-            protocolFee: 50, // 10000 bps -> 0.5%
+            protocolFee: 25, // 10000 bps -> 0.25%
             protocolFeeReceiver: protocolFeeReceiver,
             liquidatorFee: 300, // 3% = 300 BPS
-            repaymentFee: 100, // 1% = 100 BPS
+            repaymentFee: 0,
             myt: vault
         });
 
         bytes memory alchemParams = abi.encodeWithSelector(AlchemistV3.initialize.selector, params);
-        return AlchemistV3(address(new TransparentUpgradeableProxy(
+        AlchemistV3 deployedAlchemist = AlchemistV3(address(new TransparentUpgradeableProxy(
             address(alchemistLogic),
             newOwner,
             alchemParams
         )));
+
+        require(deployedAlchemist.protocolFee() == 25);
+        require(deployedAlchemist.liquidatorFee() == 300);
+        require(deployedAlchemist.repaymentFee() == 0);
+        return deployedAlchemist;
     }
 
     function run() public {
