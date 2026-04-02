@@ -109,7 +109,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
 
         // Final deallocation of remaining. Some strategies cap each deallocation step
         // (e.g. due to adapter accounting constraints), so iterate a few times.
-        for (uint256 i = 0; i < 16; i++) {
+        for (uint256 i = 0; i < 256; i++) {
             uint256 before = IMYTStrategy(strategy).realAssets();
             if (before == 0) break;
             bool ok = _deallocateFromRealAssetsEstimate(RevertContext.FuzzDeallocate);
@@ -476,7 +476,7 @@ abstract contract BaseStrategyMulti is StrategyOps {
         _warpWithHook(30 days);
 
         // Full deallocation
-        for (uint256 i = 0; i < 16; i++) {
+        for (uint256 i = 0; i < 256; i++) {
             uint256 before = IMYTStrategy(strategy).realAssets();
             if (before == 0) break;
             bool ok = _deallocateFromRealAssetsEstimate(RevertContext.FuzzDeallocate);

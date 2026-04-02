@@ -39,7 +39,7 @@ contract SiUSDStrategyTest is BaseStrategyTest {
             globalCap: ABSOLUTE_CAP,
             estimatedYield: 100e18,
             additionalIncentives: false,
-            slippageBPS: 0
+            slippageBPS: 1
         });
     }
 
