@@ -110,26 +110,26 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     /// @inheritdoc IAlchemistV3State
     mapping(address => bool) public guardians;
 
-    /// @dev Total debt redeemed via Transmuter redemptions
+    /// @dev Total debt retired through Transmuter-driven redemptions.
     uint256 private _totalRedeemedDebt;
 
-    /// @dev Total MYT shares paid out for redemptions (collRedeemed + feeCollateral)
+    /// @dev Total MYT shares removed from global accounting by redemptions and redemption fees.
     uint256 private _totalRedeemedSharesOut;
 
-    /// @dev Weight of earmarked amount / total unearmarked debt
+    /// @dev Packed earmark weight used to track how much live unearmarked debt survives each earmark step.
     uint256 private _earmarkWeight;
 
-    /// @dev Weight of redemption amount / total earmarked debt
+    /// @dev Packed redemption weight used to track survival of earmarked debt across redemptions.
     uint256 private _redemptionWeight;
 
-    /// @dev Earmarked scaled by survival
+    /// @dev Accumulator used to reconstruct earmarked debt survival across redemption windows.
     uint256 private _survivalAccumulator;
 
-    /// @dev Total yield tokens deposited
-    /// This is used to differentiate between tokens deposited into a CDP and balance of the contract
+    /// @dev Total MYT shares currently assigned to open positions.
+    /// This intentionally excludes any unrelated MYT balance the contract may temporarily hold.
     uint256 private _mytSharesDeposited;
 
-    /// @dev MYT shares of transmuter balance increase not yet applied as cover in _earmark()
+    /// @dev Transmuter MYT balance increases not yet applied as cover in `_earmark()`.
     uint256 private _pendingCoverShares;
 
     /// @dev User accounts
@@ -188,11 +188,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         lastRedemptionBlock = block.number;
         myt = params.myt;
 
-        // Initialize weights
+        // Initialize packed weights at full survival.
         _redemptionWeight = ONE_Q128;
         _earmarkWeight = ONE_Q128;
 
-        // Initialize  epoch history
+        // Initialize epoch checkpoints.
         _earmarkEpochStartRedemptionWeight[0] = _redemptionWeight;
         _earmarkEpochStartSurvivalAccumulator[0] = _survivalAccumulator;
     }
@@ -512,8 +512,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     function burn(uint256 amount, uint256 recipientId) external returns (uint256) {
         _checkArgument(amount > 0);
         _checkForValidAccountId(recipientId);
-        // Check that the user did not mint in this same block
-        // This is used to prevent flash loan repayments
+        // Block same-block mint -> burn round trips.
         if (block.number == _accounts[recipientId].lastMintBlock) revert CannotRepayOnMintBlock();
 
         // Query transmuter and earmark global debt
@@ -523,7 +522,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _sync(recipientId);
 
         uint256 debt;
-        // Burning alAssets can only repay unearmarked debt
+        // Debt-token burns can only repay the unearmarked portion.
         _checkState((debt = _accounts[recipientId].debt - _accounts[recipientId].earmarked) > 0);
 
         uint256 credit = _capDebtCredit(amount, debt);
@@ -534,10 +533,10 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             revert BurnLimitExceeded(credit, totalSyntheticsIssued - ITransmuter(transmuter).totalLocked());
         }
 
-        // Burn the tokens from the message sender
+        // Burn the debt tokens from the caller.
         TokenUtils.safeBurnFrom(debtToken, msg.sender, credit);
 
-        // Update the recipient's debt.
+        // Apply the repayment to the target account.
         _subDebt(recipientId, credit);
         _accounts[recipientId].lastRepayBlock = block.number;
 
@@ -556,8 +555,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _checkArgument(amount > 0);
         _checkForValidAccountId(recipientTokenId);
         Account storage account = _accounts[recipientTokenId];
-        // Check that the user did not mint in this same block
-        // This is used to prevent flash loan repayments
+        // Block same-block mint -> repay round trips.
         if (block.number == account.lastMintBlock) revert CannotRepayOnMintBlock();
 
         // Query transmuter and earmark global debt
@@ -568,14 +566,14 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         uint256 debt;
 
-        // Burning yieldTokens will pay off all types of debt
+        // MYT repayments can extinguish both earmarked and unearmarked debt.
         _checkState((debt = account.debt) > 0);
 
         uint256 yieldToDebt = convertYieldTokensToDebt(amount);
         uint256 credit = _capDebtCredit(yieldToDebt, debt);
         if (credit == 0) return 0;
 
-        // Repay debt from earmarked amount of debt first
+        // Repay earmarked debt first so protocol fees are charged on the earmarked portion only.
         uint256 earmarkedRepaid = _subEarmarkedDebt(credit, recipientTokenId);
 
 
@@ -583,7 +581,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         uint256 earmarkedRepaidToYield = convertDebtTokensToYield(earmarkedRepaid);
 
 
-        // Protocol fee only applies to earmarked debt repaid.
+        // Protocol fee only applies to the earmarked portion of the repayment.
         uint256 feeAmount = earmarkedRepaidToYield * protocolFee / BPS;
         if (feeAmount > account.collateralBalance) {
             revert IllegalState();
@@ -594,7 +592,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _subDebt(recipientTokenId, credit);
         account.lastRepayBlock = block.number;
 
-        // Transfer the repaid tokens to the transmuter.
+        // Forward the repaid MYT to the transmuter.
         TokenUtils.safeTransferFrom(myt, msg.sender, transmuter, creditToYield);
         if (feeAmount > 0) {
             TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeAmount);
@@ -612,7 +610,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (yieldAmount > 0 || feeInYield > 0 || feeInUnderlying > 0 || _accounts[accountId].debt < debtBefore) {
             return (yieldAmount, feeInYield, feeInUnderlying);
         } else {
-            // no liquidation amount returned, so no liquidation happened
+            // No collateral or fee movement occurred and debt did not decrease.
             revert LiquidationError();
         }
     }
@@ -647,7 +645,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (anyProgress) {
             return (totalAmountLiquidated, totalFeesInYield, totalFeesInUnderlying);
         } else {
-            // no total liquidation amount returned, so no liquidations happened
+            // None of the requested accounts made progress.
             revert LiquidationError();
         }
     }
@@ -720,7 +718,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         TokenUtils.safeTransfer(myt, transmuter, collRedeemed);
         _mytSharesDeposited -= collRedeemed;
 
-        // If system is insolvent and there are not enough funds to pay fee to protocol then we skip the fee
+        // If the remaining tracked MYT cannot fully cover the protocol fee, skip the fee entirely.
         if (feeCollateral <= _mytSharesDeposited) {
             TokenUtils.safeTransfer(myt, protocolFeeReceiver, feeCollateral);
             _mytSharesDeposited -= feeCollateral;
@@ -739,35 +737,34 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         _poke(accountId);
         _checkState(_accounts[accountId].debt > 0);
         if (!_isAccountHealthy(accountId, false)) {
-            // must use the regular liquidation path i.e. liquidate(accountId)
+            // Unhealthy accounts must go through the regular liquidation path.
            revert AccountNotHealthy();
         }
         Account storage account = _accounts[accountId];
 
-        // Repay any earmarked debt 
+        // First clear any earmarked debt from the account's own collateral.
         uint256 repaidEarmarkedDebtInYield = _forceRepay(accountId, account.earmarked, true);
     
         uint256 debt = account.debt;
 
-        // then clear all remaining debt
+        // Then clear whatever debt remains.
         _subDebt(accountId, debt);
 
-        // sub the collateral used for repaying debt
+        // Remove the collateral that backed the remaining debt.
         uint256 repaidDebtInYield = _subCollateralBalance(convertDebtTokensToYield(debt), accountId);
 
-        // clear all remaining collateral
+        // Sweep any residual collateral out of the account.
         uint256 remainingCollateral = _subCollateralBalance(account.collateralBalance, accountId);
 
         if(repaidDebtInYield > 0) {
-            // transfer collateral used for repaying debt to transmuter
+            // Forward repaid collateral to the transmuter.
             TokenUtils.safeTransfer(myt, transmuter, repaidDebtInYield);
         }
 
         if(remainingCollateral > 0) {
-            // transfer remaining collateral to the recipient
+            // Return leftover collateral to the recipient.
             TokenUtils.safeTransfer(myt, recipient, remainingCollateral);
         }   
-        // emit event
         emit SelfLiquidated(accountId, repaidEarmarkedDebtInYield + repaidDebtInYield);
         return repaidEarmarkedDebtInYield + repaidDebtInYield;
     }
@@ -937,10 +934,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
     }
 
     /**
-     * @notice Force repays earmarked debt of the account owned by `accountId` using account's collateral balance.
-     * @param accountId The tokenId of the account to repay from.
-     * @param amount The amount to repay in debt tokens.
-     * @return creditToYield The amount of yield tokens repaid.
+     * @notice Uses the account's own collateral to retire debt and the associated protocol fee.
+     * @param accountId The token id of the account to repay from.
+     * @param amount The requested debt repayment amount, denominated in debt tokens.
+     * @param skipPoke Whether to skip syncing the account before repayment.
+     * @return creditToYield The MYT shares routed to the transmuter for the retired debt.
      */
      function _forceRepay(uint256 accountId, uint256 amount, bool skipPoke) internal returns (uint256) {
         if (amount == 0) {
@@ -953,20 +951,20 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         Account storage account = _accounts[accountId];
         uint256 debt;
 
-        // Burning yieldTokens will pay off all types of debt
+        // Retiring debt from collateral can cover any debt bucket.
         _checkState((debt = account.debt) > 0);
 
-        // earmarked debt always <= account debt
+        // Clamp requested repayment against live account/global debt.
         uint256 credit = _capDebtCredit(amount, debt);
         if (credit == 0) return 0;
-        // Repay debt from earmarked amount of debt first
+        // Reduce earmarked debt first, then total debt.
         _subEarmarkedDebt(credit, accountId);
         _subDebt(accountId, credit);
         
-        // sub the amount in yield tokens from collateral balance
+        // Remove the collateral that backs the retired debt.
         uint256 creditToYield = _subCollateralBalance(convertDebtTokensToYield(credit), accountId);
 
-        // sub the protocol fee from collateral balance. collateral balance may be zero 
+        // Collect as much protocol fee as the remaining collateral can support.
         uint256 targetProtocolFee = creditToYield * protocolFee / BPS;
         uint256 protocolFeeTotal = _subCollateralBalance(targetProtocolFee, accountId);
 
@@ -974,12 +972,12 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         emit ForceRepay(accountId, amount, creditToYield, protocolFeeTotal);
 
         if (creditToYield > 0) {
-            // Transfer the repaid tokens from the account to the transmuter.
+            // Route the retired collateral to the transmuter.
             TokenUtils.safeTransfer(myt, address(transmuter), creditToYield);
         }
 
         if (protocolFeeTotal > 0) {
-            // Transfer the protocol fee to the protocol fee receiver
+            // Forward the realized fee to the protocol fee receiver.
             TokenUtils.safeTransfer(myt, protocolFeeReceiver, protocolFeeTotal);
         }
 
@@ -1031,13 +1029,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return amountToRemove;
     }
 
-    /// @dev Fetches and applies the liquidation amount to account `tokenId` if the account collateral ratio touches `collateralizationLowerBound`.
-    /// @dev Repays earmarked debt if it exists
-    /// @dev If earmarked repayment restores account to healthy collateralization, no liquidation is performed. Caller receives a repayment fee.
-    /// @param accountId  The tokenId of the account to to liquidate.
-    /// @return amountLiquidated  The amount (in yield tokens) removed from the account `tokenId`.
-    /// @return feeInYield The additional fee as a % of the liquidation amount to be sent to the liquidator
-    /// @return feeInUnderlying The additional fee as a % of the liquidation amount, denominated in underlying token, to be sent to the liquidator
+    /// @dev Syncs the account, attempts earmarked debt repayment, and liquidates collateral if still unhealthy.
+    /// @param accountId The token id of the account to liquidate.
+    /// @return amountLiquidated The amount of MYT seized from the account.
+    /// @return feeInYield The MYT fee paid to the liquidator.
+    /// @return feeInUnderlying The underlying-denominated fee paid from the fee vault, if any.
     function _liquidate(uint256 accountId) internal returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying) {
         // Query transmuter and earmark global debt
         _earmark();
@@ -1046,7 +1042,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
 
         Account storage account = _accounts[accountId];
 
-        // In the rare scenario where 1 share is worth 0 underlying asset
+        // If one share is worth zero underlying, liquidation math is undefined and should noop.
         if (IVaultV2(myt).convertToAssets(1e18) == 0) {
             return (0, 0, 0);
         }
@@ -1055,7 +1051,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             return (0, 0, 0);
         }
 
-        // Try to repay earmarked debt if it exists
+        // First try to clear earmarked debt from the account's own collateral.
         uint256 repaidAmountInYield = 0;
         if (account.earmarked > 0) {
             repaidAmountInYield = _forceRepay(accountId, account.earmarked, false);
@@ -1074,8 +1070,8 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             if (feeInYield > 0) {
                 uint256 targetFeeInYield = feeInYield;
                 uint256 maxSafeFeeInYield = _maxRepaymentFeeInYield(accountId);
-                // All-or-nothing source switch:
-                // if account cannot safely cover full fee, pay entirely from fee vault.
+                // Use a single fee source: either the account can safely cover the full fee in MYT,
+                // or the entire fee is outsourced to the fee vault.
                 if (maxSafeFeeInYield < targetFeeInYield) {
                     feeInYield = 0;
                     feeInUnderlying = convertYieldTokensToUnderlying(targetFeeInYield);
@@ -1134,11 +1130,11 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return collateralizationRatio > collateralizationLowerBound;
     }
 
-    /// @dev Performs the actual liquidation logic when collateralization is below the lower bound
-    /// @param accountId The tokenId of the account to to liquidate.
-    /// @return amountLiquidated The amount of yield tokens liquidated.
-    /// @return feeInYield The fee in yield tokens to be sent to the liquidator.
-    /// @return feeInUnderlying The fee in underlying tokens to be sent to the liquidator.
+    /// @dev Performs the collateral-seizure phase of liquidation once the account must be liquidated.
+    /// @param accountId The token id of the account to liquidate.
+    /// @return amountLiquidated The amount of MYT seized from the account.
+    /// @return feeInYield The MYT fee paid to the liquidator.
+    /// @return feeInUnderlying The underlying-denominated fee paid from the fee vault.
     function _doLiquidation(uint256 accountId)
         internal
         returns (uint256 amountLiquidated, uint256 feeInYield, uint256 feeInUnderlying)
@@ -1193,7 +1189,7 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         if (debtToBurn > maxDebtByRealized) debtToBurn = maxDebtByRealized;
         if (debtToBurn > maxDebtByStorage) debtToBurn = maxDebtByStorage;
 
-        // update user debt
+        // Apply the realized debt reduction.
         if (debtToBurn > 0) {
             _subDebt(accountId, debtToBurn);
         }
@@ -1220,14 +1216,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
             }
         }
 
-        // send liquidation amount net of liquidator fee to transmuter
+        // Route seized collateral net of liquidator fee to the transmuter.
         TokenUtils.safeTransfer(myt, transmuter, netToTransmuter);
 
-        // send base fee to liquidator if available
+        // Pay the liquidator from MYT if available, otherwise fall back to the fee vault.
         if (feeInYield > 0) {
             TokenUtils.safeTransfer(myt, msg.sender, feeInYield);
         } else if (normalizeDebtTokensToUnderlying(outsourcedFee) > 0) {
-            // Handle outsourced fee from vault
             feeInUnderlying = _payWithFeeVault(normalizeDebtTokensToUnderlying(outsourcedFee));
         }
         emit Liquidated(accountId, msg.sender, amountLiquidated, feeInYield, feeInUnderlying);
@@ -1621,13 +1616,13 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         lastEarmarkBlock = block.number;
     }
 
-    /// @dev Gets the amount of debt that the account owned by `owner` will have after a sync occurs.
+    /// @dev Projects an account through one sync, including one simulated pending earmark window.
     ///
-    /// @param tokenId The id of the account owner.
+    /// @param tokenId The account id to project.
     ///
-    /// @return The amount of debt that the account owned by `owner` will have after an update.
-    /// @return The amount of debt which is currently earmarked fro redemption.
-    /// @return The amount of collateral that has yet to be redeemed.
+    /// @return The projected debt after sync.
+    /// @return The projected earmarked debt after sync.
+    /// @return The projected collateral remaining after realized redemptions are applied.
     function _calculateUnrealizedDebt(uint256 tokenId)
         internal
         view
@@ -1686,14 +1681,14 @@ contract AlchemistV3 is IAlchemistV3, Initializable {
         return collateralValue < required;
     }
 
-    /// @dev Calculates the total value of the alchemist in the underlying token.
-    /// @return totalUnderlyingValue The total value of the alchemist in the underlying token.
+    /// @dev Converts tracked MYT shares into underlying units.
+    /// @return totalUnderlyingValue The underlying value represented by `_mytSharesDeposited`.
     function _getTotalUnderlyingValue() internal view returns (uint256 totalUnderlyingValue) {
         uint256 yieldTokenTVLInUnderlying = convertYieldTokensToUnderlying(_mytSharesDeposited);
         totalUnderlyingValue = yieldTokenTVLInUnderlying;
     }
 
-    /// @dev Calculates the total value locked in the system from collateralization requirements
+    /// @dev Returns the underlying value that must remain locked to support live debt, capped by tracked MYT.
     function _getTotalLockedUnderlyingValue() internal view returns (uint256) {
         uint256 required = _requiredLockedShares();
 
