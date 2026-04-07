@@ -18,6 +18,20 @@ abstract contract BaseStrategySimple is StrategyOps {
         assertApproxEqRel(change, -int256(amountToDeallocate), 1e16); // 1% slippage tolerance
     }
 
+    function _getForceDeallocateSwapParams() internal pure returns (bytes memory) {
+        IMYTStrategy.VaultAdapterParams memory params;
+        params.action = IMYTStrategy.ActionType.swap;
+        params.swapParams = IMYTStrategy.SwapParams({txData: hex"1234", minIntermediateOut: 0});
+        return abi.encode(params);
+    }
+
+    function _getForceDeallocateUnwrapAndSwapParams() internal pure returns (bytes memory) {
+        IMYTStrategy.VaultAdapterParams memory params;
+        params.action = IMYTStrategy.ActionType.unwrapAndSwap;
+        params.swapParams = IMYTStrategy.SwapParams({txData: hex"1234", minIntermediateOut: 1});
+        return abi.encode(params);
+    }
+
     function test_strategy_allocate_reverts_due_to_zero_amount() public {
         uint256 amountToAllocate = 0;
         bytes memory params = getVaultParams();
@@ -52,6 +66,24 @@ abstract contract BaseStrategySimple is StrategyOps {
         bytes memory deallocParams = getDeallocateVaultParams(amountToDeallocate);
         vm.expectRevert(abi.encodeWithSelector(IMYTStrategy.InvalidAmount.selector, 1, 0));
         IMYTStrategy(strategy).deallocate(deallocParams, amountToDeallocate, "", address(vault));
+        vm.stopPrank();
+    }
+
+    function test_strategy_forceDeallocate_swap_reverts() public {
+        vm.startPrank(vault);
+        vm.expectRevert(IMYTStrategy.ForceDeallocateSwapNotAllowed.selector);
+        IMYTStrategy(strategy).deallocate(
+            _getForceDeallocateSwapParams(), 1, IVaultV2.forceDeallocate.selector, address(vault)
+        );
+        vm.stopPrank();
+    }
+
+    function test_strategy_forceDeallocate_unwrapAndSwap_reverts() public {
+        vm.startPrank(vault);
+        vm.expectRevert(IMYTStrategy.ForceDeallocateSwapNotAllowed.selector);
+        IMYTStrategy(strategy).deallocate(
+            _getForceDeallocateUnwrapAndSwapParams(), 1, IVaultV2.forceDeallocate.selector, address(vault)
+        );
         vm.stopPrank();
     }
 
