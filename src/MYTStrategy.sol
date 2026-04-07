@@ -99,13 +99,14 @@ contract MYTStrategy is IMYTStrategy, Ownable {
         uint256 totalValueBefore = _totalValue();
 
         VaultAdapterParams memory adapterParams = abi.decode(data, (VaultAdapterParams));
+        _validateDeallocateAction(adapterParams.action, selector);
         uint256 amountDeallocated;
 
         if (adapterParams.action == ActionType.direct) {
             amountDeallocated = _deallocate(assets);
-        } else if (adapterParams.action == ActionType.swap && selector != FORCE_DEALLOCATE_SELECTOR) {
+        } else if (adapterParams.action == ActionType.swap) {
             amountDeallocated = _deallocate(assets, adapterParams.swapParams.txData);
-        } else if (adapterParams.action == ActionType.unwrapAndSwap && selector != FORCE_DEALLOCATE_SELECTOR) {
+        } else if (adapterParams.action == ActionType.unwrapAndSwap) {
             amountDeallocated = _deallocate(assets, adapterParams.swapParams.txData, adapterParams.swapParams.minIntermediateOut);
         } else {
             revert ActionNotSupported();
@@ -137,6 +138,13 @@ contract MYTStrategy is IMYTStrategy, Ownable {
     function _ensureIdleBalance(address asset, uint256 amount) internal view {
         uint256 balance = TokenUtils.safeBalanceOf(asset, address(this));
         if (balance < amount) revert InsufficientBalance(amount, balance);
+    }
+
+    /// @dev Force deallocations are limited to direct withdrawals.
+    function _validateDeallocateAction(ActionType action, bytes4 selector) internal pure {
+        if (selector == FORCE_DEALLOCATE_SELECTOR && action != ActionType.direct) {
+            revert ForceDeallocateSwapNotAllowed();
+        }
     }
 
     /* ========== VIEW FUNCTIONS ========== */

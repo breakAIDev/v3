@@ -60,6 +60,7 @@ interface IMYTStrategy {
     error StrategyAllocationPaused(address strategy);
     error CounterfeitSettler(address);
     error ActionNotSupported();
+    error ForceDeallocateSwapNotAllowed();
     error InvalidAmount(uint256 min, uint256 received);
     error InsufficientBalance(uint256 required, uint256 available);
 
